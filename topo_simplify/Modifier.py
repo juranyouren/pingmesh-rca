@@ -213,7 +213,7 @@ class Modifier:
 
         return top_k_ips
 
-    def calculate_jaccard_index(self):
+    def calculate_jaccard_index1(self):
         """
         计算类杰卡德指数，并按照该指数降序排序，存入成员变量 self.sorted_jaccard_nodes
         - 支持度 P(X|Y) = cross
@@ -271,6 +271,126 @@ class Modifier:
         
         print(f"✅ 类杰卡德指数计算完成，已对 {len(self.sorted_jaccard_nodes)} 个节点进行排序。")
         return self.sorted_jaccard_nodes
+
+    def calculate_jaccard_index0(self):
+        """
+        计算类杰卡德指数，并按照该指数降序排序，存入成员变量 self.sorted_jaccard_nodes
+        - 支持度 P(X|Y) = cross
+        - 置信度 P(Y|X) = 入度 + 出度
+        - 调和平均数 H = 2 * P(X|Y) * P(Y|X) / (P(X|Y) + P(Y|X))
+        - 类杰卡德指数 J = H / (2 - H)
+        """
+        if not self.ipindexed_nodes:
+            print("拓扑数据为空，无法计算杰卡德指数。")
+            return []
+
+        jaccard_scores = []
+
+        for ip, node_data in self.ipindexed_nodes.items():
+            # 1. 获取支持度 P(X|Y) (假设数据中包含 'cross' 字段，若无则默认为 0)
+            p_x_y = float(node_data.get('cross', 0))
+            
+            # 2. 获取置信度 P(Y|X) (入度 + 出度)
+            in_degree = len(node_data.get('linked_from', []))
+            out_degree = len(node_data.get('linked_to', []))
+            p_y_x = float(in_degree + out_degree)
+
+            
+            # 3. 计算调和平均数 H
+            if p_x_y + p_y_x > 0:
+                h = (2.0 * p_x_y * p_y_x) / (p_x_y + p_y_x)
+            else:
+                h = 0.0
+                
+            # 4. 计算类杰卡德指数 J = H / (2 - H)
+            denominator = 2.0 - h
+            
+            # 增加安全检查：防止分母为 0
+            if abs(denominator) < 1e-6:
+                j_index = float('inf')  # 如果 H 正好等于 2，指数趋于无穷大
+            else:
+                j_index = h / denominator
+                
+            jaccard_scores.append({
+                "ip": ip,
+                "original_name": node_data.get("original_name", ip),
+                "support_cross": p_x_y,
+                "confidence_degree": p_y_x,
+                "harmonic_mean": h,
+                "jaccard_index": j_index
+            })
+            
+        # 5. 按照类杰卡德指数降序排序 (从高到低)
+        self.sorted_jaccard_nodes = sorted(jaccard_scores, key=lambda x: x['jaccard_index'], reverse=True)
+        
+        print(f"✅ 类杰卡德指数计算完成，已对 {len(self.sorted_jaccard_nodes)} 个节点进行排序。")
+        return self.sorted_jaccard_nodes
+
+    def calculate_jaccard_index2(self):
+        """
+        计算类杰卡德指数，并按照该指数降序排序，存入成员变量 self.sorted_jaccard_nodes
+        - 支持度 P(X|Y) = cross / (入度 + 出度)
+        - 置信度 P(Y|X) = (入度 + 出度 - cross) / (入度 + 出度)
+        - 调和平均数 H = 2 * P(X|Y) * P(Y|X) / (P(X|Y) + P(Y|X))
+        - 类杰卡德指数 J = H / (2 - H)
+        """
+        if not hasattr(self, 'ipindexed_nodes') or not self.ipindexed_nodes:
+            print("拓扑数据为空，无法计算杰卡德指数。")
+            return []
+
+        jaccard_scores = []
+
+        for ip, node_data in self.ipindexed_nodes.items():
+            # 获取基础数据
+            cross = float(node_data.get('cross', 0))
+            in_degree = len(node_data.get('linked_from', []))
+            out_degree = len(node_data.get('linked_to', []))
+            
+            # 分母：入度 + 出度
+            total_degree = float(in_degree + out_degree)
+
+            # 防止除以 0 的情况：如果是孤立节点，指标默认为 0
+            if total_degree == 0:
+                p_x_y = 0.0
+                p_y_x = 0.0
+            else:
+                # 1. 计算支持度 P(X|Y)
+                p_x_y = cross / total_degree
+                
+                # 2. 计算置信度 P(Y|X)
+                p_y_x = (total_degree - cross) / total_degree
+            
+            # 3. 计算调和平均数 H
+            sum_p = p_x_y + p_y_x
+            if sum_p > 0:
+                h = (2.0 * p_x_y * p_y_x) / sum_p
+            else:
+                h = 0.0
+                
+            # 4. 计算类杰卡德指数 J = H / (2 - H)
+            denominator = 2.0 - h
+            
+            # 增加安全检查：防止分母为 0
+            if abs(denominator) < 1e-6:
+                j_index = float('inf')  # 如果 H 极其接近 2，指数趋于无穷大
+            else:
+                j_index = h / denominator
+                
+            jaccard_scores.append({
+                "ip": ip,
+                "original_name": node_data.get("original_name", ip),
+                "support_p_x_y": p_x_y,
+                "confidence_p_y_x": p_y_x,
+                "harmonic_mean": h,
+                "jaccard_index": j_index
+            })
+            
+        # 5. 按照类杰卡德指数降序排序 (从高到低)
+        self.sorted_jaccard_nodes = sorted(jaccard_scores, key=lambda x: x['jaccard_index'], reverse=True)
+        
+        print(f"✅ 类杰卡德指数计算完成，已对 {len(self.sorted_jaccard_nodes)} 个节点进行排序。")
+        return self.sorted_jaccard_nodes
+        
 # --- 测试用例 ---
 if __name__ == "__main__":
     
