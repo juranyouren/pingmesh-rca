@@ -32,6 +32,7 @@ class Collector:
         csn=alarm_content.get('csn',0)
         alarm_content=full_link.get("task_info",{})
         alarm_content["csn"]=csn
+        alarm_content["label"]=full_link.get("rootcause_analysis",{})
         
         # 2. 初始化以 device_name 为键的字典
         name_map = {}

@@ -21,6 +21,7 @@ class Modifier:
         self.ipindexed_nodes = {}
         if self.nodes:
             self._generate_ipindexed_nodes()
+
     def _load_nodes(self):
         """内部方法：从 JSON 文件读取节点数据"""
         if not os.path.exists(self.json_file):
@@ -182,10 +183,99 @@ class Modifier:
             "nodes_not_on_path": list(nodes_not_on_path),
             "all_paths": all_paths
         }
+
+    def get_top_k_jaccard_ips(self, k=10):
+        """
+        输出并返回排名前 k 的节点 IP（基于类杰卡德指数）
+        :param k: 需要输出的节点数量，默认为 10
+        :return: 排名前 k 的 IP 列表
+        """
+        # 如果还没计算过杰卡德指数，自动调用计算方法
+        if not hasattr(self, 'sorted_jaccard_nodes') or not self.sorted_jaccard_nodes:
+            print("未找到排序好的杰卡德节点数据，正在自动计算...")
+            self.calculate_jaccard_index()
+            
+        if not self.sorted_jaccard_nodes:
+            print("节点数据为空，无法输出排名。")
+            return []
+
+        # 获取前 k 个节点（如果总数不足 k，切片会自动处理）
+        top_k_nodes = self.sorted_jaccard_nodes[:k]
+        top_k_ips = [node['ip'] for node in top_k_nodes]
+
+        # 格式化输出结果
+        print(f"\n--- Top {len(top_k_ips)} 类杰卡德指数核心节点 ---")
+        for i, node in enumerate(top_k_nodes):
+            # 处理无穷大的显示格式
+            j_score = float('inf') if node['jaccard_index'] == float('inf') else f"{node['jaccard_index']:.4f}"
+            print(f"Rank {i+1:<2}: IP = {node['ip']:<15} | Jaccard = {j_score:<8} | Cross = {node['support_cross']:<4} | Degree = {node['confidence_degree']}")
+        print("-" * 50)
+
+        return top_k_ips
+
+    def calculate_jaccard_index(self):
+        """
+        计算类杰卡德指数，并按照该指数降序排序，存入成员变量 self.sorted_jaccard_nodes
+        - 支持度 P(X|Y) = cross
+        - 置信度 P(Y|X) = 入度 + 出度
+        - 调和平均数 H = 2 * P(X|Y) * P(Y|X) / (P(X|Y) + P(Y|X))
+        - 类杰卡德指数 J = H / (2 - H)
+        """
+        if not self.ipindexed_nodes:
+            print("拓扑数据为空，无法计算杰卡德指数。")
+            return []
+
+        jaccard_scores = []
+
+        for ip, node_data in self.ipindexed_nodes.items():
+            # 1. 获取支持度 P(X|Y) (假设数据中包含 'cross' 字段，若无则默认为 0)
+            p_x_y = float(node_data.get('cross', 0))
+            
+            # 2. 获取置信度 P(Y|X) (入度 + 出度)
+            in_degree = len(node_data.get('linked_from', []))
+            out_degree = len(node_data.get('linked_to', []))
+            p_y_x = float(in_degree + out_degree)
+
+            #归一化
+            p_x_y_1=float(p_x_y/(p_x_y+p_y_x))
+            p_y_x_1=float(p_y_x/(p_x_y+p_y_x))
+            p_x_y=p_x_y_1
+            p_y_x=p_y_x_1
+            
+            # 3. 计算调和平均数 H
+            if p_x_y + p_y_x > 0:
+                h = (2.0 * p_x_y * p_y_x) / (p_x_y + p_y_x)
+            else:
+                h = 0.0
+                
+            # 4. 计算类杰卡德指数 J = H / (2 - H)
+            denominator = 2.0 - h
+            
+            # 增加安全检查：防止分母为 0
+            if abs(denominator) < 1e-6:
+                j_index = float('inf')  # 如果 H 正好等于 2，指数趋于无穷大
+            else:
+                j_index = h / denominator
+                
+            jaccard_scores.append({
+                "ip": ip,
+                "original_name": node_data.get("original_name", ip),
+                "support_cross": p_x_y,
+                "confidence_degree": p_y_x,
+                "harmonic_mean": h,
+                "jaccard_index": j_index
+            })
+            
+        # 5. 按照类杰卡德指数降序排序 (从高到低)
+        self.sorted_jaccard_nodes = sorted(jaccard_scores, key=lambda x: x['jaccard_index'], reverse=True)
+        
+        print(f"✅ 类杰卡德指数计算完成，已对 {len(self.sorted_jaccard_nodes)} 个节点进行排序。")
+        return self.sorted_jaccard_nodes
 # --- 测试用例 ---
 if __name__ == "__main__":
     
-    input_json = "/home/sbp/lixinyang/pingmesh/data/nodes/1761434460000/714078514/714078514_info.json"
+    input_json = "/home/sbp/lixinyang/pingmesh/data/nodes/1760612340000/1233059059/1233059059_info.json"
     
     modifier = Modifier(input_json)
     modifier.read_topo()# 假设保留 10 个节点
+    modifier.get_top_k_jaccard_ips()
