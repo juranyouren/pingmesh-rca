@@ -1,0 +1,16 @@
+llm:
+  service: openai
+  model: /usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-7B
+  openai_api_key: EMPTY
+  openai_base_url: http://localhost:8000/v1
+skills:
+  path: /home/sbp/lixinyang/pingmesh/skills
+  work_dir: /home/sbp/lixinyang/pingmesh/workspace
+  auto_execute: true
+tag: Agent-default
+trust_remote_code: false
+load_cache: false
+runtime:
+  should_stop: true
+  tag: Agent-default
+  round: 1
