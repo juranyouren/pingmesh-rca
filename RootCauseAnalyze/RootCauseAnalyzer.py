@@ -13,11 +13,13 @@
 
 import json
 import asyncio
-import os
+import os,sys
 from omegaconf import DictConfig
 from ms_agent.agent.llm_agent import LLMAgent
 from ms_agent.agent import create_agent_skill
-
+sys.path.append("/home/sbp/lixinyang/pingmesh/topo_simplify")
+from utils.prompts import PROMPT1,PROMPT2
+from utils.public_functions import load_json, save_json
 class RootCauseAnalyzer:
     def __init__(self):
         """
@@ -37,12 +39,31 @@ class RootCauseAnalyzer:
         os.makedirs(self.work_dir, exist_ok=True)
 
         # 按照你提供的格式配置大模型与 Agent
+        # self.config: DictConfig = DictConfig(
+        #     {
+        #         'llm': {
+        #             'service': 'openai',
+        #             # 替换为你本地启动的模型名，如 'qwen2.5-7b-instruct'
+        #             'model': '/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-7B', 
+        #             # 接入本地模型，API Key 随便填
+        #             'openai_api_key': 'EMPTY',        
+        #             # 替换为你本地大模型服务的地址，例如 vLLM 或 Ollama 的服务地址
+        #             'openai_base_url': 'http://localhost:8000/v1' 
+        #         },
+        #         'skills': {
+        #             'path': self.skills_path,
+        #             'work_dir': self.work_dir,
+        #             'auto_execute': True,
+        #         },
+        #         'output_dir':self.output
+        #     }
+        # )
         self.config: DictConfig = DictConfig(
             {
                 'llm': {
                     'service': 'openai',
                     # 替换为你本地启动的模型名，如 'qwen2.5-7b-instruct'
-                    'model': '/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-7B', 
+                    'model': 'DeepSeek-R1-32B', 
                     # 接入本地模型，API Key 随便填
                     'openai_api_key': 'EMPTY',        
                     # 替换为你本地大模型服务的地址，例如 vLLM 或 Ollama 的服务地址
@@ -56,7 +77,6 @@ class RootCauseAnalyzer:
                 'output_dir':self.output
             }
         )
-        
 
     def _format_topology_data(self, nodes):
         """将节点字典格式化为 JSON 字符串"""
@@ -124,25 +144,14 @@ class RootCauseAnalyzer:
 
         return result
 
-    def infer_root_cause(self, nodes: dict) -> str:
+    def infer_root_cause(self, nodes: dict,info) -> str:
         """
         对外暴露的同步接口。
         因为外部的 run.py 是同步脚本，我们在这里使用 asyncio.run 将异步转化为同步。
         """
-        if not nodes:
-            return "错误：传入的节点数据为空，无法进行推理。"
-            
-        topo_string = self._format_topology_data(nodes)
-        
-        # 构造给 Agent 的系统提示词和任务输入
-        prompt = (
-            "你是一个资深的云网络运维专家。现在网络中发生了一次故障，\n"
-            "以下是经过清洗和简化后的网络拓扑及状态数据：\n"
-            f"```json\n{topo_string}\n```\n\n"
-            "任务要求：\n"
-            "1. 请分析上述 json 数据中的连通性(linked_from/to)、alarms（告警）和logs（日志）。\n"
-            "2. 如果你认为给出的节点信息不足，请主动使用你拥有的 skill 去查询相关节点的底层详情。\n"
-            "3. 结合所有线索，给出详细的推理过程，并在最后明确指出【根因设备名称（Root Cause Node）】。"
+        prompt=PROMPT2.format(
+            NODES=nodes,
+            INFO=info
         )
         
         print(f"[{self.__class__.__name__}] 正在调用本地大模型进行分析，请稍候...")
@@ -180,14 +189,55 @@ if __name__ == "__main__":
     #     "Leaf-Switch-01": {"role": "leaf", "alarms": [{"msg": "BGP peer down"}], "logs": []},
     #     "Spine-Switch-01": {"role": "spine", "alarms": [], "logs": []}
     # }
-    
+
+    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
+    analyzer = RootCauseAnalyzer() # 在循环外初始化，节省资源
+
+    # 用于集中存储所有结果（如果需要后续处理的话）
+    batch_results = {}
+
+    print("开始批量处理...")
+
+    # os.walk 会遍历 root_path 下的所有层级的目录
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        # 检查当前目录下是否同时存在这两个需要的文件
+        if "nodes.json" in filenames and "info.json" in filenames:
+            node_path = os.path.join(dirpath, "nodes.json")
+            info_path = os.path.join(dirpath, "info.json")
+            
+            try:
+                # 加载数据
+                node = load_json(node_path)
+                info = load_json(info_path)
+                
+                # 执行分析
+                res = analyzer.infer_root_cause(node, info)
+                
+                # 打印当前目录的独立结果
+                print(f"\n=== 目录: {dirpath} 的测试结果 ===")
+                print(res)
+                
+                # 将结果保存到字典中
+                batch_results[dirpath] = res
+                
+            except Exception as e:
+                print(f"\n[错误] 处理目录 {dirpath} 时发生异常: {e}")
+
+    save_json(batch_results,"data/res")
+    print("\n批量处理完成！")
+
+
+    # path="/home/sbp/lixinyang/pingmesh/data/nodes/1760594400000/1231999173"
+    # node_path=f"{path}/nodes.json"
+    # info_path=f"{path}/info.json"
+    # node=load_json(node_path)
+    # info=load_json(info_path)
     # analyzer = RootCauseAnalyzer()
-    # res = analyzer.infer_root_cause(mock_simplified_nodes)
+    # res = analyzer.infer_root_cause(node,info)
     # print("\n=== 测试结果 ===")
     # print(res)
-
     
-    analyzer = RootCauseAnalyzer()
-    res = analyzer.test_skill()
-    print("\n=== 测试结果 ===")
-    print(res)
+    # analyzer = RootCauseAnalyzer()
+    # res = analyzer.test_skill()
+    # print("\n=== 测试结果 ===")
+    # print(res)

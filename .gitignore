@@ -5,3 +5,6 @@ kernel_meta
 RootCauseAnalyze/__pycache__
 topo_simplify/__pycache__
 utils/__pycache__
+ms_agent.log
+agent/output
+
