@@ -1,3 +1,4 @@
+import glob
 import json
 import random
 import os,sys
@@ -30,8 +31,8 @@ class Modifier:
             self._generate_ipindexed_nodes()
         else:
             print("node empty")
-        self.read_topo()
-        self.calculate_path_counts(self.srcip,self.destip)
+        #self.read_topo()
+        #self.calculate_path_counts(self.srcip,self.destip)
 
     def _generate_ipindexed_nodes(self):
         """
@@ -73,7 +74,8 @@ class Modifier:
 
         # 1. 随机选择要保留的 k 个节点
         all_node_names = list(self.nodes.keys())
-        nodes_to_keep = set(random.sample(all_node_names, k))
+        #nodes_to_keep = set(random.sample(all_node_names, k))
+        nodes_to_keep=set(self.get_top_k_jaccard_ips(k,4))
         nodes_to_delete = set(all_node_names) - nodes_to_keep
 
         # 2. 从字典中删除不需要的节点
@@ -181,6 +183,7 @@ class Modifier:
         # 获取前 k 个节点（如果总数不足 k，切片会自动处理）
         top_k_nodes = self.sorted_jaccard_nodes[:k]
         top_k_ips = [node['ip'] for node in top_k_nodes]
+        top_k_names=[node['original_name'] for node in top_k_nodes]
 
         # 格式化输出结果
         print(f"\n--- Top {len(top_k_ips)} 类杰卡德指数核心节点 ---")
@@ -190,7 +193,7 @@ class Modifier:
             print(f"Rank {i+1:<2}: IP = {node['ip']:<15} | Jaccard = {j_score:<8} | p_x_y = {node['p_x_y']:<4} | p_y_x = {node['p_y_x']}")
         print("-" * 50)
 
-        return top_k_ips
+        return top_k_names
 
     def calculate_jaccard_index(self, method: int = 0) -> list:
         """
@@ -211,7 +214,12 @@ class Modifier:
             in_degree = len(node_data.get('linked_from', []))
             out_degree = len(node_data.get('linked_to', []))
             total_degree = float(in_degree + out_degree)
-            paths=node_data.get('paths', 0)
+            
+            #paths=node_data.get('paths', 0)
+            paths=1
+
+            alarm_count=len(node_data.get("alarms"))
+            log_count=len(node_data.get("logs"))
 
             if total_degree == 0 and method == 2:
                  p_x_y, p_y_x = 0.0, 0.0
@@ -228,6 +236,8 @@ class Modifier:
                 elif method == 3:
                     p_x_y=cross
                     p_y_x=paths/self.info["path_count"]
+                else:
+                    p_x_y, p_y_x = 0.0, 0.0
 
 
             # 计算调和平均数 H
@@ -237,7 +247,9 @@ class Modifier:
             # 计算类杰卡德指数 J
             denominator = 2.0 - h
             j_index = float('inf') if abs(denominator) < 1e-6 else h / denominator
-
+            
+            if method ==4:
+                j_index=alarm_count+log_count
             jaccard_scores.append({
                 "ip": ip,
                 "original_name": node_data.get("original_name", ip),
@@ -310,13 +322,12 @@ class Modifier:
 
             table_data.append(row_data)
         df = pd.DataFrame(table_data)
-        # 4. 打印对比表格
-        # if table_data:
-        #     df = pd.DataFrame(table_data)
-        #     print("\n" + "="*35 + f" 算法效果横向评测 (K={len(methods_to_evaluate)}) " + "="*35)
-        #     print(df.to_markdown(index=False, tablefmt="grid"))
-        #     print("="*100 + "\n")
-        #     return df
+        if table_data:
+            df = pd.DataFrame(table_data)
+            print("\n" + "="*35 + f" 算法效果横向评测 (K={len(methods_to_evaluate)}) " + "="*35)
+            print(df.to_markdown(index=False, tablefmt="grid"))
+            print("="*100 + "\n")
+            return df
         return df
 
     def calculate_path_counts(self, src_ip, dest_ip):
@@ -400,18 +411,42 @@ class Modifier:
 # --- 测试用例 ---
 if __name__ == "__main__":
     
-    input_json = "/home/sbp/lixinyang/pingmesh/data/nodes/1760594400000/1231999173/1231999173_info.json"
+    # input_json = "/home/sbp/lixinyang/pingmesh/data/nodes/1760594400000/1231999173/1231999173_info.json"
     
-    modifier = Modifier(input_json)
-    # modifier.get_top_k_jaccard_ips(method=3)
-    # modifier.evaluate_jaccard_methods()
-    modifier.run()
+    # modifier = Modifier(input_json)
+    # modifier.get_top_k_jaccard_ips(method=4)
+    # modifier.evaluate_jaccard_methods([0,1,2,3,4])
+    #modifier.run()
+    base_data_dir = "/home/sbp/lixinyang/pingmesh/data/nodes/"
+    
+    # 2. 递归查找所有以 _info.json 结尾的告警文件
+    search_pattern = os.path.join(base_data_dir, "**", "**","*_info.json")
+    test_files = glob.glob(search_pattern, recursive=True)
+    
+    if not test_files:
+        print(f"在 {base_data_dir} 下没有找到任何 *_info.json 文件，请检查路径。")
+        sys.exit(1)
+        
+    print(f"🔍 共找到 {len(test_files)} 个测试用例，开始批量跑测...\n")
+    
+
+    for idx, file_path in enumerate(test_files, 1):
+        case_name = os.path.basename(os.path.dirname(file_path)) # 用父文件夹名（如1231999173）作为 case 名
+        print(f"▶ [{idx}/{len(test_files)}] 正在处理用例: {case_name}")
+        try:
+            # 实例化对象
+            modifier = Modifier(file_path)
+            modifier.run()
+
+                
+        except Exception as e:
+            print(f"❌ 处理用例 {case_name} 时发生异常: {e}")
 
 
+
+        
 # if __name__ == "__main__":
-#     import glob
-#     import os
-#     import pandas as pd
+
     
 #     # 1. 设置包含所有测试用例的根目录
 #     # 请根据实际情况修改为你存放数据的上一级或根目录

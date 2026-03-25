@@ -17,7 +17,7 @@ import os,sys
 from omegaconf import DictConfig
 from ms_agent.agent.llm_agent import LLMAgent
 from ms_agent.agent import create_agent_skill
-sys.path.append("/home/sbp/lixinyang/pingmesh/topo_simplify")
+sys.path.append("/home/sbp/lixinyang/pingmesh")
 from utils.prompts import PROMPT1,PROMPT2
 from utils.public_functions import load_json, save_json
 class RootCauseAnalyzer:
