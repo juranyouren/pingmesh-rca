@@ -2,7 +2,7 @@
 #        python -m vllm.entrypoints.openai.api_server \
 #     --model /usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-7B
 #     --served-model-name Qw7B
-# ASCEND_RT_VISIBLE_DEVICES="4,5,6,7" python -m vllm.entrypoints.openai.api_server \
+# ASCEND_RT_VISIBLE_DEVICES="1,2,3,4" python -m vllm.entrypoints.openai.api_server \
 #     --model /usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B \
 #     --served-model-name DeepSeek-R1-32B \
 #     --tensor-parallel-size 4 \
@@ -14,12 +14,15 @@
 import json
 import asyncio
 import os,sys
+import time
 from omegaconf import DictConfig
 from ms_agent.agent.llm_agent import LLMAgent
 from ms_agent.agent import create_agent_skill
+from pyarrow import timestamp
 sys.path.append("/home/sbp/lixinyang/pingmesh")
-from utils.prompts import PROMPT1,PROMPT2
+from utils.prompts import PROMPT1,PROMPT2,PROMPT3
 from utils.public_functions import load_json, save_json
+
 class RootCauseAnalyzer:
     def __init__(self):
         """
@@ -116,6 +119,7 @@ class RootCauseAnalyzer:
                 final_content += res_msg.content + "\n"
 
         return final_content.strip()
+
     def use_skill(self, prompt: str) -> str:
         """
         异步执行核心逻辑，调用 LLMAgent
@@ -149,7 +153,7 @@ class RootCauseAnalyzer:
         对外暴露的同步接口。
         因为外部的 run.py 是同步脚本，我们在这里使用 asyncio.run 将异步转化为同步。
         """
-        prompt=PROMPT2.format(
+        prompt=PROMPT3.format(
             NODES=nodes,
             INFO=info
         )
@@ -166,14 +170,14 @@ class RootCauseAnalyzer:
             return error_msg
 
     def test_skill(self) -> str:
-    # 构造给 Agent 的系统提示词和任务输入
+        # 构造给 Agent 的系统提示词和任务输入
         prompt = (
             'Create generative art using p5.js with seeded randomness, flow fields, and particle systems, please fill in the details and provide the complete code based on the templates.'
-    
+
         )
-        
+
         print(f"[{self.__class__.__name__}] 正在调用本地大模型进行分析，请稍候...")
-        
+
         try:
             # 执行异步推理，等待结果
             result = self.use_skill(prompt)
@@ -222,8 +226,12 @@ if __name__ == "__main__":
                 
             except Exception as e:
                 print(f"\n[错误] 处理目录 {dirpath} 时发生异常: {e}")
+            
 
-    save_json(batch_results,"data/res")
+
+    timenow=int(time.time())
+    os.makedirs(f"data/res/{timenow}",exist_ok=True)
+    save_json(batch_results,f"data/res/{timenow}/res.json")
     print("\n批量处理完成！")
 
 

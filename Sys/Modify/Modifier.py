@@ -24,7 +24,7 @@ class Modifier:
 
         # print("_________________________________")
         # print(self.nodes)
-
+        self.compress_node_events()
         # 生成以 IP 为索引的节点字典
         self.ipindexed_nodes = {}
         if self.nodes:
@@ -33,6 +33,108 @@ class Modifier:
             print("node empty")
         #self.read_topo()
         #self.calculate_path_counts(self.srcip,self.destip)
+
+    @staticmethod
+    def default_alarm_compressor(alarms):
+        """
+        进阶告警压缩方法：按 name, ip, desc_summary 去重，
+        保留首次发生时间，并统计该告警在当前时间窗口内的触发总次数 (count)。
+        """
+        if not alarms:
+            return []
+        
+        alarm_dict = {}
+        
+        for alarm in alarms:
+            name = alarm.get("alarm_name")
+            level = alarm.get("alarm_level")
+            ip = alarm.get("alarm_ip_ad")
+            time_str = alarm.get("confirm_time")
+            # 截取前100个字符作为摘要，如果原文字段不存在则返回空字符串
+            desc_summary = alarm.get("alarm_object_key", "")[:100] + "..."
+            
+            unique_key = (name, ip, desc_summary)
+            
+            if unique_key not in alarm_dict:
+                # 首次出现，记录基础信息并初始化计数器为 1
+                alarm_dict[unique_key] = {
+                    "name": name,
+                    "level": level,
+                    "ip": ip,
+                    "time": time_str,  # 记录首次告警的时间
+                    "desc_summary": desc_summary,
+                    "count": 1
+                }
+            else:
+                # 如果已经存在，说明是重复告警，仅增加计数
+                alarm_dict[unique_key]["count"] += 1
+                
+        # 将字典的值提取为列表返回
+        return list(alarm_dict.values())
+
+    @staticmethod
+    def default_log_compressor(logs):
+        """
+        默认的日志压缩方法：只保留日志名称、时间和CID核心描述，并按照 name 和 desc 进行去重。
+        保留的是该类日志首次出现的时间。
+        """
+        if not logs:
+            return []
+        
+        simplified_logs = []
+        seen_keys = set()  # 用于存储已经处理过的 (name, desc) 组合
+        
+        for log in logs:
+            name = log.get("alarm_name")
+            desc = log.get("alarm_description")
+            time_str = log.get("alarm_time_str")
+            
+            # 使用元组作为唯一键，因为元组是不可变类型，可以被哈希并放入 set 中
+            unique_key = (name, desc)
+            
+            # 如果这个组合还没有被记录过
+            if unique_key not in seen_keys:
+                seen_keys.add(unique_key)  # 标记为已见
+                
+                simplified = {
+                    "name": name,
+                    "time": time_str,
+                    "desc": desc
+                }
+                simplified_logs.append(simplified)
+                
+        return simplified_logs
+
+    def compress_node_events(self, alarm_processor=None, log_processor=None, in_place=True, threshold=5):
+        """
+        对所有 node 的告警和日志进行压缩，并确保最终数量不超过阈值。
+        
+        :param alarm_processor: 自定义的告警处理函数
+        :param log_processor: 自定义的日志处理函数
+        :param in_place: 是否直接修改原数据
+        :param threshold: 最大保留条数，默认为 5
+        """
+        # 确定处理器
+        process_alarms = alarm_processor if alarm_processor else self.default_alarm_compressor
+        process_logs = log_processor if log_processor else self.default_log_compressor
+
+        # 决定目标对象
+        target_nodes = self.nodes if in_place else copy.deepcopy(self.nodes)
+
+        for node_id, node_data in target_nodes.items():
+            # 压缩并截断 Alarms
+            if "alarms" in node_data and isinstance(node_data["alarms"], list):
+                compressed_alarms = process_alarms(node_data["alarms"])
+                # 核心修改：如果长度超过 threshold，则截取前 threshold 个
+                node_data["alarms"] = compressed_alarms[:threshold]
+            
+            # 压缩并截断 Logs
+            if "logs" in node_data and isinstance(node_data["logs"], list):
+                compressed_logs = process_logs(node_data["logs"])
+                # 核心修改：同上
+                node_data["logs"] = compressed_logs[:threshold]
+
+        return None if in_place else target_nodes
 
     def _generate_ipindexed_nodes(self):
         """
@@ -58,7 +160,7 @@ class Modifier:
 
             self.ipindexed_nodes[node_ip] = node_copy
 
-    def topo_simplify(self, k):
+    def topo_simplify(self, k,method=4):
         """
         拓扑简化：随机剪枝，保留 k 个节点
         :param k: 剪枝后保留的节点数量阈值
@@ -75,7 +177,7 @@ class Modifier:
         # 1. 随机选择要保留的 k 个节点
         all_node_names = list(self.nodes.keys())
         #nodes_to_keep = set(random.sample(all_node_names, k))
-        nodes_to_keep=set(self.get_top_k_jaccard_ips(k,4))
+        nodes_to_keep=set(self.get_top_k_jaccard_ips(k,method))
         nodes_to_delete = set(all_node_names) - nodes_to_keep
 
         # 2. 从字典中删除不需要的节点
