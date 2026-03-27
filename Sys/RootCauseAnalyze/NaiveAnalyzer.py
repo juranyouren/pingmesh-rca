@@ -6,7 +6,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 sys.path.append("/home/sbp/lixinyang/pingmesh")
-from utils.prompts import PROMPT1, PROMPT2, PROMPT3
+from utils.prompts import PROMPT
 def save_json(data, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
@@ -91,7 +91,7 @@ def generate_prompts(root_path: str) -> tuple:
             try:
                 node = load_json(node_path)
                 info = load_json(info_path)
-                prompt = PROMPT3.format(NODES=node, INFO=info)
+                prompt = PROMPT.format(NODES=node, INFO=info)
                 dirpath_list.append(dirpath)
                 prompt_list.append(prompt)
             except Exception as e:
@@ -187,7 +187,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 if __name__ == "__main__":
     # 配置
     root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    available_npus = [0,1,2, 3, 4,5]  # 你的可用 NPU 列表
+    available_npus = [0,1,2, 3, 4,5,6,7]  # 你的可用 NPU 列表
     
     # 1. 生成所有 prompt
     dirpaths, prompts = generate_prompts(root_path)
@@ -209,7 +209,7 @@ if __name__ == "__main__":
         
         # 3. 结果保存
         timenow = int(time.time())
-        save_dir = f"data/res/{timenow}"
+        save_dir = f"/home/sbp/lixinyang/pingmesh/data/res/{timenow}"
         os.makedirs(save_dir, exist_ok=True)
         
         if final_results:
