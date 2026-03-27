@@ -1,230 +1,46 @@
 [
   {
     "skill_id": "1",
-    "skill_name": "物理层故障识别",
-    "target_error": "物理层错误识别不足",
+    "skill_name": "物理层与链路故障精确扫描",
+    "target_error": "未能识别底层物理链路故障（如CRC、端口DOWN）",
+    "python_executor": "check_physical_errors",
     "trigger_conditions": {
       "logic": "OR",
-      "rules": [
-        "设备日志中包含物理层告警（如CRC错误、光模块异常）",
-        "节点日志中包含物理接口DOWN或链路中断信息"
-      ]
+      "rules": ["告警现象涉及丢包、Ping异常或连通性问题"]
     },
-    "execution_instructions": {
-      "step_1": "检查所有节点的物理层告警，包括CRC错误、光模块异常、接口DOWN等。",
-      "step_2": "对于检测到物理层告警的节点，优先分析其上行和下行链路的连通性。",
-      "step_3": "结合物理层告警的时间戳，检查是否与网络异常告警（如pingmesh丢包）时间一致。",
-      "step_4": "如果物理层告警与网络异常时间吻合，将该节点标记为潜在根因节点。"
-    }
+    "execution_instructions": "执行 Python 脚本，扫描所有节点的底层日志，精确匹配 CRC、DOWN、光模块异常等物理层关键字，并输出确切的故障设备名单。"
   },
   {
     "skill_id": "2",
-    "skill_name": "拓扑关系解析",
-    "target_error": "节点间连接关系解析错误",
+    "skill_name": "拓扑汇聚点与关键节点(CORE/SPINE)定位",
+    "target_error": "拓扑依赖关系解析错误，未能发现共同上游或忽视了核心交换机",
+    "python_executor": "analyze_topology_intersection",
     "trigger_conditions": {
-      "logic": "AND",
-      "rules": [
-        "存在多个节点同时上报告警",
-        "压缩后的节点信息中包含'linked_from'或'linked_to'字段为空"
-      ]
+      "logic": "OR",
+      "rules": ["存在多个节点(如Pod/CNA)同时上报告警"]
     },
-    "execution_instructions": {
-      "step_1": "检查压缩后的节点信息，确认所有节点的'linked_from'和'linked_to'字段是否完整。",
-      "step_2": "如果字段为空，尝试通过告警时间和日志内容推断节点间的连接关系。",
-      "step_3": "构建或更新网络拓扑图，确保所有节点及其连接关系清晰可见。",
-      "step_4": "基于更新后的拓扑图，重新分析告警传播路径，确认是否存在逻辑分岔或误判。"
-    }
+    "execution_instructions": "执行 Python 拓扑遍历算法，找出所有告警叶子节点的共同上游设备。同时检索拓扑，若发现异常节点角色为 CORE 或 SPINE，进行高优标记。"
   },
   {
     "skill_id": "3",
-    "skill_name": "告警关联分析",
-    "target_error": "告警关联不准确",
+    "skill_name": "告警时间序列绝对排序 (找First-Blood)",
+    "target_error": "因果关系误判，将结果告警（风暴）误认为根源告警",
+    "python_executor": "extract_timeline_root",
     "trigger_conditions": {
-      "logic": "AND",
-      "rules": [
-        "存在多个节点同时上报不同类型告警",
-        "告警时间戳集中在一个时间段内"
-      ]
+      "logic": "ALWAYS",
+      "rules": []
     },
-    "execution_instructions": {
-      "step_1": "收集所有相关节点的告警信息，按时间排序。",
-      "step_2": "识别出最先出现的告警（时间最早的告警），将其作为潜在根因。",
-      "step_3": "检查该根因告警是否与其他节点的告警存在因果关系。",
-      "step_4": "如果存在因果关系，确认根因节点；否则，继续分析后续告警。"
-    }
+    "execution_instructions": "执行 Python 时间戳排序脚本，将所有设备的日志和告警按毫秒级/秒级时间线进行全局排序，精准提取出网络风暴发生前的‘第一条告警（First-Blood）’。"
   },
   {
     "skill_id": "4",
-    "skill_name": "外部因素评估",
-    "target_error": "忽视外部因素影响",
+    "skill_name": "协议层(BGP/OSPF)断连精准匹配",
+    "target_error": "未能正确关联协议层告警与业务中断",
+    "python_executor": "check_protocol_state",
     "trigger_conditions": {
       "logic": "OR",
-      "rules": [
-        "节点日志中包含服务器重启或系统重置信息",
-        "告警信息涉及多个非网络设备（如计算节点、存储设备）"
-      ]
+      "rules": ["存在跨域网络问题", "日志中提及路由、邻居、BGP等字眼"]
     },
-    "execution_instructions": {
-      "step_1": "检查节点日志，确认是否存在服务器重启、系统重置等外部事件。",
-      "step_2": "如果存在外部事件，分析其对网络设备的影响（如接口DOWN、BGP状态变化）。",
-      "step_3": "将外部事件的影响与网络异常告警进行对比，确认其是否为根本原因。",
-      "step_4": "如果外部事件是根本原因，将其标记为根因；否则，继续分析网络设备内部问题。"
-    }
-  },
-  {
-    "skill_id": "5",
-    "skill_name": "硬件与协议关联",
-    "target_error": "硬件与协议关联不足",
-    "trigger_conditions": {
-      "logic": "AND",
-      "rules": [
-        "节点日志中包含硬件故障告警",
-        "同时存在BGP、OSPF等协议状态变化告警"
-      ]
-    },
-    "execution_instructions": {
-      "step_1": "检查硬件故障告警的具体内容（如接口DOWN、光模块异常）。",
-      "step_2": "确认硬件故障是否影响到协议层（如BGP邻接状态变化、路由丢失）。",
-      "step_3": "如果协议层变化与硬件故障时间吻合，将硬件故障节点标记为根因。",
-      "step_4": "如果硬件故障不影响协议层，继续分析其他可能原因。"
-    }
-  },
-  {
-    "skill_id": "6",
-    "skill_name": "层级化推理",
-    "target_error": "",
-    "trigger_conditions": {
-      "logic": "ALWAYS",
-      "rules": []
-    },
-    "execution_instructions": {
-      "step_1": "从物理层开始，依次检查链路、接口、设备状态。",
-      "step_2": "如果物理层正常，继续分析数据链路层（如VLAN、MAC地址表）。",
-      "step_3": "如果数据链路层正常，分析网络层（如路由、BGP状态）。",
-      "step_4": "如果网络层正常，分析传输层及应用层问题。",
-      "step_5": "在整个过程中，始终关注告警的时间戳和相关性。"
-    }
-  },
-  {
-    "skill_id": "7",
-    "skill_name": "多维度关联分析",
-    "target_error": "",
-    "trigger_conditions": {
-      "logic": "ALWAYS",
-      "rules": []
-    },
-    "execution_instructions": {
-      "step_1": "收集所有相关告警，包括日志、性能指标、配置变更等。",
-      "step_2": "从时间、空间、设备类型等多个维度进行告警关联。",
-      "step_3": "识别出最早出现的告警，作为潜在根因。",
-      "step_4": "分析该根因告警对其他节点的潜在影响。",
-      "step_5": "如果多个维度的分析结果一致，确认根因；否则，继续深入分析。"
-    }
-  },
-  {
-    "skill_id": "8",
-    "skill_name": "动态拓扑感知",
-    "target_error": "",
-    "trigger_conditions": {
-      "logic": "ALWAYS",
-      "rules": []
-    },
-    "execution_instructions": {
-      "step_1": "在分析开始前，获取最新的网络拓扑结构。",
-      "step_2": "如果拓扑信息不完整，尝试通过告警信息推断节点间的连接关系。",
-      "step_3": "在分析过程中，动态更新拓扑信息，确保其准确性。",
-      "step_4": "基于最新拓扑，重新评估告警传播路径和影响范围。"
-    }
-  },
-  {
-    "skill_id": 1,
-    "skill_name": "关键节点识别不足",
-    "target_error": "未能正确识别关键节点（如CORE、SPINE交换机）的告警信息，导致故障根因定位错误。",
-    "trigger_conditions": {
-      "logic": "AND",
-      "rules": [
-        "节点类型为CORE或SPINE",
-        "存在关键告警（如接口DOWN、BGP状态变化）",
-        "拓扑信息中包含该节点的上行/下行设备"
-      ]
-    },
-    "execution_instructions": {
-      "step_1": "优先检查CORE和SPINE节点的告警信息。",
-      "step_2": "分析这些节点的告警是否与其他节点的异常相关联。",
-      "step_3": "确认这些节点在网络拓扑中的关键位置，评估其对整体网络的影响。",
-      "step_4": "如果发现关键告警，将其作为故障根因的首要候选。"
-    }
-  },
-  {
-    "skill_id": 2,
-    "skill_name": "拓扑信息不足",
-    "target_error": "未能充分利用拓扑信息，导致无法正确解析节点间的连接关系。",
-    "trigger_conditions": {
-      "logic": "OR",
-      "rules": [
-        "节点信息中包含拓扑关系（如LLDP邻居信息）",
-        "告警涉及多个跨区域或跨设备的异常"
-      ]
-    },
-    "execution_instructions": {
-      "step_1": "检查节点的LLDP邻居信息，确认其连接关系。",
-      "step_2": "绘制或更新网络拓扑图，标识关键路径。",
-      "step_3": "分析告警在拓扑中的分布，寻找潜在的故障传播路径。",
-      "step_4": "如果拓扑信息不完整，尝试通过其他方式（如日志分析）补充缺失信息。"
-    }
-  },
-  {
-    "skill_id": 3,
-    "skill_name": "告警关联失误",
-    "target_error": "未能正确关联不同节点的告警日志，导致错误地将下游节点的问题误认为故障根源。",
-    "trigger_conditions": {
-      "logic": "AND",
-      "rules": [
-        "多个节点存在相关告警（如链路震荡、流量突变）",
-        "告警时间具有时间序列相关性"
-      ]
-    },
-    "execution_instructions": {
-      "step_1": "收集所有相关节点的告警日志。",
-      "step_2": "按时间顺序排列告警，寻找潜在的因果关系。",
-      "step_3": "分析上游节点的告警是否可能导致下游节点的异常。",
-      "step_4": "如果发现上游节点的告警先于下游节点出现，优先考虑上游节点为故障根因。"
-    }
-  },
-  {
-    "skill_id": 4,
-    "skill_name": "泛化规则1 - 关键链路优先",
-    "target_error": "",
-    "trigger_conditions": {
-      "logic": "OR",
-      "rules": [
-        "告警涉及高优先级业务（如跨区域通信）",
-        "告警影响多个POD或服务"
-      ]
-    },
-    "execution_instructions": {
-      "step_1": "识别对业务影响最大的关键链路或节点。",
-      "step_2": "优先检查这些关键链路或节点的健康状态。",
-      "step_3": "如果发现异常，将其作为故障根因的首要候选。",
-      "step_4": "即使在拓扑信息不完整的情况下，也要优先处理关键链路的问题。"
-    }
-  },
-  {
-    "skill_id": 5,
-    "skill_name": "泛化规则2 - 分层排查",
-    "target_error": "",
-    "trigger_conditions": {
-      "logic": "OR",
-      "rules": [
-        "面临复杂或未知的网络拓扑",
-        "告警涉及多个层级的设备"
-      ]
-    },
-    "execution_instructions": {
-      "step_1": "从高层级设备（如CORE节点）开始排查。",
-      "step_2": "逐层向下排查，确认每一层的健康状态。",
-      "step_3": "如果发现某一层级的设备异常，优先处理该层级的问题。",
-      "step_4": "即使在部分信息缺失的情况下，也要保持分层排查的逻辑，避免遗漏关键故障点。"
-    }
+    "execution_instructions": "执行 Python 脚本，定向检索 BGP 邻居状态变化、OSPF 邻居丢失等协议层关键事件，并输出中断的具体协议对端 IP。"
   }
 ]

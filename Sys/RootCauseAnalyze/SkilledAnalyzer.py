@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 sys.path.append("/home/sbp/lixinyang/pingmesh")
 from utils.prompts import PROMPT
-
+from SkillBank.SkillExecutor import SkillExecutor
 def save_json(data, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
@@ -150,7 +150,7 @@ class SkilledAnalyzer:
             return [str(n) for n in nums]
         return []
 
-    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list) -> str:
+    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list,excutor:SkillExecutor) -> str:
         """构建阶段二：将检索到的 Skill Instructions 注入原始 Prompt 进行最终推理"""
         if not selected_skill_ids:
             # 如果没有匹配到，则使用默认的兜底分析方法（不使用特殊 skill）
@@ -164,7 +164,10 @@ class SkilledAnalyzer:
             
         instructions = []
         for s in selected_skills:
-            instructions.append(f"[{s['skill_name']} Execution Steps]:\n" + json.dumps(s['execution_instructions'], ensure_ascii=False, indent=2))
+            if s["python_executor"]:
+                instructions.append(excutor.execute(s["python_executor"]))
+            else:
+                instructions.append(f"[{s['skill_name']} Execution Steps]:\n" + json.dumps(s['execution_instructions'], ensure_ascii=False, indent=2))
             
         skill_context = (
             "【Diagnostic Skills Applied】\n"
@@ -176,7 +179,7 @@ class SkilledAnalyzer:
         # 将技能指导前置到用户给的 prompt 之前
         return skill_context + original_prompt
 
-    def batch_infer(self, prompts: list, batch_size: int = 8) -> list:
+    def batch_infer(self, dirpaths: list, prompts: list, batch_size: int = 8) -> list:
         print(f"[{os.getpid()}] 正在执行技能检索与推理 (共 {len(prompts)} 条, Batch Size: {batch_size})...")
 
         def vllm_invoke(llm, inputs:list, sampling_params, desc="Inferring", b_size=1):
@@ -204,9 +207,10 @@ class SkilledAnalyzer:
             
             # 组装带 Skill 的最终 Prompt
             final_prompts = []
-            for original_p, ret_res in zip(prompts, retrieval_responses):
+            for dirpath, original_p, ret_res in zip(dirpaths, prompts, retrieval_responses):
                 skill_ids = self._extract_skill_ids(ret_res)
-                final_p = self._build_final_prompt(original_p, skill_ids)
+                skillexcutor=SkillExecutor(dirpath)
+                final_p = self._build_final_prompt(original_p, skill_ids,skillexcutor)
                 final_prompts.append(final_p)
 
             # Stage 2: 模型调用 - 基于 Skill 执行根因分析
@@ -217,7 +221,7 @@ class SkilledAnalyzer:
                 desc="Stage 2: Root Cause Analysis",
                 b_size=batch_size
             )
-            return final_responses
+            return final_responses,final_prompts
             
         except Exception as e:
             print(f"\n[Error {os.getpid()}] vLLM 批量推理执行异常: {str(e)}")
@@ -254,14 +258,22 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     
     # 替换为 SkilledAnalyzer
     analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus)
-    responses = analyzer.batch_infer(prompts_chunk, batch_size=batch_size)
+    responses,prmpts = analyzer.batch_infer(dirpaths=dirpaths_chunk, prompts=prompts_chunk, batch_size=batch_size)
     
-    result_dict = {}
-    for dp, res in zip(dirpaths_chunk, responses):
+    resls=[]
+    
+    for dp, res,pmt in zip(dirpaths_chunk, responses,prmpts):
+        
         clean_res = res.strip() if isinstance(res, str) else str(res)
-        result_dict[dp] = clean_res
+        result_dict = {
+            "response":clean_res,
+            "dir":dp,
+            "prompt":pmt
+        }
+        resls.append(result_dict)
+
     
-    return result_dict
+    return resls
 
 
 def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8) -> dict:
@@ -286,7 +298,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
         dir_chunks = dir_chunks[:num_instances]
         prompt_chunks = prompt_chunks[:num_instances]
 
-    all_results = {}
+    all_results = []
     ctx = mp.get_context('spawn')
     
     with ProcessPoolExecutor(max_workers=num_instances, mp_context=ctx) as executor:
@@ -306,8 +318,8 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 
         for future in as_completed(futures):
             try:
-                res_dict = future.result()
-                all_results.update(res_dict)
+                res_ls = future.result()
+                all_results.extend(res_ls)
             except Exception as exc:
                 print(f"某个子进程执行过程中发生了异常: {exc}")
 
@@ -317,7 +329,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 if __name__ == "__main__":
     # 配置
     root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    available_npus = [0,1,2, 3, 4,5,6,7]
+    available_npus = [2,3,6,7]
     
     dirpaths, prompts = generate_prompts(root_path)
 

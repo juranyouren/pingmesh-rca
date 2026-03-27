@@ -318,47 +318,47 @@ if __name__ == "__main__":
     #     print(f"单点反思完成！结果已保存至: {save_path}")
     
     # ================= 阶段二：全局聚类与Skill提取 =================
-    print(f"\n====== [阶段二] 开始全局案例聚类与 Skill 提取 ======")
-    start_time = time.time()
+    # print(f"\n====== [阶段二] 开始全局案例聚类与 Skill 提取 ======")
+    # start_time = time.time()
     
-    # 1. 读取检查后的反思文本
-    try:
-        single_results = load_json("/home/sbp/lixinyang/pingmesh/data/res/naive_res_prmt4_0/lesson.json/single_reviews.json")
-        review_texts = list(single_results.values())
-        print(f"成功加载 {len(review_texts)} 条单点反思记录。")
-    except Exception as e:
-        print(f"读取文件失败，请检查路径: {e}")
-        sys.exit(1)
+    # # 1. 读取检查后的反思文本
+    # try:
+    #     single_results = load_json("/home/sbp/lixinyang/pingmesh/data/res/naive_res_prmt4_0/lesson.json/single_reviews.json")
+    #     review_texts = list(single_results.values())
+    #     print(f"成功加载 {len(review_texts)} 条单点反思记录。")
+    # except Exception as e:
+    #     print(f"读取文件失败，请检查路径: {e}")
+    #     sys.exit(1)
 
-    # 2. 按 Token 限制分块 (单块限制在 8500 tokens 左右，确保总计不超过 10000)
-    review_chunks = chunk_reviews_by_token(
-        reviews=review_texts, 
-        model_path=MODEL_PATH, 
-        max_tokens=10000 
-    )
+    # # 2. 按 Token 限制分块 (单块限制在 8500 tokens 左右，确保总计不超过 10000)
+    # review_chunks = chunk_reviews_by_token(
+    #     reviews=review_texts, 
+    #     model_path=MODEL_PATH, 
+    #     max_tokens=10000 
+    # )
 
-    # 3. 开启独立进程进行推理
-    ctx = mp.get_context('spawn')
-    with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
-        future = executor.submit(
-            global_review_worker_batched, 
-            npus="0,1", 
-            review_chunks=review_chunks,
-            model_path=MODEL_PATH
-        )
-        final_skill_reports = future.result() # 这里返回的是一个 List[str]
+    # # 3. 开启独立进程进行推理
+    # ctx = mp.get_context('spawn')
+    # with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
+    #     future = executor.submit(
+    #         global_review_worker_batched, 
+    #         npus="0,1", 
+    #         review_chunks=review_chunks,
+    #         model_path=MODEL_PATH
+    #     )
+    #     final_skill_reports = future.result() # 这里返回的是一个 List[str]
 
-    # 4. 保存合并的结果
-    save_dir = os.path.dirname(root_path)
-    skill_save_path = os.path.join(save_dir, "extracted_skills_merged.md")
-    with open(skill_save_path, 'w', encoding='utf-8') as f:
-        f.write(f"# 全局 Skill 提取报告 (分 {len(final_skill_reports)} 批生成)\n\n")
-        for i, report in enumerate(final_skill_reports):
-            f.write(f"## 批次 {i+1} 提取结果\n\n")
-            f.write(report)
-            f.write("\n\n---\n\n")
+    # # 4. 保存合并的结果
+    # save_dir = os.path.dirname(root_path)
+    # skill_save_path = os.path.join(save_dir, "extracted_skills_merged.md")
+    # with open(skill_save_path, 'w', encoding='utf-8') as f:
+    #     f.write(f"# 全局 Skill 提取报告 (分 {len(final_skill_reports)} 批生成)\n\n")
+    #     for i, report in enumerate(final_skill_reports):
+    #         f.write(f"## 批次 {i+1} 提取结果\n\n")
+    #         f.write(report)
+    #         f.write("\n\n---\n\n")
             
-    end_time = time.time()
-    print(f"\n全局 Skill 提取完成！共生成 {len(final_skill_reports)} 份分块报告，已合并保存至: {skill_save_path}")
-    print(f"总耗时: {end_time - start_time:.2f} 秒")
+    # end_time = time.time()
+    # print(f"\n全局 Skill 提取完成！共生成 {len(final_skill_reports)} 份分块报告，已合并保存至: {skill_save_path}")
+    # print(f"总耗时: {end_time - start_time:.2f} 秒")
 
