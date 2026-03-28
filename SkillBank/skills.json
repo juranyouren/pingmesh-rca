@@ -42,5 +42,16 @@
       "rules": ["存在跨域网络问题", "日志中提及路由、邻居、BGP等字眼"]
     },
     "execution_instructions": "执行 Python 脚本，定向检索 BGP 邻居状态变化、OSPF 邻居丢失等协议层关键事件，并输出中断的具体协议对端 IP。"
+  },
+  {
+    "skill_id": "5",
+    "skill_name": "拓扑层级与爆炸半径受害者过滤",
+    "target_error": "颠倒故障传播的因果关系，将受下游网络汇聚影响的受害节点（或端侧源头拨测节点）误判为根因，忽视了上游核心设备。",
+    "python_executor": "identify_blast_radius_root",
+    "trigger_conditions": {
+      "logic": "OR",
+      "rules": ["拓扑中存在多个层级的设备告警", "Pingmesh出现大面积/多IP组告警"]
+    },
+    "execution_instructions": "执行 Python 脚本，按照数据中心网络拓扑层级 (CORE > SPINE > LEAF > POD) 严格评估告警权重。若扫描到上游核心设备存在告警，强制将下游节点(如汇聚点、拨测源IP)标记为‘受害者’，防止模型因果倒置。"
   }
 ]

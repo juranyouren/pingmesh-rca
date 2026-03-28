@@ -18,7 +18,8 @@ class SkillExecutor:
             "check_physical_errors": self.check_physical_errors,
             "analyze_topology_intersection": self.analyze_topology_intersection,
             "extract_timeline_root": self.extract_timeline_root,
-            "check_protocol_state": self.check_protocol_state
+            "check_protocol_state": self.check_protocol_state,
+            "identify_blast_radius_root":self.identify_blast_radius_root
         }
         
         # 容错处理：防止路径不存在导致初始化直接崩溃
@@ -172,3 +173,48 @@ class SkillExecutor:
         if protocol_issues:
             return "【自动化事实4：路由与协议层状态】\n" + "\n".join(protocol_issues)
         return "【自动化事实4：路由与协议层状态】未发现 BGP/OSPF 等协议层状态变更日志。"
+    #---------------------------------------------------------
+    # Skill 5: 拓扑层级权重评估与受害者过滤 [新增]
+    # ---------------------------------------------------------
+    def identify_blast_radius_root(self) -> str:
+        tier_map = {"CORE": [], "SPINE": [], "LEAF": [], "POD": [], "OTHER": []}
+        
+        for n in self._get_node_list():
+            node_ip = n.get("mgmt_ip", "Unknown_IP")
+            role = str(n.get("role", "")).upper()
+            has_issues = bool(n.get("alarms") or n.get("logs"))
+            
+            if has_issues:
+                # 按照网络层级归类故障节点
+                if "CORE" in role or "DSW" in role:
+                    tier_map["CORE"].append(node_ip)
+                elif "SPINE" in role:
+                    tier_map["SPINE"].append(node_ip)
+                elif "LEAF" in role or "TOR" in role:
+                    tier_map["LEAF"].append(node_ip)
+                elif "POD" in role or "SERVER" in role or "CNA" in role:
+                    tier_map["POD"].append(node_ip)
+                else:
+                    tier_map["OTHER"].append(node_ip)
+                    
+        result_lines = []
+        highest_tier = None
+        
+        # 严格的自上而下匹配 (Top-Down)
+        for tier in ["CORE", "SPINE", "LEAF", "POD"]:
+            if tier_map[tier]:
+                highest_tier = tier
+                result_lines.append(f"📌 发现最高权重故障层级: {tier}，相关节点: {', '.join(tier_map[tier])}")
+                break
+                
+        # 阻断逻辑：如果高层级有告警，强制将下游定义为受害者
+        if highest_tier in ["CORE", "SPINE"]:
+            victims = tier_map["LEAF"] + tier_map["POD"] + tier_map["OTHER"]
+            if victims:
+                result_lines.append(f"🚫 【强规则阻断】由于上游核心层 ({highest_tier}) 存在告警，以下下游节点 {', '.join(victims)} 极大概率属于【爆炸半径受害者】(例如路由被撤销、流量被动拥塞)！")
+                result_lines.append(f"⚠️ 必须优先将最高权重层级 ({highest_tier}) 的节点作为根因输出，禁止将上述下游节点设为根因！")
+                
+        if not result_lines:
+            return "【自动化事实5：层级与爆炸半径受害者过滤】未发现明确的跨层级故障传播。"
+            
+        return "【自动化事实5：层级与爆炸半径受害者过滤】\n" + "\n".join(result_lines)

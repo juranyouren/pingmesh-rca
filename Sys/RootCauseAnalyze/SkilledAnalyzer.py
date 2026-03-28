@@ -150,34 +150,71 @@ class SkilledAnalyzer:
             return [str(n) for n in nums]
         return []
 
-    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list,excutor:SkillExecutor) -> str:
-        """构建阶段二：将检索到的 Skill Instructions 注入原始 Prompt 进行最终推理"""
+    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, excutor: SkillExecutor) -> str:
+        """构建阶段二：将检索到的 Skill Instructions 注入原始 Prompt 进行最终推理，并进行 Token 级安全截断"""
+        
+        # 1. 如果没有技能，直接处理原始 Prompt
         if not selected_skill_ids:
-            # 如果没有匹配到，则使用默认的兜底分析方法（不使用特殊 skill）
-            return original_prompt
+            return self._safe_truncate(original_prompt)
             
-        #selected_skills = [s for s in self.skills if s["skill_id"] in selected_skill_ids]
         # 只取前2个选中的技能，防止上下文污染
-        selected_skills = [s for s in self.skills if s["skill_id"] in selected_skill_ids][:2]
+        #selected_skills = [s for s in self.skills if s["skill_id"] in selected_skill_ids][:2]
+        selected_skills = [s for s in self.skills if s["skill_id"] in selected_skill_ids]
         if not selected_skills:
-            return original_prompt
+            return self._safe_truncate(original_prompt)
             
+        # 2. 组装高级技能上下文 (这部分是核心事实，优先级最高)
         instructions = []
         for s in selected_skills:
-            if s["python_executor"]:
+            if s.get("python_executor"):
+                # 假设 execute 方法内部已经能够拿到 node_data 和 info_data
                 instructions.append(excutor.execute(s["python_executor"]))
             else:
                 instructions.append(f"[{s['skill_name']} Execution Steps]:\n" + json.dumps(s['execution_instructions'], ensure_ascii=False, indent=2))
             
         skill_context = (
-            "【Diagnostic Skills Applied】\n"
-            "Please apply the following strict diagnostic steps to analyze the root cause:\n"
+            "【Diagnostic Skills Applied (自动化提取事实)】\n"
+            "Please apply the following strict diagnostic facts to analyze the root cause:\n"
             f"{chr(10).join(instructions)}\n\n"
             "================================\n\n"
         )
         
-        # 将技能指导前置到用户给的 prompt 之前
+        # 3. 获取 Tokenizer (假设你在 __init__ 中保存了 self.tokenizer = self.llm.get_tokenizer())
+        tokenizer = self.llm.get_tokenizer()
+        
+        # 计算技能上下文的 Token 消耗
+        skill_tokens = tokenizer.encode(skill_context)
+        skill_len = len(skill_tokens)
+        
+        # 定义最大允许的输入 Token 数量（预留一些额度给模型的输出，例如设为模型最大长度的 80%）
+        max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len * 0.8)
+        
+        # 计算留给原始 Prompt 的剩余 Token 额度
+        remaining_tokens = max_input_tokens - skill_len
+        
+        # 4. 智能截断：如果留给原始数据的空间不足，强制截断原始数据
+        if remaining_tokens <= 0:
+            # 极端情况：技能事实本身就超长了（极少发生），直接截断技能事实
+            truncated_skill = tokenizer.decode(skill_tokens[:max_input_tokens])
+            return truncated_skill + "\n[警告：由于上下文过长，原始告警信息已被完全舍弃。]"
+            
+        original_tokens = tokenizer.encode(original_prompt)
+        if len(original_tokens) > remaining_tokens:
+            # 只保留原始 Prompt 中符合剩余额度的部分
+            # 建议保留头部（通常有概览）和尾部（通常有最新告警），这里演示直接截断尾部
+            truncated_original = tokenizer.decode(original_tokens[:remaining_tokens])
+            original_prompt = truncated_original + "\n\n...[因超长被截断]..."
+            
         return skill_context + original_prompt
+
+    def _safe_truncate(self, text: str) -> str:
+        """兜底的截断方法"""
+        tokenizer = self.llm.get_tokenizer()
+        tokens = tokenizer.encode(text)
+        max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len *0.8)
+        if len(tokens) > max_input_tokens:
+            return tokenizer.decode(tokens[:max_input_tokens]) + "\n\n...[因超长被截断]..."
+        return text
 
     def batch_infer(self, dirpaths: list, prompts: list, batch_size: int = 8) -> list:
         print(f"[{os.getpid()}] 正在执行技能检索与推理 (共 {len(prompts)} 条, Batch Size: {batch_size})...")
@@ -207,8 +244,10 @@ class SkilledAnalyzer:
             
             # 组装带 Skill 的最终 Prompt
             final_prompts = []
+            skill_ids_list=[]
             for dirpath, original_p, ret_res in zip(dirpaths, prompts, retrieval_responses):
                 skill_ids = self._extract_skill_ids(ret_res)
+                skill_ids_list.append(skill_ids)
                 skillexcutor=SkillExecutor(dirpath)
                 final_p = self._build_final_prompt(original_p, skill_ids,skillexcutor)
                 final_prompts.append(final_p)
@@ -221,7 +260,7 @@ class SkilledAnalyzer:
                 desc="Stage 2: Root Cause Analysis",
                 b_size=batch_size
             )
-            return final_responses,final_prompts
+            return final_responses,final_prompts,retrieval_responses,skill_ids_list
             
         except Exception as e:
             print(f"\n[Error {os.getpid()}] vLLM 批量推理执行异常: {str(e)}")
@@ -258,17 +297,19 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     
     # 替换为 SkilledAnalyzer
     analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus)
-    responses,prmpts = analyzer.batch_infer(dirpaths=dirpaths_chunk, prompts=prompts_chunk, batch_size=batch_size)
+    responses,prmpts,ret_ress,skills = analyzer.batch_infer(dirpaths=dirpaths_chunk, prompts=prompts_chunk, batch_size=batch_size)
     
     resls=[]
     
-    for dp, res,pmt in zip(dirpaths_chunk, responses,prmpts):
+    for dp, res,pmt,ret_res,skill in zip(dirpaths_chunk, responses,prmpts,ret_ress,skills):
         
         clean_res = res.strip() if isinstance(res, str) else str(res)
         result_dict = {
-            "response":clean_res,
             "dir":dp,
-            "prompt":pmt
+            "ret_response":ret_res,
+            "skills_used":skill,
+            "prompt":pmt,
+            "response":clean_res,
         }
         resls.append(result_dict)
 
@@ -329,7 +370,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 if __name__ == "__main__":
     # 配置
     root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    available_npus = [2,3,6,7]
+    available_npus = [0,1,2,3,4,5,6,7]
     
     dirpaths, prompts = generate_prompts(root_path)
 

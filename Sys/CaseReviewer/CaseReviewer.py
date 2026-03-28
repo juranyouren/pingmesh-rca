@@ -287,35 +287,35 @@ def global_review_worker_batched(npus: str, review_chunks: list, model_path: str
 # --- 主程序入口 ---
 if __name__ == "__main__":
     MODEL_PATH="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B"
-    root_path = "/home/sbp/lixinyang/pingmesh/data/res/naive_res_prmt4_0/ranking_failures.json"
+    root_path = "/home/sbp/lixinyang/pingmesh/data/res/exeskilled0/ranking_failures.json"
     available_npus = [0,1,2, 3, 4,5,6,7]  # 你的可用 NPU 列表
     
     # # ================= 阶段一：并行计算单Case反思 =================
-    # dirpaths, single_prompts = generate_single_review_prompts(root_path)
+    dirpaths, single_prompts = generate_single_review_prompts(root_path)
 
-    # if not single_prompts:
-    #     print("没有找到需要反思的任务。请检查数据目录和文件完整性。")
-    #     sys.exit(0)
+    if not single_prompts:
+        print("没有找到需要反思的任务。请检查数据目录和文件完整性。")
+        sys.exit(0)
 
-    # print(f"====== [阶段一] 开始 {len(single_prompts)} 个失败案例的单点反思 ======")
-    # start_time = time.time()
-    # single_results = distribute_inference_tasks(
-    #     dirpath_list=dirpaths, 
-    #     prompt_list=single_prompts, 
-    #     npu_list=available_npus,
-    #     batch_size=8
-    # )
+    print(f"====== [阶段一] 开始 {len(single_prompts)} 个失败案例的单点反思 ======")
+    start_time = time.time()
+    single_results = distribute_inference_tasks(
+        dirpath_list=dirpaths, 
+        prompt_list=single_prompts, 
+        npu_list=available_npus,
+        batch_size=8
+    )
     
-    # # 结果保存
-    # timenow = int(time.time())
+    # 结果保存
+    timenow = int(time.time())
     
-    # save_dir = os.path.dirname(root_path)
-    # os.makedirs(save_dir, exist_ok=True)
+    save_dir = os.path.dirname(root_path)
+    os.makedirs(save_dir, exist_ok=True)
     
-    # if single_results:
-    #     save_path = os.path.join(save_dir, "single_reviews.json")
-    #     save_json(single_results, save_path)
-    #     print(f"单点反思完成！结果已保存至: {save_path}")
+    if single_results:
+        save_path = os.path.join(save_dir, "single_reviews.json")
+        save_json(single_results, save_path)
+        print(f"单点反思完成！结果已保存至: {save_path}")
     
     # ================= 阶段二：全局聚类与Skill提取 =================
     # print(f"\n====== [阶段二] 开始全局案例聚类与 Skill 提取 ======")

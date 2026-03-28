@@ -115,7 +115,9 @@ class Score:
         MISSING_PENALTY = 3 
         probs = [0.54, 0.27, 0.18] # 对应 gt_ips 的权重
         
-        for name, response in res_data.items():
+        for rd in res_data:
+            name=rd.get("dir")
+            response=rd.get("response")
             gt_ips = self.get_groundtruth_ips(name)
             if not gt_ips:
                 continue
@@ -169,7 +171,9 @@ class Score:
                     "pred_ips": pred_ips,
                     "gt_ips": gt_ips,
                     "cost": round(case_expected_cost, 2),
-                    "propagation_path": ppath
+                    "propagation_path": ppath,
+                    "pmt":rd["prompt"],
+                    "response":rd["response"]
                 })
 
         # 计算平均值
@@ -206,7 +210,7 @@ class Score:
         return summary
 # ================= 使用示例 =================
 if __name__ == "__main__":
-    scorer = Score(res_file_path="/home/sbp/lixinyang/pingmesh/data/res/1774602405/res.json")
+    scorer = Score(res_file_path="/home/sbp/lixinyang/pingmesh/data/res/1774666649/res.json")
     overall_summary = scorer.calculate_metrics()
 
     print("======= 整体评估结果 =======")
