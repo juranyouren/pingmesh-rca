@@ -20,7 +20,7 @@ def load_json(path):
 
 
 class SkilledAnalyzer:
-    def __init__(self, model_path="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B", ASCEND_RT_VISIBLE_DEVICES="0,1",skill_json_path="/home/sbp/lixinyang/pingmesh/SkillBank/skills.json"):
+    def __init__(self, model_path="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B", ASCEND_RT_VISIBLE_DEVICES="0,1",skill_json_path="/home/sbp/lixinyang/pingmesh/SkillBank/skills.json",short=0):
         """
         初始化基于 vllm.LLM 的技能型根因分析器
         """
@@ -28,7 +28,10 @@ class SkilledAnalyzer:
         
         self.model_path = model_path
         self.ASCEND_RT_VISIBLE_DEVICES = ASCEND_RT_VISIBLE_DEVICES
-        self.skills = self._load_skill(skill_json_path)
+        #self.skills = self._load_skill(skill_json_path)
+        self.executor=SkillExecutor()
+        self.skills = self.executor.get_skill_conf()
+        self.short=short#short为1则不传入源数据
         
         # 将 skill_id 统一转换为 string 方便检索
         for s in self.skills:
@@ -150,9 +153,24 @@ class SkilledAnalyzer:
             return [str(n) for n in nums]
         return []
 
-    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, excutor: SkillExecutor) -> str:
+    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, dirpath: str) -> str:
         """构建阶段二：将检索到的 Skill Instructions 注入原始 Prompt 进行最终推理，并进行 Token 级安全截断"""
-        
+        if self.short:
+            original_prompt='''
+                # 角色设定
+                你是一名资深的 AIOps 与数据中心网络专家，精通 Pingmesh 拨测、多告警关联分析（multi-alarm correlation）、故障传播路径推导（fault propagation path analysis）以及精准的根因设备定位（Root Cause Device Localization）。
+
+                # 任务目标
+                请根据以上提供的大规模数据中心网络设备节点数据（nodes）和 Pingmesh 拨测告警详细信息（info），执行深度的根因设备定位与传播路径分析。你需要重构故障在拓扑中的真实传播路径，利用多点交叉关联推导出最有可能的根因设备列表，并**按照嫌疑程度输出这些故障设备的 IP 地址**。
+                # 格式化输出
+                以json格式输出设备ip以及故障传播路径：
+                ```json
+                {{
+                    "ip":<确诊设备的IP列表，根据嫌疑程度排序>,
+                    "propagation_path":<故障传播路径，就是解释是哪个设备的哪个故障引起了另一个设备的什么故障>
+                }}
+                ```
+                '''
         # 1. 如果没有技能，直接处理原始 Prompt
         if not selected_skill_ids:
             return self._safe_truncate(original_prompt)
@@ -167,8 +185,8 @@ class SkilledAnalyzer:
         instructions = []
         for s in selected_skills:
             if s.get("python_executor"):
-                # 假设 execute 方法内部已经能够拿到 node_data 和 info_data
-                instructions.append(excutor.execute(s["python_executor"]))
+                
+                instructions.append(self.executor.execute(s["python_executor"],dirpath))
             else:
                 instructions.append(f"[{s['skill_name']} Execution Steps]:\n" + json.dumps(s['execution_instructions'], ensure_ascii=False, indent=2))
             
@@ -248,8 +266,7 @@ class SkilledAnalyzer:
             for dirpath, original_p, ret_res in zip(dirpaths, prompts, retrieval_responses):
                 skill_ids = self._extract_skill_ids(ret_res)
                 skill_ids_list.append(skill_ids)
-                skillexcutor=SkillExecutor(dirpath)
-                final_p = self._build_final_prompt(original_p, skill_ids,skillexcutor)
+                final_p = self._build_final_prompt(original_p, skill_ids,dirpath)
                 final_prompts.append(final_p)
 
             # Stage 2: 模型调用 - 基于 Skill 执行根因分析
@@ -288,7 +305,7 @@ def generate_prompts(root_path: str) -> tuple:
     return dirpath_list, prompt_list
 
 
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, batch_size: int = 8) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, batch_size: int = 8,short=0) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
@@ -296,7 +313,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     time.sleep(sleep_time)
     
     # 替换为 SkilledAnalyzer
-    analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus)
+    analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus,short=short)
     responses,prmpts,ret_ress,skills = analyzer.batch_infer(dirpaths=dirpaths_chunk, prompts=prompts_chunk, batch_size=batch_size)
     
     resls=[]
@@ -317,7 +334,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8,short=0) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -353,7 +370,8 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     npus=npu_groups[i], 
                     dirpaths_chunk=dir_chunks[i], 
                     prompts_chunk=prompt_chunks[i],
-                    batch_size=batch_size
+                    batch_size=batch_size,
+                    short=short
                 )
                 futures.append(future)
 
@@ -370,7 +388,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 if __name__ == "__main__":
     # 配置
     root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    available_npus = [0,1,2,3,4,5,6,7]
+    available_npus = [2,3,4,5,6,7]
     
     dirpaths, prompts = generate_prompts(root_path)
 
@@ -382,7 +400,8 @@ if __name__ == "__main__":
             dirpath_list=dirpaths, 
             prompt_list=prompts, 
             npu_list=available_npus,
-            batch_size=8
+            batch_size=8,
+            short=0
         )
         end_time = time.time()
         

@@ -114,7 +114,33 @@ PROMPT5='''
 
 # 任务目标
 请根据以下提供的大规模数据中心网络设备节点数据（nodes）和 Pingmesh 拨测告警详细信息（info），执行深度的根因设备定位与传播路径分析。你需要重构故障在拓扑中的真实传播路径，利用多点交叉关联推导出最有可能的根因设备列表，并**按照嫌疑程度输出这些故障设备的 IP 地址**。
+# 格式化输出
+ 以json格式输出设备ip以及故障传播路径：
+ ```json
+ {{
+    "ip":<确诊设备的IP列表，根据嫌疑程度排序>,
+    "propagation_path":[
+    {{
+         "source":<故障源ip>，
+         "impact":<如何影响周围节点的>
+    }}
+    ]
+ }}
+ ```
+# 输入数据
 
+## 1. Info (pingmesh告警相关分析)
+{INFO}
+
+## 2. Nodes (节点拓扑与状态数据)
+{NODES}
+'''
+PROMPT5_NONODES='''
+# 角色设定
+你是一名资深的 AIOps 与数据中心网络专家，精通 Pingmesh 拨测、多告警关联分析（multi-alarm correlation）、故障传播路径推导（fault propagation path analysis）以及精准的根因设备定位（Root Cause Device Localization）。
+
+# 任务目标
+请根据以上提供的大规模数据中心网络设备节点数据（nodes）和 Pingmesh 拨测告警详细信息（info），执行深度的根因设备定位与传播路径分析。你需要重构故障在拓扑中的真实传播路径，利用多点交叉关联推导出最有可能的根因设备列表，并**按照嫌疑程度输出这些故障设备的 IP 地址**。
 # 格式化输出
  以json格式输出设备ip以及故障传播路径：
  ```json
@@ -123,14 +149,6 @@ PROMPT5='''
     "propagation_path":<故障传播路径，就是解释是哪个设备的哪个故障引起了另一个设备的什么故障>
  }}
  ```
-
-# 输入数据
-
-## 1. Info (pingmesh告警相关分析)
-{INFO}
-
-## 2. Nodes (节点拓扑与状态数据)
-{NODES}
 '''
 
 PROMPT3='''
@@ -251,5 +269,157 @@ CASE_REVIEW_ALL='''
 ]
 ```
 '''
+
+CASE_REVIEW_SINGLE='''
+# Role
+你是一位资深的数据中心网络排障专家（AIOps Expert），擅长通过复杂的网络告警与压缩后的节点拓扑信息，进行多告警关联分析与精准的根因定位。
+
+# Task
+下面是一个网络故障根因分析失败的案例。你需要对比你之前的“错误预测”与“真实正确结果（Ground Truth）”，深度反思推导过程中出现的逻辑漏洞，并总结出导致本次推断失败的根本原因。
+
+# Input Data
+- 压缩后的网络节点信息：
+{node_info}
+- 网络告警信息（包含事件及时间序列等）：
+{alarm_info}
+- 之前的错误回答（故障IP与传播路径）：
+{wrong_prediction}
+- 真实的正确结果（Ground Truth）：
+{ground_truth}
+
+# Workflow & Analysis Steps
+请按照以下思考链路进行严格剖析：
+1. **真实路径逆向推演**：基于Ground Truth的故障IP，结合节点信息，顺着真实的故障传播路径正向推演一遍，解释为什么这些告警会沿着这条真实路径产生。
+2. **错误路径证伪分析**：回顾之前的错误预测，指出该预测在哪一个具体的拓扑节点或告警关联环节产生了“逻辑分岔”。是因为被衍生告警风暴干扰（未找到共同上游汇聚节点）？是因为对压缩节点信息中的非直连依赖关系理解有误？还是误将受害节点当成了根因？
+3. **归因提炼**：用一句话高度概括本次失败的本质原因。
+
+# Output Format
+请输出一份结构化的反思报告，包含【误判场景描述】、【期望纠正逻辑】两个部分。
+'''
+
+SKILL_GEN='''
+# 角色设定
+你现在是 AIOps 智能诊断系统的高级 Python 研发专家。我们需要为现有的根因定位系统编写一个新的“自动化事实提取插件（Skill）”，以纠正大模型在特定网络故障场景下的误判。
+
+# 背景与目标
+在最近的诊断中，大模型出现了以下误判：
+{case}
+
+# 插件开发规范（必须严格遵守！）
+你需要输出一个完整的 Python 脚本，该脚本将被系统动态加载。代码必须包含以下三个核心部分：
+
+1. `SKILL_META` 字典（元数据）：
+   - skill_id: 填入 "999"（系统加载时会自动重新分配）。
+   - skill_name: 简明扼要的技能名称。
+   - target_error: 描述本技能旨在解决什么误判。
+   - python_executor: 具体的 Python 执行函数名。
+   - trigger_conditions: 包含 "logic" (OR/AND/ALWAYS) 和 "rules" 列表。
+   - execution_instructions: 用带有强引导性、祈使语气的指令，告诉大模型拿到这个结果后必须怎么做。
+
+2. 执行逻辑函数：
+   - 函数名必须与 `python_executor` 保持一致。
+   - 输入参数仅为一个：`node_list`（类型为包含节点字典的列表）。
+   - 返回值必须为 `str` 类型。
+   - 输出的字符串必须以 `【自动化事实X：[技能名称]】` 开头。如果没有发现异常，返回未发现的说明；如果发现异常，语气需要具有强烈的引导性（例如：“强烈建议将此节点排除” 或 “必须将其列为最高嫌疑”）。
+
+3. `EXECUTORS` 字典（执行器映射）：
+   - 将 `python_executor` 的字符串名称映射到实际的函数对象上。
+
+# 输出格式
+请只输出包裹在 ```python 和 ``` 之间的代码块，不要输出任何解释性文字，以便系统直接正则提取。代码结构需严格参考以下结构：
+
+```python
+SKILL_META = {{
+    "skill_id": "",
+    "skill_name": "...",
+    "target_error": "...",
+    "python_executor": "your_function_name",
+    "trigger_conditions": {{"logic": "...", "rules": ["..."]}},
+    "execution_instructions": "..."
+}}
+
+def your_function_name(node_list) -> str:
+    result_lines = []
+    # ... 解析 node_list 逻辑 ...
+    if not result_lines:
+        return "【自动化事实X：...】未发现异常。"
+    return "【自动化事实X：...】\n" + "\n".join(result_lines)
+
+EXECUTORS = {{
+    "your_function_name": your_function_name
+}}
+'''
+
+PROPATH_LABEL0='''
+# 角色设定
+你是一名资深的 AIOps 与数据中心网络专家，精通 Pingmesh 拨测、多告警关联分析（multi-alarm correlation）、故障传播路径推导（fault propagation path analysis）以及精准的根因设备定位（Root Cause Device Localization）。
+
+# 任务目标
+请根据以下提供的大规模数据中心网络设备节点数据（nodes）和 Pingmesh 拨测告警详细信息（info）以及根因设备推荐列表，执行深度的传播路径分析。你需要重构故障在拓扑中的真实传播路径。
+# 格式化输出
+ 以json格式输出设备ip以及故障传播路径：
+ ```json
+[
+    {{
+         "source":<故障源ip>，
+         "impact":<详细描述该节点的故障如何影响周围节点>
+    }}
+]
+
+ ```
+# 输入数据
+
+## 1. Info (pingmesh告警相关分析)
+{INFO}
+
+## 2. Nodes (节点拓扑与状态数据)
+{NODES}
+
+## 3. ips(根因设备的ip)
+{IPS}
+'''
+PROPATH_LABEL="""
+# 角色设定
+你是一名资深的 AIOps 与大型数据中心网络专家（DCN Expert），在故障演练、根因定位（RCA）及智能运维领域拥有丰富经验。你精通 Pingmesh 拨测机制、多源告警关联分析（Multi-alarm Correlation）、动态拓扑分析以及基于底层协议（如 BGP、BFD）的故障传播路径推导（Fault Propagation Path Analysis）。
+
+# 背景与任务目标
+当前数据中心网络发生了跨 Pod/AZ 的通信异常告警。请根据我提供的三类输入数据：
+1. Pingmesh 拨测告警信息（Info）
+2. 节点拓扑与状态日志数据（Nodes）
+3. 算法初步推荐的根因设备 IP 列表（IPs）
+
+你的核心任务是：对输入数据进行深度交叉验证，**重构并推导出故障在网络拓扑中的真实传播路径与演进逻辑**，并严格按照指定格式输出。
+
+# 分析推理要求（思考链路）
+在生成最终结果前，请遵循以下逻辑进行隐式分析：
+1. **告警定界**：从 Info 中提取故障现象（如丢包率、受影响的源/目的区域、协议层级）。
+2. **协议关联**：从 Nodes 的 Log 中提取与根因设备相关的底层网络事件（如 BFD 会话震荡、BGP 路由刷新 EOR、接口 Down/Up 等）。
+3. **拓扑定性**：结合设备的网络角色（CORE / SPINE / LEAF 等），分析底层协议异常是如何向上层传递，最终导致 Pingmesh 拨测失败的。
+4. **路径闭环**：验证推荐的根因 IPs 是否与日志及拓扑逻辑完全吻合，提取出最核心的故障传播节点。
+
+# 输出格式限制
+请**仅**输出一个标准、合法的 JSON 数组格式，不要包含任何多余的解释性文本或 Markdown 标记之外的内容。每个对象代表一个关键的故障传播节点，具体结构如下：
+
+```json
+[
+    {{
+         "source": "<设备的管理IP（严格从提供的根因IP列表中匹配）>",
+         "impact": "<详细描述：该节点的角色是什么？发生了什么底层协议级异常（引用具体日志如BFD/BGP等）？该异常是如何波及周围对等体节点，并最终导致上层Pingmesh拨测丢包的？描述需具备严密的因果逻辑关系>"
+    }}
+]
+```
+
+# 输入数据
+
+## 1. Info (pingmesh告警相关分析)
+{INFO}
+
+## 2. Nodes (节点拓扑与状态数据)
+{NODES}
+
+## 3. ips(根因设备的ip)
+{IPS}
+"""
+
 
 PROMPT=PROMPT5

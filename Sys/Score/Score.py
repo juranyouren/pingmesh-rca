@@ -210,7 +210,7 @@ class Score:
         return summary
 # ================= 使用示例 =================
 if __name__ == "__main__":
-    scorer = Score(res_file_path="/home/sbp/lixinyang/pingmesh/data/res/1774666649/res.json")
+    scorer = Score(res_file_path="/home/sbp/lixinyang/pingmesh/data/res/1774686355/res.json")
     overall_summary = scorer.calculate_metrics()
 
     print("======= 整体评估结果 =======")

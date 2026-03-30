@@ -15,6 +15,9 @@ class Modifier:
         """
         self.alarm_content_path = alarm_content_path
         self.alarm_content=load_json(alarm_content_path)
+
+        self.alarm_content.pop("all_tag")
+
         self.json_file=os.path.dirname(alarm_content_path)
         self.json_file=os.path.join(self.json_file,f"merged_pingmesh-{self.alarm_content['csn']}-全链路.json")
         self.nodes = load_json(self.json_file)
@@ -528,9 +531,8 @@ if __name__ == "__main__":
     if not test_files:
         print(f"在 {base_data_dir} 下没有找到任何 *_info.json 文件，请检查路径。")
         sys.exit(1)
-        
+    test_files=list(set(test_files))
     print(f"🔍 共找到 {len(test_files)} 个测试用例，开始批量跑测...\n")
-    
 
     for idx, file_path in enumerate(test_files, 1):
         case_name = os.path.basename(os.path.dirname(file_path)) # 用父文件夹名（如1231999173）作为 case 名

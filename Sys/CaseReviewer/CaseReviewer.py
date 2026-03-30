@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 sys.path.append("/home/sbp/lixinyang/pingmesh")
 # 导入您设计好的两类Prompt
-from utils.prompts import CASE_REVIEW_SINGLE, CASE_REVIEW_ALL
+from utils.prompts import CASE_REVIEW_SINGLE, CASE_REVIEW_ALL,SKILL_GEN
 
 def save_json(data, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -122,11 +122,20 @@ def generate_single_review_prompts(res_file_path: str) -> tuple:
             ground_truth_ips = item.get("groundtruth_ips", [])
             
             # 3. 构造单case反思 prompt
-            prompt = CASE_REVIEW_SINGLE.format(
-                node_info=json.dumps(node, ensure_ascii=False),
-                alarm_info=json.dumps(info, ensure_ascii=False),
-                wrong_prediction=wrong_prediction, 
-                ground_truth=json.dumps(ground_truth_ips, ensure_ascii=False)
+            # prompt = CASE_REVIEW_SINGLE.format(
+            #     node_info=json.dumps(node, ensure_ascii=False),
+            #     alarm_info=json.dumps(info, ensure_ascii=False),
+            #     wrong_prediction=wrong_prediction, 
+            #     ground_truth=json.dumps(ground_truth_ips, ensure_ascii=False)
+            # )
+
+            case_dict={
+                "input":item.get("pmt"),
+                "ground_truth_ips":ground_truth_ips,
+                "wrong_prediction":wrong_prediction
+            }
+            prompt = SKILL_GEN.format(
+                case=case_dict
             )
             
             dirpath_list.append(dirpath)
@@ -287,8 +296,8 @@ def global_review_worker_batched(npus: str, review_chunks: list, model_path: str
 # --- 主程序入口 ---
 if __name__ == "__main__":
     MODEL_PATH="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B"
-    root_path = "/home/sbp/lixinyang/pingmesh/data/res/exeskilled0/ranking_failures.json"
-    available_npus = [0,1,2, 3, 4,5,6,7]  # 你的可用 NPU 列表
+    root_path = "/home/sbp/lixinyang/pingmesh/data/res/exeskilled3/ranking_failures.json"
+    available_npus = [2, 3, 4,5,6,7]  # 你的可用 NPU 列表
     
     # # ================= 阶段一：并行计算单Case反思 =================
     dirpaths, single_prompts = generate_single_review_prompts(root_path)
