@@ -141,7 +141,10 @@ class SkillExecutor:
 
 if __name__ == "__main__":
     se=SkillExecutor()
-    res_dict={}
-    res_dict=load_json("/home/sbp/lixinyang/pingmesh/data/res/exeskilled3/single_reviews.json")
-    for name,res in res_dict.items():
+    # res_dict={}
+    # res_dict=load_json("/home/sbp/lixinyang/pingmesh/data/res/exeskilled3/single_reviews.json")
+    # for name,res in res_dict.items():
+    #     se.add_skill_from_response(res)
+    res_ls=load_json("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/skills.json")
+    for res in res_ls:
         se.add_skill_from_response(res)

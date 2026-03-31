@@ -72,7 +72,7 @@ class NaiveAnalyzer:
                 sampling_params=self.sampling_params, 
                 batch_size=batch_size
             )
-            return responses
+            return responses,prompts
         except Exception as e:
             print(f"\n[Error {os.getpid()}] vLLM 批量推理执行异常: {str(e)}")
             return ["模型未返回有效推理内容或发生异常。"] * len(prompts)
@@ -111,15 +111,23 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     sleep_time = (worker_id - 1) * 60
     time.sleep(sleep_time)
     analyzer = NaiveAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus)
-    responses = analyzer.batch_infer(prompts_chunk, batch_size=batch_size)
+    responses,prmpts= analyzer.batch_infer(prompts=prompts_chunk, batch_size=batch_size)
     
     # 匹配结果并返回字典
-    result_dict = {}
-    for dp, res in zip(dirpaths_chunk, responses):
-        clean_res = res.strip() if isinstance(res, str) else str(res)
-        result_dict[dp] = clean_res
+    resls=[]
     
-    return result_dict
+    for dp, res,pmt in zip(dirpaths_chunk, responses,prmpts):
+        
+        clean_res = res.strip() if isinstance(res, str) else str(res)
+        result_dict = {
+            "dir":dp,
+            "prompt":pmt,
+            "response":clean_res,
+        }
+        resls.append(result_dict)
+
+    
+    return resls
 
 def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8) -> dict:
     """
@@ -151,7 +159,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
         dir_chunks = dir_chunks[:num_instances]
         prompt_chunks = prompt_chunks[:num_instances]
 
-    all_results = {}
+    all_results = []
     
     # 必须使用 spawn 启动方式，避免子进程继承主进程上下文导致 NPU 驱动冲突
     ctx = mp.get_context('spawn')
@@ -175,8 +183,8 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
         # 收集所有进程的结果
         for future in as_completed(futures):
             try:
-                res_dict = future.result()
-                all_results.update(res_dict)
+                res_ls = future.result()
+                all_results.extend(res_ls)
             except Exception as exc:
                 print(f"某个子进程执行过程中发生了异常: {exc}")
 
@@ -187,7 +195,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 if __name__ == "__main__":
     # 配置
     root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    available_npus = [0,1,2, 3, 4,5,6,7]  # 你的可用 NPU 列表
+    available_npus = [2,3, 4,5,6,7]  # 你的可用 NPU 列表
     
     # 1. 生成所有 prompt
     dirpaths, prompts = generate_prompts(root_path)

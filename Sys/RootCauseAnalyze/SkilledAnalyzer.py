@@ -384,14 +384,41 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 
     return all_results
 
+def generate_partial_prompts(dirpaths:list) :
+    prompt_list = []
+    for dirpath  in dirpaths:
+        node_path = os.path.join(dirpath, "nodes.json")
+        info_path = os.path.join(dirpath, "info.json")
+        try:
+            node = load_json(node_path)
+            info = load_json(info_path)
+            prompt = PROMPT.format(NODES=node, INFO=info)
+            prompt_list.append(prompt)
+        except Exception as e:
+            print(f"\n[错误] 读取/解析目录 {dirpath} 时发生异常: {e}")
+                
+    return prompt_list
+
+def get_dirpaths_from_fcases(fcase_path):
+    fcases=load_json(fcase_path)
+    res=[]
+
+    for case in fcases:
+        dir=case.get("name")
+        res.append(dir)
+    return res
 
 if __name__ == "__main__":
     # 配置
-    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    available_npus = [2,3,4,5,6,7]
     
+    available_npus = [0,1,2,3,4,5,6,7]
+
+    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
     dirpaths, prompts = generate_prompts(root_path)
 
+    # dirpaths=get_dirpaths_from_fcases("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/ranking_failures.json")
+    # prompts=generate_partial_prompts(dirpaths)
+    
     if prompts:
         print(f"共生成 {len(prompts)} 个任务，开始分配并行推理...")
         
@@ -417,3 +444,5 @@ if __name__ == "__main__":
             print(f"最终结果已合并并保存至: {save_path}")
     else:
         print("没有找到需要推理的任务。")
+
+    

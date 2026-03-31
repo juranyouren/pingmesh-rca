@@ -1,4 +1,5 @@
 import os, json
+import re
 import sys
 import time
 import math
@@ -7,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 sys.path.append("/home/sbp/lixinyang/pingmesh")
 # 导入您设计好的两类Prompt
-from utils.prompts import CASE_REVIEW_SINGLE, CASE_REVIEW_ALL,SKILL_GEN
+from utils.prompts import CASE_REVIEW_SINGLE, CASE_REVIEW_ALL,SKILL_GEN,BAD_CASE_REVIEW,CATAGORIZE
 
 def save_json(data, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -119,7 +120,7 @@ def generate_single_review_prompts(res_file_path: str) -> tuple:
             # 2. 从 res.json 中提取大模型之前的回答与真实标签
             # 直接将模型的思维链(think)和输出都作为 wrong_prediction 传给反思Prompt，效果更好
             wrong_prediction = item.get("response", "") 
-            ground_truth_ips = item.get("groundtruth_ips", [])
+            ground_truth_ips = item.get("gt_ips", [])
             
             # 3. 构造单case反思 prompt
             # prompt = CASE_REVIEW_SINGLE.format(
@@ -134,8 +135,13 @@ def generate_single_review_prompts(res_file_path: str) -> tuple:
                 "ground_truth_ips":ground_truth_ips,
                 "wrong_prediction":wrong_prediction
             }
-            prompt = SKILL_GEN.format(
-                case=case_dict
+            # prompt = SKILL_GEN.format(
+            #     case=case_dict
+            # )
+            prompt = BAD_CASE_REVIEW.format(
+                PMT=item.get("pmt"),
+                RES=wrong_prediction,
+                GT=ground_truth_ips
             )
             
             dirpath_list.append(dirpath)
@@ -145,7 +151,6 @@ def generate_single_review_prompts(res_file_path: str) -> tuple:
             print(f"\n[错误] 处理 Case {dirpath} 时发生异常: {e}")
             
     return dirpath_list, prompt_list
-
 
 def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, batch_size: int = 8) -> dict:
     import os
@@ -163,7 +168,6 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
         result_dict[dp] = clean_res
     
     return result_dict
-
 
 def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8) -> dict:
     total_tasks = len(prompt_list)
@@ -286,59 +290,88 @@ def global_review_worker_batched(npus: str, review_chunks: list, model_path: str
         for idx, review in enumerate(chunk):
             formatted_summaries += f"### Failed Case {idx+1}\n{review}\n\n"
             
-        prompt = CASE_REVIEW_ALL.format(failed_cases_summary_list=formatted_summaries)
+        #prompt = CASE_REVIEW_ALL.format(failed_cases_summary_list=formatted_summaries)
+        prompt = CATAGORIZE.format(REPORT=formatted_summaries)
         global_prompts.append(prompt)
     
     # 因为每个 prompt 逼近 10k Token 且输出可能很长，建议这里的 batch_size 设为 1 或 2，防止 NPU OOM
     responses = reviewer.batch_infer(global_prompts, batch_size=1)
     return responses
 
+def skill_gen_worker_batched(npus: str, prompts: list, model_path: str) -> list:
+    """阶段二：在独立进程中运行全局反思，接收分块后的 reviews，避免显存溢出和 Context 截断"""
+    import os
+    os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
+    # 整个进程中只初始化一次 CaseReviewer，避免反复加载模型的巨大开销
+    reviewer = CaseReviewer(model_path=model_path, ASCEND_RT_VISIBLE_DEVICES=npus)
+    
+    # 因为每个 prompt 逼近 10k Token 且输出可能很长，建议这里的 batch_size 设为 1 或 2，防止 NPU OOM
+    responses = reviewer.batch_infer(prompts, batch_size=1)
+    return responses
+
+def extract_judges(path):
+    data=load_json(path)
+    result=[]
+    for dir,res in data.items():
+        json_pattern = re.compile(r'```json\s*(.*?)\s*```', re.DOTALL | re.IGNORECASE)
+        json_blocks = json_pattern.findall(res)
+        if json_blocks:
+            jb=json_blocks[-1]
+            d = json.loads(jb)
+            result.append(d)
+    save_json(result,f"{os.path.dirname(path)}/exps.json")
+    return result
+
+def skill_gen_pmt(sk_gd):
+    pmts=[]
+    for mist,gd in sk_gd.items():
+        pmt=SKILL_GEN.format(
+            case=gd
+        )
+        pmts.append(pmt)
+    return pmts
+
 # --- 主程序入口 ---
 if __name__ == "__main__":
     MODEL_PATH="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B"
-    root_path = "/home/sbp/lixinyang/pingmesh/data/res/exeskilled3/ranking_failures.json"
+    root_path = "/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/ranking_failures.json"
     available_npus = [2, 3, 4,5,6,7]  # 你的可用 NPU 列表
     
-    # # ================= 阶段一：并行计算单Case反思 =================
-    dirpaths, single_prompts = generate_single_review_prompts(root_path)
+    # # # ================= 阶段一：并行计算单Case反思 =================
+    # dirpaths, single_prompts = generate_single_review_prompts(root_path)
 
-    if not single_prompts:
-        print("没有找到需要反思的任务。请检查数据目录和文件完整性。")
-        sys.exit(0)
+    # if not single_prompts:
+    #     print("没有找到需要反思的任务。请检查数据目录和文件完整性。")
+    #     sys.exit(0)
 
-    print(f"====== [阶段一] 开始 {len(single_prompts)} 个失败案例的单点反思 ======")
-    start_time = time.time()
-    single_results = distribute_inference_tasks(
-        dirpath_list=dirpaths, 
-        prompt_list=single_prompts, 
-        npu_list=available_npus,
-        batch_size=8
-    )
+    # print(f"====== [阶段一] 开始 {len(single_prompts)} 个失败案例的单点反思 ======")
+    # start_time = time.time()
+    # single_results = distribute_inference_tasks(
+    #     dirpath_list=dirpaths, 
+    #     prompt_list=single_prompts, 
+    #     npu_list=available_npus,
+    #     batch_size=8
+    # )
     
-    # 结果保存
-    timenow = int(time.time())
+    # # 结果保存
+    # timenow = int(time.time())
     
-    save_dir = os.path.dirname(root_path)
-    os.makedirs(save_dir, exist_ok=True)
+    # save_dir = os.path.dirname(root_path)
+    # os.makedirs(save_dir, exist_ok=True)
     
-    if single_results:
-        save_path = os.path.join(save_dir, "single_reviews.json")
-        save_json(single_results, save_path)
-        print(f"单点反思完成！结果已保存至: {save_path}")
-    
+    # if single_results:
+    #     save_path = os.path.join(save_dir, "single_reviews.json")
+    #     save_json(single_results, save_path)
+    #     print(f"单点反思完成！结果已保存至: {save_path}")
+    # extract_judges("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/single_reviews.json")
+
+
     # ================= 阶段二：全局聚类与Skill提取 =================
     # print(f"\n====== [阶段二] 开始全局案例聚类与 Skill 提取 ======")
     # start_time = time.time()
     
-    # # 1. 读取检查后的反思文本
-    # try:
-    #     single_results = load_json("/home/sbp/lixinyang/pingmesh/data/res/naive_res_prmt4_0/lesson.json/single_reviews.json")
-    #     review_texts = list(single_results.values())
-    #     print(f"成功加载 {len(review_texts)} 条单点反思记录。")
-    # except Exception as e:
-    #     print(f"读取文件失败，请检查路径: {e}")
-    #     sys.exit(1)
 
+    # review_texts=load_json("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/exps.json")
     # # 2. 按 Token 限制分块 (单块限制在 8500 tokens 左右，确保总计不超过 10000)
     # review_chunks = chunk_reviews_by_token(
     #     reviews=review_texts, 
@@ -351,7 +384,7 @@ if __name__ == "__main__":
     # with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
     #     future = executor.submit(
     #         global_review_worker_batched, 
-    #         npus="0,1", 
+    #         npus="2,3", 
     #         review_chunks=review_chunks,
     #         model_path=MODEL_PATH
     #     )
@@ -370,4 +403,30 @@ if __name__ == "__main__":
     # end_time = time.time()
     # print(f"\n全局 Skill 提取完成！共生成 {len(final_skill_reports)} 份分块报告，已合并保存至: {skill_save_path}")
     # print(f"总耗时: {end_time - start_time:.2f} 秒")
+
+    # ================= 阶段三：Skill生成 =================
+    print(f"\n====== [阶段三] skill生成======")
+    start_time = time.time()
+    sk_gd=load_json("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/sk_guide.json")
+    # 2. 按 Token 限制分块 (单块限制在 8500 tokens 左右，确保总计不超过 10000)
+    prompts=skill_gen_pmt(sk_gd)
+    # 3. 开启独立进程进行推理
+    ctx = mp.get_context('spawn')
+    with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
+        future = executor.submit(
+            skill_gen_worker_batched, 
+            npus="2,3", 
+            prompts=prompts,
+            model_path=MODEL_PATH
+        )
+        skills = future.result() # 这里返回的是一个 List[str]
+
+    # 4. 保存合并的结果
+    save_dir = os.path.dirname(root_path)
+    skill_save_path = os.path.join(save_dir, "skills.json")
+    save_json(skills,skill_save_path)
+            
+    end_time = time.time()
+
+    print(f"总耗时: {end_time - start_time:.2f} 秒")
 

@@ -266,7 +266,7 @@ def parse_and_save(data_dict):
 if __name__ == "__main__":
     # 配置
     root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    available_npus = [2, 3, 4,5,6,7]  # 你的可用 NPU 列表
+    available_npus = [0,1,2, 3, 4,5,6,7]  # 你的可用 NPU 列表
     
     # 1. 生成所有 prompt
     dirpaths, prompts = generate_prompts(root_path)

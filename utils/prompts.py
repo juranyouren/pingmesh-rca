@@ -119,10 +119,13 @@ PROMPT5='''
  ```json
  {{
     "ip":<确诊设备的IP列表，根据嫌疑程度排序>,
-    "propagation_path":[
-    {{
-         "source":<故障源ip>，
-         "impact":<如何影响周围节点的>
+    "propagation_path":{{
+      <故障源ip>: {{
+          "affected_nodes":[<受影响节点的ip列表>]
+          "impact":<如何影响周围节点的>
+      }}
+      ，
+      ...
     }}
     ]
  }}
@@ -301,8 +304,7 @@ SKILL_GEN='''
 # 角色设定
 你现在是 AIOps 智能诊断系统的高级 Python 研发专家。我们需要为现有的根因定位系统编写一个新的“自动化事实提取插件（Skill）”，以纠正大模型在特定网络故障场景下的误判。
 
-# 背景与目标
-在最近的诊断中，大模型出现了以下误判：
+# 背景与目标：
 {case}
 
 # 插件开发规范（必须严格遵守！）
@@ -401,12 +403,13 @@ PROPATH_LABEL="""
 请**仅**输出一个标准、合法的 JSON 数组格式，不要包含任何多余的解释性文本或 Markdown 标记之外的内容。每个对象代表一个关键的故障传播节点，具体结构如下：
 
 ```json
-[
-    {{
-         "source": "<设备的管理IP（严格从提供的根因IP列表中匹配）>",
+{{
+    <设备的管理IP（严格从提供的根因IP列表中匹配）>：{{
+         "affected_nodes":[<影响了哪些节点，这里给出IP列表>],
          "impact": "<详细描述：该节点的角色是什么？发生了什么底层协议级异常（引用具体日志如BFD/BGP等）？该异常是如何波及周围对等体节点，并最终导致上层Pingmesh拨测丢包的？描述需具备严密的因果逻辑关系>"
-    }}
-]
+    }}，
+    ...
+}}
 ```
 
 # 输入数据
@@ -421,5 +424,107 @@ PROPATH_LABEL="""
 {IPS}
 """
 
+BAD_CASE_REVIEW="""
+# 角色设定
+你是一名资深的 AIOps 算法评测专家与 Prompt 架构师。你精通数据中心网络架构（Spine-Leaf、OSPF/BGP 路由协议等）、网络故障排查逻辑，以及大语言模型（LLM）的推理机制与常见幻觉（Hallucination）分析。
+
+# 任务目标
+我将提供一个 AIOps 根因设备定位任务的【原始输入】、【大模型生成的回答】以及【真实标准答案 (Ground Truth)】。请你对比生成结果与标准答案，深度剖析大模型在特征提取、逻辑推理和指令遵循上的错误点，并给出具体的改进方案。
+
+# 输入数据
+## 1. 原始输入 Prompt 与数据：
+{PMT}
+
+## 2. 大模型生成的回答：
+{RES}
+
+## 3. 真实标准答案 (Ground Truth)：
+{GT}
+
+# 分析维度要求
+请严格按照以下维度进行深度剖析：
+1. **关键特征遗漏与误判**：模型是否忽略了决定性的网络事件（如 BGP 路由震荡 `RM_DELETE_DEFAULTRT`）？是否过度放大了无关紧要的事件（如单次的 OSPF LSA 老化或常规的 GRPC 登入登出）？
+2. **故障传播推导逻辑缺陷**：模型的思维链（Chain of Thought）在哪个环节发生了断裂？它对网络拓扑（CORE vs LEAF）对业务流量的实际影响理解是否正确？
+3. **指令遵循与格式问题**：输出的 JSON 格式是否完全符合用户的约束（例如 `propagation_path` 的格式要求）？
+4. **改进建议 (Actionable Suggestions)**：针对上述错误，应增添哪种类型的skill，给出详细描述？（例如：增加对路由震荡告警权重的强调规则、引入网络拓扑距离惩罚机制等）。
+
+# 格式化输出
+请以 JSON 格式输出你的分析结果，严格遵守以下 Schema：
+```json
+{{
+  "error_analysis":<> ,
+  "improvement_suggestions":<> 
+}}
+```
+"""
+
+CATAGORIZE0="""
+# 角色设定
+你是一名资深的 AIOps 知识图谱架构师与高级 Prompt 工程师。你擅长从海量的模型评测 Bad Case 报告中，提取、抽象并分类核心的业务逻辑缺陷，最终将其转化为大模型能够理解的系统级 Prompt 规则。
+
+# 任务目标
+我将提供一组历史的【AIOps 根因定位 Bad Case 分析报告】（JSON 格式）。请你对这些报告中的错误原因和改进建议进行深度整合、去重与分类。你需要将这些零散的经验提炼为结构化的“网络诊断先验知识”，并输出一套可以直接用于升级原 RCA Prompt 的“专家规则库”。
+{REPORT}
+# 格式化输出
+请以 JSON 格式输出提炼后的经验库，严格遵守以下 Schema。提取的 improving skill是设计skill的思路，可以辅助大模型规避此类错误
+
+```json
+{{
+  "experience_summary": {{
+    "feature_weighting": [
+      {{
+        "concept": "<提炼的概念，如：BGP路由震荡>",
+        "historical_error": "<总结过去模型常犯的错误>",
+        "improving skill": ["<设计skill的思路，可以辅助大模型规避此类错误>"]
+      }}
+    ],
+    "topology_semantics": [
+      {{
+        "concept": "<提炼的概念，如：CORE 节点爆炸半径>",
+        "historical_error": "<...>",
+        "prompt_rules": ["<...>"]
+      }}
+    ],
+    "temporal_and_hard_rules": [
+      {{
+         "concept": "<...>",
+         "historical_error": "<...>",
+         "prompt_rules": ["<...>"]
+      }}
+    ],
+    "output_formatting": [
+      {{
+         "concept": "<...>",
+         "historical_error": "<...>",
+         "prompt_rules": ["<...>"]
+      }}
+    ]
+  }}
+}}
+```
+"""
+
+
+CATAGORIZE="""
+# 角色设定
+你是一名资深的 AIOps 知识图谱架构师与高级 Prompt 工程师。你擅长从海量的模型评测 Bad Case 报告中，提取、抽象并分类核心的业务逻辑缺陷，最终将其转化为大模型可用的skill
+
+# 任务目标
+我将提供一组历史的【AIOps 根因定位 Bad Case 分析报告】（JSON 格式）。请你对这些报告中的错误原因和改进建议进行深度整合、去重与分类。你需要将这些零散的经验提炼大模型可用的skill。注意类别不要过多，合理把控
+{REPORT}
+# 格式化输出
+请以 JSON 格式输出提炼后的经验库，严格遵守以下 Schema。提取的 improving skill是设计skill的思路，可以辅助大模型规避此类错误
+
+```json
+{{
+      <犯了什么类型的错>：[
+         <提出什么样的skill来改进>
+         ....
+      ]，
+      ...
+     
+}}
+```
+"""
 
 PROMPT=PROMPT5
