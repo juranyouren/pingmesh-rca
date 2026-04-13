@@ -12,7 +12,6 @@ def generate_target_path(source_dir):
     filename = f"merged_pingmesh-{node_id}-全链路.json"
     return os.path.join(source_dir, filename)
 
-
 class SkillExecutor:
     def __init__(self, skills_folder="/home/sbp/lixinyang/pingmesh/SkillBank/skills"):
         self.skill_map = {}          # 存放函数指针: {"evaluate_evidence_weight": <function>}
@@ -67,10 +66,6 @@ class SkillExecutor:
             return list(nodes.values())
         return []
     
-    def get_alarminfo(self,dirpath):
-        info = load_json(os.path.join(dirpath,"info.json"))
-        return info
-    
     def execute(self, executor_name: str,node_path:str) -> str:
         """大模型调用具体函数的入口"""
         skill_func = self.skill_map.get(executor_name)
@@ -78,7 +73,7 @@ class SkillExecutor:
             return f"【错误】找不到对应的执行脚本: {executor_name}"
         try:
             # 将 node_list 作为参数传给插件，插件无需关心数据是怎么解析的
-            return skill_func(self.get_node_list(node_path),self.get_alarminfo(node_path))
+            return skill_func(self.get_node_list(node_path))
         except Exception as e:
             return f"【系统脚本执行异常 - {executor_name}】: {str(e)}"
     
@@ -201,11 +196,11 @@ class SkillExecutor:
             return f"【失败】保存新 Skill 文件时发生异常: {str(e)}"
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skills_path", type=str, required=True, help="由反思阶段生成的 skills.json 文件的路径")
     se=SkillExecutor()
-    # res_dict={}
-    # res_dict=load_json("/home/sbp/lixinyang/pingmesh/data/res/exeskilled3/single_reviews.json")
-    # for name,res in res_dict.items():
-    #     se.add_skill_from_response(res)
-    res_ls=load_json("/home/sbp/lixinyang/pingmesh/data/res/skill30/skills.json")
+    args = parser.parse_args()
+    res_ls=load_json(args.skills_path)
     for res in res_ls:
         print(se.manage_skill_from_response(res))

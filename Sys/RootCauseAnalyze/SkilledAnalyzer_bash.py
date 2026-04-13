@@ -414,19 +414,19 @@ def get_dirpaths_from_fcases(fcase_path):
     return res
 
 if __name__ == "__main__":
-    # 配置
-    
-    available_npus = [0,1,2,3,4,5,6,7]
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root_path", type=str, required=True, help="输入数据的根目录")
+    parser.add_argument("--save_dir", type=str, required=True, help="结果保存的目录")
+    args = parser.parse_args()
 
-    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    dirpaths, prompts = generate_prompts(root_path)
-
-    # dirpaths=get_dirpaths_from_fcases("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/ranking_failures.json")
-    # prompts=generate_partial_prompts(dirpaths)
+    # 替换原有的硬编码配置
+    available_npus = [0,1,2, 3, 4, 5, 6, 7]
+    dirpaths, prompts = generate_prompts(args.root_path)
     
+
     if prompts:
         print(f"共生成 {len(prompts)} 个任务，开始分配并行推理...")
-        
         start_time = time.time()
         final_results = distribute_inference_tasks(
             dirpath_list=dirpaths, 
@@ -437,17 +437,9 @@ if __name__ == "__main__":
         )
         end_time = time.time()
         
-        print(f"所有并行推理已完成！总耗时: {end_time - start_time:.2f} 秒")
-        
-        timenow = int(time.time())
-        save_dir = f"/home/sbp/lixinyang/pingmesh/data/res/{timenow}"
-        os.makedirs(save_dir, exist_ok=True)
-        
+        os.makedirs(args.save_dir, exist_ok=True)
         if final_results:
-            save_path = os.path.join(save_dir, "res.json")
+            save_path = os.path.join(args.save_dir, "res.json")
             save_json(final_results, save_path)
-            print(f"最终结果已合并并保存至: {save_path}")
-    else:
-        print("没有找到需要推理的任务。")
 
     

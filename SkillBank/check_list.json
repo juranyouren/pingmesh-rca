@@ -1,0 +1,34 @@
+[
+  [
+    {
+      "rule_id": "Rule_01_Physical_Layer_Priority_With_Concurrency",
+      "trigger_condition": "当存在物理层严重告警（如端口 Down、光链路健康度异常、入方向错误报文数量异常、has discard 等）时",
+      "rule_description": "必须将具有此类物理层告警的节点纳入根因候选列表。【严厉警告】：数据中心通常存在并发故障，“优先考虑”绝对不等于“唯一考虑”！严禁因为某节点有物理告警，就主观臆断并删减其他具有高专家诊断得分和致命协议告警（如 BGP/OSPF 断连）的节点。如果不确定明确的拓扑因果关系，必须将它们作为【并发/关联根因】一起保留！"
+    },
+    {
+      "rule_id": "Rule_02_Strict_Fact_Checking_and_Recovery",
+      "trigger_condition": "当候选节点完全没有对应的真实日志/告警信息支撑，或者其告警日志已经明确显示恢复（如 clear, resume, service_resume）时",
+      "rule_description": "必须果断排除这些仅靠拓扑位置凑数、或已经自愈的节点，防止误导运维人员。但是，如果原始日志中明确包含底层丢包铁证（如 QOS_PACKET_DROP、has discard），哪怕没有触发高级别告警，也必须将其作为核心物理根因保留。"
+    },
+    {
+      "rule_id": "Rule_03_ECMP_and_Equivalence_Principle",
+      "trigger_condition": "当候选节点中存在多个同层/同类设备（例如两台 CORE 或两台 SPINE），且它们的告警涉及相同的接口错误或类似的协议断连时",
+      "rule_description": "这通常意味着双上联或等价多路径（ECMP）的并发故障。必须将这些具有共性告警的同层节点【全部】作为等价根因输出，严禁只保留其中一个。同时，不要为了突出下层设备而盲目洗白上层节点的高交叉度（cross）嫌疑。"
+    },
+    {
+      "rule_id": "Rule_04_Cross_Multiplier_and_Score_Trust",
+      "trigger_condition": "当候选节点的跨路径交汇度（cross）≥ 2 且伴随真实网络中断告警，或者专家工具给出的“综合嫌疑度得分”极高时",
+      "rule_description": "绝不能只盯着单个告警的绝对权重。高 cross 值代表流量咽喉，高诊断得分代表全局拓扑嫌疑。即使其告警看起来不是最致命的物理告警，只要满足高分数或高交汇度，就必须将其【追加】到根因列表中，作为故障传播链条中的关键节点。"
+    },
+    {
+      "rule_id": "Rule_05_Anti_Hallucination_and_Tool_Absolute_Priority",
+      "trigger_condition": "当面对多源告警和多个高分候选节点，大模型试图用自然语言进行“因果逻辑缝合”推导时",
+      "rule_description": "【最高置信度原则】：绝对信任专家工具给出的排名！严禁凭空脑补因果链（例如：妄断 A 的光模块故障就必然导致了 B 的 BGP 断连，除非明确看到 A 和 B 物理直连）。在缺乏明确直连证据证明“单因多果”的情况下，请保持克制，不要为了逻辑通顺而乱删节点，必须把专家工具推荐的 Top 级高危节点全部纳入最终根因列表！"
+    },
+    {
+      "rule_id": "Rule_06",
+      "trigger_condition": "当pred_ips的数量小于3时",
+      "rule_description": "可以将一些嫌疑较轻的节点放入pred_ips"
+    }
+  ]
+]

@@ -4,7 +4,7 @@ import random
 import os,sys
 import copy
 import pandas as pd
-sys.path.append("/home/sbp/lixinyang/pingmesh/topo_simplify")
+sys.path.append("/home/sbp/lixinyang/pingmesh")
 from utils.public_functions import load_json,save_json
 
 class Modifier:
@@ -522,7 +522,7 @@ if __name__ == "__main__":
     # modifier.get_top_k_jaccard_ips(method=4)
     # modifier.evaluate_jaccard_methods([0,1,2,3,4])
     #modifier.run()
-    base_data_dir = "/home/sbp/lixinyang/pingmesh/data/nodes/"
+    base_data_dir = "/home/sbp/lixinyang/pingmesh/data/nodes_silent_2/"
     
     # 2. 递归查找所有以 _info.json 结尾的告警文件
     search_pattern = os.path.join(base_data_dir, "**", "**","*_info.json")
