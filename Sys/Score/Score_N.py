@@ -42,24 +42,25 @@ class LlmTextParser(BaseParser):
         json_blocks = self.json_pattern.findall(raw_input)
         if json_blocks:
             last_json_str = json_blocks[-1]
+            # 先尝试直接解析
             try:
-                # #last_json_str = last_json_str.replace("'", '"')
-                # data = json.loads(last_json_str)
-                # ips = data.get("ip", [])
-                # if isinstance(ips, str): ips = [ips]
-                # ppath = data.get("propagation_path", {})
-                # return Prediction(ips=ips, ppath=ppath)
-                json.load("[(]")
-            except (json.JSONDecodeError, Exception) as e:
-                try:
-                    last_json_str = last_json_str.replace("'", '"')
-                    data = json.loads(last_json_str)
-                    ips = data.get("ip", [])
-                    if isinstance(ips, str): ips = [ips]
-                    ppath = data.get("propagation_path", {})
-                    return Prediction(ips=ips, ppath=ppath)
-                except (json.JSONDecodeError, Exception) as e:
-                    print("---")
+                data = json.loads(last_json_str)
+                ips = data.get("ip", [])
+                if isinstance(ips, str): ips = [ips]
+                ppath = data.get("propagation_path", {})
+                return Prediction(ips=ips, ppath=ppath)
+            except json.JSONDecodeError:
+                pass
+            # 回退：替换单引号后重试（LLM 偶尔输出单引号 JSON）
+            try:
+                last_json_str = last_json_str.replace("'", '"')
+                data = json.loads(last_json_str)
+                ips = data.get("ip", [])
+                if isinstance(ips, str): ips = [ips]
+                ppath = data.get("propagation_path", {})
+                return Prediction(ips=ips, ppath=ppath)
+            except json.JSONDecodeError:
+                pass
 
         # 如果 JSON 提取失败，使用正则兜底
         ips = self.ip_pattern.findall(raw_input)
