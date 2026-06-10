@@ -203,9 +203,15 @@ class MetricsEvaluator:
 # ==========================================
 class DataIOHandler:
     """负责所有文件的读取和写入"""
-    _silent_cache_file=""
-    _silent_cache = {} 
-    
+    _silent_cache_file = ""
+    _silent_cache = None  # None = 未初始化，{} = 已加载（可能为空）
+
+    @classmethod
+    def set_cache_file(cls, path: str):
+        """设置静默案例缓存文件路径，并重置缓存。"""
+        cls._silent_cache_file = path
+        cls._silent_cache = None
+
     @staticmethod
     def load_json(path: str) -> Any:
         if not os.path.exists(path): return None
@@ -248,15 +254,18 @@ class DataIOHandler:
         判断给定的 case 是否为 silent。自带缓存机制减少时间消耗。
         """
         csn = os.path.basename(os.path.normpath(dir_name))
-        
+
+        # 首次调用时尝试从缓存文件加载
         if cls._silent_cache is None:
-            if os.path.exists(cls._silent_cache_file):
+            loaded = False
+            if cls._silent_cache_file and os.path.exists(cls._silent_cache_file):
                 try:
                     with open(cls._silent_cache_file, 'r', encoding='utf-8') as f:
                         cls._silent_cache = json.load(f)
-                except:
-                    cls._silent_cache = {}
-            else:
+                    loaded = True
+                except Exception:
+                    pass
+            if not loaded:
                 cls._silent_cache = {}
 
         if csn in cls._silent_cache:
@@ -281,6 +290,13 @@ class DataIOHandler:
                     is_silent =  (len(alarm_list)+log_list.get("total"))>1000  
 
         cls._silent_cache[csn] = is_silent
+        # 持久化缓存（最佳努力）
+        if cls._silent_cache_file:
+            try:
+                with open(cls._silent_cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(cls._silent_cache, f, ensure_ascii=False)
+            except Exception:
+                pass
         return is_silent
 
 # ==========================================
@@ -293,6 +309,10 @@ class Scorer:
         self.io = DataIOHandler()
         self.evaluator = MetricsEvaluator()
         self.parser = parser or LlmTextParser()
+        # 设置静默案例缓存文件（与 res 文件同目录，加速重复评测）
+        DataIOHandler.set_cache_file(
+            os.path.join(self.failure_dir, ".silent_cache.json")
+        )
 
     def _evaluate_stage(self, res_data: List[Dict], response_key: str, prompt_key: str) -> Dict[str, Any]:
         total_cases = len(res_data)
