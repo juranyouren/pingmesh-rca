@@ -433,15 +433,28 @@ class Scorer:
         
         return result_summary
 
+    @staticmethod
+    def _has_stage_data(res_data: List[Dict], key: str) -> bool:
+        """检查 res_data 中是否存在非空的 stage key（如 response/refine_prompt）。"""
+        for rd in res_data[:5]:  # 抽样前 5 条即可
+            val = rd.get(key, "")
+            if val and isinstance(val, str) and len(val.strip()) > 10:
+                return True
+        return False
+
     def calculate_metrics(self, ):
         summary_file_path = os.path.join(self.failure_dir, "sum.json")
-        
+
         res_data = self.io.load_json(self.res_file_path)
-        if not res_data: 
+        if not res_data:
             raise ValueError(f"未能加载测试数据: {self.res_file_path}")
 
         d_res = self._evaluate_stage(res_data, "draft_response", "draft_prompt")
-        r_res = self._evaluate_stage(res_data, "response", "refine_prompt")
+        # 仅当数据中存在非空 refine 结果时才评估，避免基线输出全 0
+        if self._has_stage_data(res_data, "response"):
+            r_res = self._evaluate_stage(res_data, "response", "refine_prompt")
+        else:
+            r_res = {"all": {"status": "N/A — 基线/单阶段方法无 refine 输出"}}
 
         def extract_pure_metrics(stage_res):
             if not stage_res: return {}
