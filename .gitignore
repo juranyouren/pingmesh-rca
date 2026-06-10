@@ -42,3 +42,4 @@ Baseline/NetEventCause/NetEventCause-main.zip
 
 # PDF papers (large binaries, keep code only)
 docs/papers/*.pdf
+docs
