@@ -51,7 +51,7 @@ class AlarmWeightBuilder:
         for f in filenames:
             if f == "info.json":
                 info_file = f
-            elif "merged_pingmesh" in f and "全链路.json" in f:
+            elif "pingmesh" in f and "全链路.json" in f:
                 node_file = f
         # fallback: Collector 输出的 nodes.json
         if node_file is None and "nodes.json" in filenames:
@@ -178,7 +178,7 @@ if __name__ == "__main__":
     import sys
 
     data_root = sys.argv[1] if len(sys.argv) > 1 else \
-        "/home/sbp/lixinyang/pingmesh/data/nodes"
+        "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
     out_path = sys.argv[2] if len(sys.argv) > 2 else \
         "/home/sbp/lixinyang/pingmesh/data/weights/alarm_weights.json"
 

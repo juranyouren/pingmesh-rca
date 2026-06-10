@@ -123,7 +123,7 @@ def run_ablation_experiment(root_path: str, output_dir: str):
             if f == "info.json":
                 info_file = f
             # 兼容你提到的 merged_pingmesh-xxx-全链路.json 或老版本的 nodes.json
-            elif ("merged_pingmesh" in f and "全链路.json" in f):
+            elif ("pingmesh" in f and "全链路.json" in f):
                 node_file = f
                 
         # 只要同时找到了节点数据和告警 info，就执行诊断
@@ -177,7 +177,7 @@ def run_ablation_experiment(root_path: str, output_dir: str):
 
 if __name__ == "__main__":
     # 1. 配置路径
-    DATA_ROOT = "/home/sbp/lixinyang/pingmesh/data/nodes"
+    DATA_ROOT = "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
     timenow = int(time.time())
     OUTPUT_DIR = f"/home/sbp/lixinyang/pingmesh/data/res/graph_only_{timenow}"
     
