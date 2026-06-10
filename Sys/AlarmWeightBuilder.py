@@ -106,24 +106,40 @@ class AlarmWeightBuilder:
 
     # ── persist ───────────────────────────────────────────────────────
     def save(self, path):
-        """Save the weight table to a JSON file."""
+        """
+        Save as a JSON array of {alarm_name, alarm_priority} objects,
+        directly compatible with graph_only.py's reading convention.
+        """
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        payload = {
-            "weights": self.weights,
-            "alarm_case_count": dict(self.alarm_case_count),
-            "case_count": self.case_count,
-        }
+        alarm_list = []
+        for name in sorted(self.weights.keys()):
+            alarm_list.append({
+                "alarm_name": name,
+                "alarm_priority": self.weights[name],
+            })
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        print(f"[AlarmWeightBuilder] saved {len(self.weights)} alarm types → {path}")
+            json.dump(alarm_list, f, ensure_ascii=False, indent=2)
+        print(f"[AlarmWeightBuilder] saved {len(alarm_list)} alarm types → {path}")
 
     def load(self, path):
-        """Load a previously saved weight table."""
+        """
+        Load a weight file (array format or legacy dict format).
+        Array format: [{alarm_name, alarm_priority}, ...]  ← graph_only.py native
+        Dict  format: {"weights": {...}, ...}              ← legacy
+        """
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)
-        self.weights = payload.get("weights", {})
-        self.alarm_case_count = defaultdict(int, payload.get("alarm_case_count", {}))
-        self.case_count = payload.get("case_count", 0)
+
+        if isinstance(payload, list):
+            for item in payload:
+                name = item.get("alarm_name", "")
+                if name:
+                    self.weights[name] = float(item.get("alarm_priority", 0.0))
+        elif isinstance(payload, dict):
+            self.weights = payload.get("weights", {})
+            self.alarm_case_count = defaultdict(int, payload.get("alarm_case_count", {}))
+            self.case_count = payload.get("case_count", 0)
+
         print(f"[AlarmWeightBuilder] loaded {len(self.weights)} alarm types ← {path}")
         return self
 
