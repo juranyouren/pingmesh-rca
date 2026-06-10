@@ -31,6 +31,7 @@ class LlmTextParser(BaseParser):
     """用于解析 LLM 生成的带有 Markdown 和文本的 Response"""
     def __init__(self):
         self.ip_pattern = re.compile(r'"ip"\s*:\s*"(\d{1,3}(?:\.\d{1,3}){3})"')
+        self.ip_generic_pattern = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b')
         self.ppath_pattern = re.compile(r'"propagation_path"\s*:\s*"([^"]+)"')
         self.json_pattern = re.compile(r'```json\s*(\{.*?\})\s*```', re.DOTALL | re.IGNORECASE)
 
@@ -64,6 +65,11 @@ class LlmTextParser(BaseParser):
 
         # 如果 JSON 提取失败，使用正则兜底
         ips = self.ip_pattern.findall(raw_input)
+        if not ips:
+            # JSON 数组格式回退: "ip": ["10.0.0.1", ...] 或裸 IP
+            ips = self.ip_generic_pattern.findall(raw_input)
+            # 排除常见的非设备 IP (如 0.0.0.0, 255.255.255.255)
+            ips = [ip for ip in ips if not ip.startswith(('0.', '255.'))]
         ppaths = self.ppath_pattern.findall(raw_input)
         
         ppath_dict = {}
