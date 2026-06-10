@@ -40,7 +40,7 @@ class Collector:
         alarmlist=full_link.get("alarm_list", [])
         loglist=full_link.get("log_list", {}).get("list", [])
 
-        if len(alarmlist)>1 and len(loglist)>1:
+        if len(alarmlist)>2 and len(loglist)>2:
             return None, None, None, None
 
         task_info = full_link.get("task_info", {})
@@ -140,19 +140,19 @@ class Collector:
         # 🚨 【修改点】：构建 Silent 数据集，强行屏蔽告警和日志注入
         # ==========================================
         
-        # 5. [已注释] 关联 告警 (Alarms)
-        for alarm in full_link.get("alarm_list", []):
-            a_ip = alarm.get("alarm_ip_ad")
-            target_name = ip_to_name.get(a_ip)
-            if target_name:
-                name_map[target_name]["alarms"].append(alarm)
+        # # 5. [已注释] 关联 告警 (Alarms)
+        # for alarm in full_link.get("alarm_list", []):
+        #     a_ip = alarm.get("alarm_ip_ad")
+        #     target_name = ip_to_name.get(a_ip)
+        #     if target_name:
+        #         name_map[target_name]["alarms"].append(alarm)
 
-        # 6. [已注释] 关联 日志 (Logs)
-        for log in full_link.get("log_list", {}).get("list", []):
-            l_ip = log.get("alarm_ip_ad")
-            target_name = ip_to_name.get(l_ip)
-            if target_name:
-                name_map[target_name]["logs"].append(log)
+        # # 6. [已注释] 关联 日志 (Logs)
+        # for log in full_link.get("log_list", {}).get("list", []):
+        #     l_ip = log.get("alarm_ip_ad")
+        #     target_name = ip_to_name.get(l_ip)
+        #     if target_name:
+        #         name_map[target_name]["logs"].append(log)
 
         # ==========================================
 
@@ -223,7 +223,7 @@ if __name__ == "__main__":
     INPUT_DIR = "/home/sbp/lixinyang/pingmesh/data/pingmesh_original"
     
     # 🚨 【修改点】：将输出目录改为了 nodes_silent，防止覆盖正常数据集
-    OUTPUT_DIR = "/home/sbp/lixinyang/pingmesh/data/nodes_silent_1"
+    OUTPUT_DIR = "/home/sbp/lixinyang/pingmesh/data/cnodes_silent_2"
     
     # 实例化并运行
     collector = Collector(input_path=INPUT_DIR, output_path=OUTPUT_DIR)

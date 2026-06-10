@@ -1,0 +1,2259 @@
+Scaling Personalized Web Search
+
+Glen Jeh glenj@db.stanford.edu
+
+Jennifer Widom widom@db.stanford.edu
+
+Abstract
+Recent web search techniques augment traditional text matching with a global notion of "importance" based on the linkage structure of the web, such as in Google's PageRank algorithm. For more refined searches, this global notion of importance can be specialized to create personalized views of importance--for example, importance scores can be biased according to a user-specified set of initially-interesting pages. Computing and storing all possible personalized views in advance is impractical, as is computing personalized views at query time, since the computation of each view requires an iterative computation over the web graph. We present new graph-theoretical results, and a new technique based on these results, that encode personalized views as partial vectors. Partial vectors are shared across multiple personalized views, and their computation and storage costs scale well with the number of views. Our approach enables incremental computation, so that the construction of personalized views from partial vectors is practical at query time. We present efficient dynamic programming algorithms for computing partial vectors, an algorithm for constructing personalized views from partial vectors, and experimental results demonstrating the effectiveness and scalability of our techniques.
+1 Introduction and Motivation
+General web search is performed predominantly through text queries to search engines. Because of the enormous size of the web, text alone is usually not selective enough to limit the number of query results to a manageable size. The PageRank algorithm [10], among others [8], has been proposed (and implemented in Google [1]) to exploit the linkage structure of the web to compute global "importance" scores that can be used to influence the ranking of search results. To encompass different notions of importance for different users and queries, the basic PageRank algorithm can be modified to create "personalized views" of the web, redefining importance according to user preference. For example, a user may wish to specify his bookmarks as a set of preferred pages, so that any query results that are important with respect to his bookmarked pages would be ranked higher. While experimentation with the use of personalized PageRank has shown its utility and
+This work was supported by the National Science Foundation under grant IIS-9817799.
+1
+
+promise [5, 10], the size of the web makes its practical realization extremely difficult. To see why, let us review the intuition behind the PageRank algorithm and its extension for personalization.
+The fundamental motivation underlying PageRank is the recursive notion that important pages are those linked-to by many important pages. A page with only two in-links, for example, may seem unlikely to be an important page, but it may be important if the two referencing pages are Yahoo! and Netscape, which themselves are important pages because they have numerous in-links. One way to formalize this recursive notion is to use the "random surfer" model introduced in [10]. Imagine that trillions of random surfers are browsing the web: if at a certain time step a surfer is looking at page p, at the next time step he looks at a random out-neighbor of p. As time goes on, the expected percentage of surfers at each page p converges (under certain conditions) to a limit r(p) that is independent of the distribution of starting points. Intuitively, this limit is the PageRank of p, and is taken to be an importance score for p, since it reflects the number of people expected to be looking at p at any one time.
+The PageRank score r(p) reflects a "democratic" importance that has no preference for any particular pages. In reality, a user may have a set P of preferred pages (such as his bookmarks) which he considers more interesting. We can account for preferred pages in the random surfer model by introducing a "teleportation" probability c: at each step, a surfer jumps back to a random page in P with probability c, and with probability 1 - c continues forth along a hyperlink. The limit distribution of surfers in this model would favor pages in P , pages linked-to by P , pages linked-to in turn, etc. We represent this distribution as a personalized PageRank vector (PPV) personalized on the set P . Informally, a PPV is a personalized view of the importance of pages on the web. Rankings of a user's text-based query results can be biased according to a PPV instead of the global importance distribution.
+Each PPV is of length n, where n is the number of pages on the web. Computing a PPV naively using a fixed-point iteration requires multiple scans of the web graph [10], which makes it impossible to carry out online in response to a user query. On the other hand, PPV's for all preference sets, of which there are 2n, is far too large to compute and store offline. We present a method for encoding PPV's as partially-computed, shared vectors that are practical to compute and store offline, and from which PPV's can be computed quickly at query time.
+In our approach we restrict preference sets P to subsets of a set of hub pages H, selected as those of greater interest for personalization. In practice, we expect H to be a set of pages with high PageRank ("important pages"), pages in a human-constructed directory such as Yahoo! or Open Directory [2], or pages important to a particular enterprise or application. The size of H can be thought of as the available degree of personalization. We present algorithms that, unlike previous work [5, 10], scale well with the size of H. Moreover, the same techniques we introduce can yield approximations on the much broader set of all PPV's, allowing at least some level of personalization on arbitrary preference sets.
+2
+
+The main contributions of this paper are as follows.
+· A method, based on new graph-theoretical results (listed next), of encoding PPV's as partial quantities, enabling an efficient, scalable computation that can be divided between precomputation time and query time, in a customized fashion according to available resources and application requirements.
+· Three main theorems: The Linearity Theorem allows every PPV to be represented as a linear combination of basis vectors, yielding a natural way to construct PPV's from shared components. The Hubs Theorem allows basis vectors to be encoded as partial vectors and a hubs skeleton, enabling basis vectors themselves to be constructed from common components. The Decomposition Theorem establishes a linear relationship among basis vectors, which is exploited to minimize redundant computation.
+· Several algorithms for computing basis vectors, specializations of these algorithms for computing partial vectors and the hubs skeleton, and an algorithm for constructing PPV's from partial vectors using the hubs skeleton.
+· Experimental results on real web data demonstrating the effectiveness and scalability of our techniques.
+In Section 2 we introduce the notation used in this paper and formalize personalized PageRank mathematically. Section 3 presents basis vectors, the first step towards encoding PPV's as shared components. The full encoding is presented in Section 4. Section 5 discusses the computation of partial quantities. Experimental results are presented in Section 6. Related work is discussed in Section 7. Section 8 summarizes the contributions of this paper. Additional material, primarily proofs of theorems, appears in a set of appendices.
+
+2 Preliminaries
+
+Let G = (V, E) denote the web graph, where V is the set of all web pages and E contains a directed
+
+edge p, q iff page p links to page q. For a page p, we denote by I(p) and O(p) the set of in-
+
+neighbors and out-neighbors of p, respectively. Individual in-neighbors are denoted as Ii(p) (1 
+
+i  |I(p)|), and individual out-neighbors are denoted analogously. For convenience, pages are
+
+numbered from 1 to n, and we refer to a page p and its associated number i interchangeably. For a
+
+vector v, v(p) denotes entry p, the p-th component of v. We always typeset vectors in boldface and
+
+scalars (e.g., v(p)) in normal font. All vectors in this paper are n-dimensional and have nonnegative
+
+entries. They should be thought of as distributions rather than arrows. The magnitude of a vector v
+
+is defined to be
+
+n i=1
+
+v(i)
+
+and
+
+is
+
+written
+
+|v|.
+
+In
+
+this
+
+paper,
+
+vector
+
+magnitudes
+
+are
+
+always
+
+in
+
+[0, 1].
+
+3
+
+In an implementation, a vector may be represented as a list of its nonzero entries, so another useful
+
+measure is the size of v, the number of nonzero entries in v.
+
+We generalize the preference set P discussed in Section 1 to a preference vector u, where
+
+|u| = 1 and u(p) denotes the amount of preference for page p. For example, a user who wants to
+
+personalize
+
+on
+
+his
+
+bookmarked
+
+pages
+
+P
+
+uniformly
+
+would
+
+have
+
+a
+
+u
+
+where
+
+u(p)
+
+=
+
+1 |P |
+
+if
+
+p
+
+
+
+P,
+
+and
+
+u(p) = 0 if p / P . We formalize personalized PageRank scoring using matrix-vector equations.
+
+Let A be the matrix corresponding to the web graph G,
+
+where Aij
+
+=
+
+1 |O(j)|
+
+if page j
+
+links to
+
+page i, and Aij = 0 otherwise. For simplicity of presentation, we assume that every page has at
+
+least one out-neighbor, as can be enforced by adding self-links to pages without out-links. The
+
+resulting scores can be adjusted to account for the (minor) effects of this modification, as specified
+
+in Appendix C.2.
+
+For a given u, the personalized PageRank equation can be written as
+
+v = (1 - c)Av + cu
+
+(1)
+
+where c  (0, 1) is the "teleportation" constant discussed in Section 1. Typically c  0.15, and experiments have shown that small changes in c have little effect in practice [10]. A solution v to equation (1) is a steady-state distribution of random surfers under the model discussed in Section 1, where at each step a surfer teleports to page p with probability c·u(p), or moves to a random outneighbor otherwise [10]. By a theorem of Markov Theory, a solution v with |v| = 1 always exists and is unique [9].1 The solution v is the personalized PageRank vector (PPV) for preference vector u. If u is the uniform distribution vector u = [1/n, . . . , 1/n], then the corresponding solution v is the global PageRank vector [10], which gives no preference to any pages.
+For the reader's convenience, Table 1 on the next page lists terminology that will be used extensively in the coming sections.
+
+3 Basis Vectors
+
+We present the first step towards encoding PPV's as shared components. The motivation behind the encoding is a simple observation about the linearity2 of PPV's, formalized by the following theorem.
+
+Theorem (Linearity). For any preference vectors u1 and u2, if v1 and v2 are the two corresponding PPV's, then for any constants 1, 2  0 such that 1 + 2 = 1,
+
+1v1 + 2v2 = (1 - c)A(1v1 + 2v2) + c(1u1 + 2u2)
+
+(2)
+
+1Specifically, v corresponds to the steady-state distribution of an ergodic, aperiodic Markov chain. 2More precisely, the transformation from personalization vectors u to their corresponding solution vectors v is
+linear.
+
+4
+
+Term Hub Set H Preference Set P
+Preference Vector u Personalized PageRank Vector (PPV) Basis Vector rp (or ri)
+Hub Vector rp Partial Vector (rp - rpH ) Hubs Skeleton S Web Skeleton Partial Quantities Intermediate Results
+
+Description A subset of web pages. Set of pages on which to personalize (restricted in this paper to subsets of H). Preference set with weights. Importance distribution induced by a preference vector.
+PPV for a preference vector with a single nonzero entry at p (or i). Basis vector for a hub page p  H. Used with the hubs skeleton to construct a hub vector. Used with partial vectors to construct a hub vector. Extension of the hubs skeleton to include pages not in H. Partial vectors and the hubs, web skeletons. Maintained during iterative computations.
+
+Section 1 1
+2 2
+3
+3 4.2 4.3 4.4.3
+5.2
+
+Table 1: Summary of terms.
+
+Informally, the Linearity Theorem says that the solution to a linear combination of preference
+
+vectors u1 and u2 is the same linear combination of the corresponding PPV's v1 and v2. The
+
+proof is in Appendix A.
+
+Let x1, . . . , xn be the unit vectors in each dimension, so that for each i, xi has value 1 at entry
+
+i and 0 everywhere else. Let ri be the PPV corresponding to xi. Each basis vector ri gives the
+
+distribution of random surfers under the model that at each step, surfers teleport back to page i
+
+with probability c. It can be thought of as representing page i's view of the web, where entry j
+
+of
+
+ri
+
+is
+
+j's
+
+importance
+
+in
+
+i's
+
+view.
+
+Note
+
+that
+
+the
+
+global
+
+PageRank
+
+vector
+
+is
+
+1 n
+
+(r1
+
++
+
+···
+
++
+
+rn),
+
+the
+
+average of every page's view.
+
+An arbitrary personalization vector u can be written as a weighted sum of the unit vectors xi:
+
+n
+
+u = ixi
+
+(3)
+
+i=1
+
+for some constants 1, . . . , n. By the Linearity Theorem,
+
+n
+
+v = iri
+
+(4)
+
+i=1
+
+is the corresponding PPV, expressed as a linear combination of the basis vectors ri. Recall from Section 1 that preference sets (now preference vectors) are restricted to subsets
+of a set of hub pages H. If a basis hub vector (or hereafter hub vector) for each p  H were
+
+5
+
+computed and stored, then any PPV corresponding to a preference set P of size k (a preference vector with k nonzero entries) can be computed by adding up the k corresponding hub vectors rp with the appropriate weights p.
+Each hub vector can be computed naively using the fixed-point computation in [10]. However, each fixed-point computation is expensive, requiring multiple scans of the web graph, and the computation time (as well as storage cost) grows linearly with the number of hub vectors |H|. In the next section, we enable a more scalable computation by constructing hub vectors from shared components.
+4 Decomposition of Basis Vectors
+In Section 3 we represented PPV's as a linear combination of |H| hub vectors rp, one for each p  H. Any PPV based on hub pages can be constructed quickly from the set of precomputed hub vectors, but computing and storing all hub vectors is impractical. To compute a large number of hub vectors efficiently, we further decompose them into partial vectors and the hubs skeleton, components from which hub vectors can be constructed quickly at query time. The representation of hub vectors as partial vectors and the hubs skeleton saves both computation time and storage due to sharing of components among hub vectors. Note, however, that depending on available resources and application requirements, hub vectors can be constructed offline as well. Thus "query time" can be thought of more generally as "construction time".
+We compute one partial vector for each hub page p, which essentially encodes the part of the hub vector rp unique to p, so that components shared among hub vectors are not computed and stored redundantly. The complement to the partial vectors is the hubs skeleton, which succinctly captures the interrelationships among hub vectors. It is the "blueprint" by which partial vectors are assembled to form a hub vector, as we will see in Section 4.3.
+The mathematical tools used in the formalization of this decomposition are presented next.3
+4.1 Inverse P-distance
+To formalize the relationship among hub vectors, we relate the personalized PageRank scores represented by PPV's to inverse P-distances in the web graph, a concept based on expected-f distances as introduced in [7].
+3Note that while the mathematics and computation strategies in this paper are presented in the specific context of the web graph, they are general graph-theoretical results that may be applicable in other scenarios involving stochastic processes, of which PageRank is one example.
+6
+
+Let p, q  V . We define the inverse P-distance rp(q) from p to q as
+
+rp(q) =
+
+P [t]c(1 - c)l(t)
+
+(5)
+
+t:p q
+
+where the summation is taken over all tours t (paths that may contain cycles) starting at p and
+
+ending at q, possibly touching p or q multiple times. For a tour t = w1, . . . , wk , the length l(t) is
+
+k - 1, the number of edges in t. The term P [t], which should be interpreted as "the probability of
+
+traveling t", is defined as
+
+k-1 i=1
+
+1 |O(wi
+
+)|
+
+,
+
+or
+
+1
+
+if
+
+l(t)
+
+=
+
+0.
+
+If
+
+there
+
+is
+
+no
+
+tour
+
+from
+
+p
+
+to
+
+q,
+
+the
+
+summation
+
+is taken to be 0.4 Note that rp(q) measures distances inversely: it is higher for nodes q "closer" to
+
+p. As suggested by the notation and proven in Appendix C, rp(q) = rp(q) for all p, q  V , so we
+
+will use rp(q) to denote both the inverse P-distance and the personalized PageRank score. Thus
+
+PageRank scores can be viewed as an inverse measure of distance.
+
+Let H  V be some nonempty set of pages. For p, q  V , we define rpH(q) as a restriction of
+
+rp(q) that considers only tours which pass through some page h  H in equation (5). That is, a
+
+page h  H must occur on t somewhere other than the endpoints. Precisely, rpH(q) is written as
+
+rpH (q) =
+
+P [t]c(1 - c)l(t)
+
+(6)
+
+t:p H q
+
+where the notation t : p H q reminds us that t passes through some page in H. Note that t
+
+must be of length at least 2. In this paper, H is always the set of hub pages, and p is usually a hub
+
+page (until we discuss the web skeleton in Section 4.4.3).
+
+4.2 Partial Vectors
+
+Intuitively, rpH(q), defined in equation (6), is the influence of p on q through H. In particular, if all paths from p to q pass through a page in H, then H separates p and q, and rpH(q) = rp(q). For well-chosen sets H (discussed in Section 4.4.2), it will be true that rp(q) - rpH(q) = 0 for many pages p, q. Our strategy is to take advantage of this property by breaking rp into two components: (rp - rpH) and rpH, using the equation
+
+rp = (rp - rpH ) + rpH
+
+(7)
+
+We first precompute and store the partial vector (rp -rpH) instead of the full hub vector rp. Partial vectors are cheaper to compute and store than full hub vectors, assuming they are represented as a
+
+list of their nonzero entries. Moreover, the size of each partial vector decreases as |H| increases,
+making this approach particularly scalable. We then add rpH back at query time to compute the full hub vector. However, computing and storing rpH explicitly could be as expensive as rp itself. In the next section we show how to encode rpH so it can be computed and stored efficiently.
+
+4The definition here of inverse P-distance differs slightly from the concept of expected-f distance in [7], where
+tours are not allowed to visit q multiple times. Note that general expected-f distances have the form t P [t]f (l(t)); in our definition, f (x) = c(1 - c)x.
+
+7
+
+4.3 Hubs Skeleton
+
+Let us briefly review where we are: In Section 3 we represented PPV's as linear combinations
+of hub vectors rp, one for each p  H, so that we can construct PPV's quickly at query time if we have precomputed the hub vectors, a relatively small subset of PPV's. To encode hub vectors
+efficiently, in Section 4.2 we said that instead of full hub vectors rp, we first compute and store only partial vectors (rp - rpH), which intuitively account only for paths that do not pass through a page of H (i.e., the distribution is "blocked" by H). Computing and storing the difference vector rpH efficiently is the topic of this section.
+It turns out that the vector rpH can be be expressed in terms of the partial vectors (rh - rhH), for h  H, as shown by the following theorem. Recall from Section 3 that xh has value 1 at h and 0 everywhere else.
+
+Theorem (Hubs). For any p  V , H  V ,
+
+rpH
+
+=
+
+1 c
+
+(rp(h) - cxp(h)) rh - rhH - cxh
+
+(8)
+
+hH
+
+In terms of inverse P-distances (Section 4.1), the Hubs Theorem says roughly that the distance from page p to any page q  V through H is the distance rp(h) from p to each h  H times the distance rh(q) from h to q, correcting for the paths among hubs by rhH(q). The terms cxp(h) and cxh deal with the special cases when p or q is itself in H. The proof, which is quite involved, is in Appendix D.
+The quantity rh - rhH appearing on the right-hand side of (8) is exactly the partial vectors discussed in Section 4.2. Suppose we have computed rp(H) = {(h, rp(h)) | h  H} for a hub page p. Substituting the Hubs Theorem into equation 7, we have the following Hubs Equation for constructing the hub vector rp from partial vectors:
+
+rp
+
+=
+
+(rp
+
+- rpH )
+
++
+
+1 c
+
+(rp(h) - cxp(h)) rh - rhH - cxh
+
+(9)
+
+hH
+
+This equation is central to the construction of hub vectors from partial vectors. The set rp(H) has size at most |H|, much smaller than the full hub vector rp, which can have
+up to n nonzero entries. Furthermore, the contribution of each entry rp(h) to the sum is no greater than rp(h) (and usually much smaller), so that small values of rp(h) can be omitted with minimal loss of precision (Section 6). The set S = {rp(H) | p  H} forms the hubs skeleton, giving the interrelationships among partial vectors.
+An intuitive view of the encoding and construction suggested by the Hubs Equation (9) is shown in Figure 1. At the top, each partial vector (rh - rhH), including (rp - rpH), is depicted as a notched triangle labeled h at the tip. The triangle can be thought of as representing paths starting at h, although, more accurately, it represents the distribution of importance scores computed based
+
+8
+
+Partial Vectors
+
+h1
+
+h3
+
+p
+
+h2
+
+h4
+
+h5
+
+Hubs Skeleton
+
+h1
+
+h3
+
++
+
+0.03
+
+0.003
+
+p 0.16 h2
+0.06
+
+h4 h 5 0.001
+
+0.0002
+
+Hub Vector
+= p
+
+Figure 1: Intuitive view of the construction of hub vectors from partial vectors and the hubs skeleton.
+on the paths, as discussed in Section 4.1. A notch in the triangle shows where the computation of a partial vector "stopped" at another hub page. At the center, a part rp(H) of the hubs skeleton is depicted as a tree so the "assembly" of the hub vector can be visualized. The hub vector is constructed by logically assembling the partial vectors using the corresponding weights in the hubs skeleton, as shown at the bottom.
+4.4 Discussion
+4.4.1 Summary
+In summary, hub vectors are building blocks for PPV's corresponding to preference vectors based on hub pages. Partial vectors, together with the hubs skeleton, are building blocks for hub vectors. Transitively, partial vectors and the hubs skeleton are building blocks for PPV's: they can be used to construct PPV's without first materializing hub vectors as an intermediate step (Section 5.4). Note that for preference vectors based on multiple hub pages, constructing the corresponding PPV from partial vectors directly can result in significant savings versus constructing from hub vectors, since partial vectors are shared across multiple hub vectors.
+
+9
+
+4.4.2 Choice of H
+So far we have made no assumptions about the set of hub pages H. Not surprisingly, the choice of hub pages can have a significant impact on performance, depending on the location of hub pages within the overall graph structure. In particular, the size of partial vectors is smaller when pages in H have higher PageRank, since high-PageRank pages are on average close to other pages in terms of inverse P-distance (Section 4.1), and the size of the partial vectors is related to the inverse P-distance between hub pages and other pages according to the Hubs Theorem. Our intuition is that high-PageRank pages are generally more interesting for personalization anyway, but in cases where the intended hub pages do not have high PageRank, it may be beneficial to include some high-PageRank pages in H to improve performance. We ran experiments confirming that the size of partial vectors is much smaller using high-PageRank pages as hubs than using random pages.
+4.4.3 Web Skeleton
+The techniques used in the construction of hub vectors can be extended to enable at least approximate personalization on arbitrary preference vectors that are not necessarily based on H. Suppose we want to personalize on a page p / H. The Hubs Equation can be used to construct rpH from partial vectors, given that we have computed rp(H). As discussed in Section 4.3, the cost of computing and storing rp(H) is orders of magnitude less than rp. Though rpH is only an approximation to rp, it may still capture significant personalization information for a properly-chosen hub set H, as rpH can be thought of as a "projection" of rp onto H. For example, if H contains pages from Open Directory, rpH can capture information about the broad topic of rp. Exploring the utility of the web skeleton W = {rp(H) | p  V } is an area of future work.
+5 Computation
+In Section 4 we presented a way to construct hub vectors from partial vectors (rp - rpH), for p  H, and the hubs skeleton S = {rp(H) | p  H}. We also discussed the web skeleton W = {rp(H) | p  V }. Computing these partial quantities naively using a fixed-point iteration [10] for each p would scale poorly with the number of hub pages. Here we present scalable algorithms that compute these quantities efficiently by using dynamic programming to leverage the interrelationships among them. We also show how PPV's can be constructed from partial vectors and the hubs skeleton at query time. All of our algorithms have the property that they can be stopped at any time (e.g., when resources are depleted), so that the current "best results" can be used as an approximation, or the computation can be resumed later for increased precision if resources permit.
+We begin in Section 5.1 by presenting a theorem underlying all of the algorithms presented (as
+10
+
+well as the connection between PageRank and inverse P-distance, as shown in Appendix C). In Section 5.2, we present three algorithms, based on this theorem, for computing general basis vectors. The algorithms in Section 5.2 are not meant to be deployed, but are used as foundations for the algorithms in Section 5.3 for computing partial quantities. Section 5.4 discusses the construction of PPV's from partial vectors and the hubs skeleton.
+
+5.1 Decomposition Theorem
+
+Recall the random surfer model of Section 1, instantiated for preference vector u = xp (for page
+
+p's view of the web). At each step, a surfer s teleports to page p with some probability c. If s is
+
+at p, then at the next step, s with probability 1 - c will be at a random out-neighbor of p. That is,
+
+a
+
+fraction
+
+(1
+
+-
+
+c)
+
+1 |O(p)|
+
+of
+
+the
+
+time,
+
+surfer
+
+s
+
+will
+
+be
+
+at
+
+any
+
+given
+
+out-neighbor
+
+of
+
+p
+
+one
+
+step
+
+after
+
+teleporting to p. This behavior is strikingly similar to the model instantiated for preference vector
+
+u
+
+=
+
+1 |O(p)|
+
+|O(p)| i=1
+
+xOi(p),
+
+where
+
+surfers
+
+teleport
+
+directly
+
+to
+
+each
+
+Oi(p)
+
+with
+
+equal
+
+probability
+
+1 |O(p)|
+
+.
+
+The
+
+similarity
+
+is
+
+formalized
+
+by
+
+the
+
+following
+
+theorem.
+
+Theorem (Decomposition). For any p  V ,
+
+|O(p)|
+
+(1 - c)
+
+rp = |O(p)|
+
+rOi(p) + cxp
+
+(10)
+
+i=1
+
+The Decomposition Theorem says that the basis vector rp for p is an average of the basis vectors rOi(p) for its out-neighbors, plus a compensation factor cxp. The proof is in Appendix B.
+The Decomposition Theorem gives another way to think about PPV's. It says that p's view of the web (rp) is the average of the views of its out-neighbors, but with extra importance given to p itself. That is, pages important in p's view are either p itself, or pages important in the view of p's out-neighbors, which are themselves "endorsed" by p. In fact, this recursive intuition yields an equivalent way of formalizing personalized PageRank scoring: basis vectors can be defined as vectors satisfying the Decomposition Theorem.
+While the Decomposition Theorem identifies relationships among basis vectors, a division of the computation of a basis vector rp into related subproblems for dynamic programming is not inherent in the relationships. For example, it is possible to compute some basis vectors first and then to compute the rest using the former as solved subproblems. However, the presence of cycles in the graph makes this approach ineffective. Instead, our approach is to consider as a subproblem the computation of a vector to less precision. For example, having computed rOi(p) to a certain precision, we can use the Decomposition Theorem to combine the rOi(p)'s to compute rp to greater precision. This approach has the advantage that precision needs not be fixed in advance: the process can be stopped at any time for the current best answer.
+
+11
+
+5.2 Algorithms for Computing Basis Vectors
+We present three algorithms in the general context of computing full basis vectors. These algorithms are presented primarily to develop our algorithms for computing partial quantities, presented in Section 5.3. All three algorithms are iterative fixed-point computations that maintain a set of intermediate results (Dk[], Ek[]). For each p, Dk[p] is a lower-approximation of rp on iteration k, i.e., Dk[p](q)  rp(q) for all q  V . We build solutions Dk[p] (k = 0, 1, 2, . . . ) that are successively better approximations to rp, and simultaneously compute the error components Ek[p], where Ek[p] is the "projection" of the vector (rp - Dk[p]) onto the (actual) basis vectors. That is, we maintain the invariant that for all k  0 and all p  V ,
+
+Dk[p] + Ek[p](q)rq = rp
+
+(11)
+
+qV
+
+Thus, Dk[p] is a lower-approximation of rp with error qV Ek[p](q)rq = |Ek[p]|. We begin with D0[p] = 0 and E0[p] = xp, so that logically, the approximation is initially 0 and the error is rp. To store Ek[p] and Dk[p] efficiently, we can represent them in an implementation as a list of their nonzero entries. While all three algorithms have in common the use of these intermediate results, they differ in how they use the Decomposition Theorem to refine intermediate results on successive iterations.
+It is important to note that the algorithms presented in this section and their derivatives in Section 5.3 compute vectors to arbitrary precision; they are not approximations. In practice, the precision desired may vary depending on the application. Our focus is on algorithms that are efficient and scalable with the number of hub vectors, regardless of the precision to which vectors are computed.
+
+5.2.1 Basic Dynamic Programming Algorithm
+
+In the basic dynamic programming algorithm, a new basis vector for each page p is computed on each iteration using the vectors computed for p's out-neighbors on the previous iteration, via the Decomposition Theorem. On iteration k, we derive (Dk+1[p], Ek+1[p]) from (Dk[p], Ek[p]) using the equations:
+
+|O(p)|
+
+1-c
+
+Dk+1[p] = |O(a)|
+
+Dk[Oi(p)] + cxp
+
+(12)
+
+i=1
+
+1 - c |O(p)|
+
+Ek+1[p] = |O(a)|
+
+Ek[Oi(p)]
+
+(13)
+
+i=1
+
+A proof of the algorithm's correctness is given in Appendix E, where the error |Ek[p]| is shown to be reduced by a factor of 1 - c on each iteration.
+
+12
+
+Note that although the Ek[] values help us to see the correctness of the algorithm, they are not used here in the computation of Dk[] and can be omitted in an implementation (although they will be used to compute partial quantities in Section 5.3). The sizes of Dk[p] and Ek[p] grow with the number of iterations, and in the limit they can be up to the size of rp, which is the number of pages reachable from p. Intermediate scores (Dk[], Ek[]) will likely be much larger than available main memory, and in an implementation (Dk[], Ek[]) could be read off disk and (Dk+1[], Ek+1[]) written to disk on each iteration. When the data for one iteration has been computed, data from the previous iteration may be deleted. Specific details of our implementation are discussed in Section 6.
+
+5.2.2 Selective Expansion Algorithm
+The selective expansion algorithm is essentially a version of the naive algorithm that can readily be modified to compute partial vectors, as we will see in Section 5.3.1.
+We derive (Dk+1[p], Ek+1[p]) by "distributing" the error at each page q (that is, Ek[p](q)) to its out-neighbors via the Decomposition Theorem. Precisely, we compute results on iteration-k using the equations:
+
+Dk+1[p] = Dk[p] +
+
+cEk[p](q)xq
+
+(14)
+
+qQk (p)
+
+|O(q)|
+
+1-c
+
+Ek+1[p] = Ek[p] -
+
+Ek[p](q)xq +
+
+|O(q)|
+
+Ek [p](q )xOi (q)
+
+qQk (p)
+
+qQk (p)
+
+i=1
+
+(15)
+
+for a subset Qk(p)  V . If Qk(p) = V for all k, then the error is reduced by a factor of 1 - c on each iteration, as in the basic dynamic programming algorithm. However, it is often useful to choose a selected subset of V as Qk(p). For example, if Qk(p) contains the m pages q for which the error Ek[p](q) is highest, then this top-m scheme limits the number of expansions and delays the growth in size of the intermediate results while still reducing much of the error. In Section 5.3.1, we will compute the hub vectors by choosing Qk(p) = H. The correctness of selective expansion is proven in Appendix F.
+
+5.2.3 Repeated Squaring Algorithm
+The repeated squaring algorithm is similar to the selective expansion algorithm, except that instead of extending (Dk+1[], Ek+1[]) one step using equations (14) and (15), we compute what are
+
+13
+
+essentially iteration-2k results using the equations
+
+D2k[p] = Dk[p] +
+
+Ek[p](q)Dk[q]
+
+(16)
+
+qQk (p)
+
+E2k[p] = Ek[p] -
+
+Ek[p](q)xq +
+
+Ek[p](q)Ek[q]
+
+(17)
+
+qQk (p)
+
+qQk (p)
+
+where Qk(p)  V . For now we can assume that Qk(p) = V for all p; we will set Qk(p) = H to compute the hubs skeleton in Section 5.3.2. The correctness of these equations is proven in Appendix G, where it is shown that repeated squaring reduces the error much faster than the basic dynamic programming or selective expansion algorithms. If Qk(p) = V , the error is squared on each iteration, as equation (17) reduces to:
+
+E2k[p] = Ek[p](q)Ek[q]
+
+(18)
+
+qV
+
+As an alternative to taking Qk(p) = V , we can also use the top-m scheme of Section 5.2.2. Note that while all three algorithms presented can be used to compute the set of all basis
+vectors, they differ in their requirements on the computation of other vectors when computing rp: the basic dynamic programming algorithm requires the vectors of out-neighbors of p to be computed as well, repeated squaring requires results (Dk[q], Ek[q]) to be computed for q such that Ek[p](q) > 0, and selective expansion computes rp independently.
+
+5.3 Computing Partial Quantities
+In Section 5.2 we presented iterative algorithms for computing full basis vectors to arbitrary precision. Here we present modifications to these algorithms to compute the partial quantities:
+· Partial vectors (rp - rpH), p  H. · The hubs skeleton S = {rp(H) | p  H} (which can be computed more efficiently by itself
+than as part of the entire web skeleton). · The web skeleton W = {rp(H) | p  V }. Each partial quantity can be computed in time no greater than its size, which is far less than the size of the hub vectors.
+
+5.3.1 Partial Vectors
+Partial vectors can be computed using a simple specialization of the selective expansion algorithm (Section 5.2.2): we take Q0(p) = V and Qk(p) = V - H for k > 0, for all p  V . That is, we never "expand" hub pages after the first step, so tours passing through a hub page H are never considered. Under this choice of Qk(p), Dk[p] + cEk[p] converges to (rp - rpH) for all p  V .
+14
+
+Of course, only the intermediate results (Dk[p], Ek[p]) for p  H should be computed. A proof is presented in Appendix H.
+This algorithm makes it clear why using high-PageRank pages as hub pages improves performance: from a page p we expect to reach a high-PageRank page q sooner than a random page, so the expansion from p will stop sooner and result in a shorter partial vector.
+5.3.2 Hubs Skeleton
+While the hubs skeleton is a subset of the complete web skeleton and can be computed as such using the technique to be presented in Section 5.3.3, it can be computed much faster by itself if we are not interested in the entire web skeleton, or if higher precision is desired for the hubs skeleton than can be computed for the entire web skeleton.
+We use a specialization of the repeated squaring algorithm (Section 5.2.3) to compute the hubs skeleton, using the intermediate results from the computation of partial vectors. Suppose (Dk[p], Ek[p]), for k  1, have been computed by the algorithm of Section 5.3.1, so that
+q/H Ek[p](q) < , for some error . We apply the repeated squaring algorithm on these results using Qk(p) = H for all successive iterations. As shown in Appendix I, after i iterations of repeated squaring, the total error |Ei[p]| is bounded by (1 - c)2i + /c. Thus, by varying k and i, rp(H) can be computed to arbitrary precision.
+Notice that only the intermediate results (Dk[h], Ek[h]) for h  H are ever needed to update scores for Dk[p], and of the former, only the entries Dk[h](q), Ek[h](q), for q  H, are used to compute Dk[p](q). Since we are only interested in the hub scores Dk[p](q), we can simply drop all non-hub entries from the intermediate results. The running time and storage would then depend only on the size of rp(H) and not on the length of the entire hub vectors rp. If the restricted intermediate results fit in main memory, it is possible to defer the computation of the hubs skeleton to query time.
+5.3.3 Web Skeleton
+To compute the entire web skeleton, we modify the basic dynamic programming algorithm (Section 5.2.1) to compute only the hub scores rp(H), with corresponding savings in time and memory usage. We restrict the computation by eliminating entries q / H from the intermediate results (Dk[p], Ek[p]), similar to the technique used in computing the hubs skeleton.
+The justification for this modification is that the hub score Dk+1[p](h) is affected only by the hub scores Dk[](h) of the previous iteration, so that Dk+1[p](h) in the modified algorithm is equal to that in the basic algorithm. Since |H| is likely to be orders of magnitude less than n, the size of the intermediate results is reduced significantly.
+15
+
+5.4 Construction of PPV's
+
+Finally, let us see how a PPV for preference vector u can be constructed directly from partial vectors and the hubs skeleton using the Hubs Equation. (Construction of a single hub vector is a specialization of the algorithm outlined here.) Let u = 1p1 + · · · + zpz be a preference vector, where pi  H for 1  i  z. Let Q  H, and let
+
+z
+
+ru(h) = i (rpi(h) - cxpi(h))
+
+(19)
+
+i=1
+
+which can be computed from the hubs skeleton. Then the PPV v for u can be constructed as
+
+v=
+
+z
+
+i(rpi
+
+-
+
+rpHi )
+
++
+
+1 c
+
+ru(h) (rh - rhH ) - cxh
+
+i=1
+
+hQ
+
+ru(h)>0
+
+(20)
+
+Both the terms (rpi - rpHi ) and (rh - rhH) are partial vectors, which we assume have been precomputed. The term cxh represents a simple subtraction from (rh - rhH). If Q = H, then (20) represents a full construction of v. However, for some applications, it may suffice to use only parts of the hubs skeleton to compute v to less precision. For example, we can take Q to be the m hubs h for which ru(h) is highest. Experimentation with this scheme is discussed in Section 6.3. Alternatively, the result can be improved incrementally (e.g., as time permits) by using a small subset Q each time and accumulating the results.
+
+6 Experiments
+We performed experiments using real web data from Stanford's WebBase [6], a crawl of the web containing 120 million pages. Since the iterative computation of PageRank is unaffected by leaf pages (i.e., those with no out-neighbors), they can be removed from the graph and added back in after the computation [10]. After removing leaf pages, the graph consisted of 80 million pages
+Both the web graph and the intermediate results (Dk[], Ek[]) were too large to fit in main memory, and a partitioning strategy, based on that presented in [4], was used to divide the computation into portions that can be carried out in memory. Specifically, the set of pages V was partitioned into k arbitrary sets P1, . . . , Pk of equal size (k = 10 in our experiments). The web graph, represented as an edge-list E, is partitioned into k chunks Ei (1  i  k), where Ei contains all edges p, q for which p  Pi. Intermediate results Dk[p] and Ek[p] were represented together as a list Lk[p] = (q1, d1, e1), (q2, d2, e2), . . . where Dk[p](qz) = dz and Ek[p](qz) = ez, for z = 1, 2, . . . . Only pages qz for which either dz > 0 or ez > 0 were included. The set of intermediate results Lk[] was partitioned into k2 chunks Lik,j[], so that Lik,j[p] contains triples (qz, dz, ez) of Lk[p] for which p  Pi and qz  Pj. In each of the algorithms for computing partial quantities, only a
+16
+
+Average Vector Size
+
+120000
+
+100000
+
+80000
+
+60000
+
+40000
+
+20000
+
+0 1000
+
+2000 5000 10000 20000 50000 100000 Number of Hubs (log scale)
+
+Partial Vectors Full Hub Vectors
+
+Figure 2: Average Vector Size vs. Number of Hubs
+single column Lk,j[] was kept in memory at any one time, and part of the next-iteration results Lk+1[] were computed by successively reading in individual blocks of the graph or intermediate results as appropriate. Each iteration requires only one linear scan of the intermediate results and web graph, except for repeated squaring, which does not use the web graph explicitly.
+6.1 Computing Partial Vectors
+For comparison, we computed both (full) hub vectors and partial vectors for various sizes of H, using the selective expansion algorithm with Qk(p) = V (full hub vectors) and Qk(p) = V - H (partial vectors). As discussed in Section 4.4.2, we found the partial vectors approach to be much more effective when H contains high-PageRank pages rather than random pages. In our experiments H ranged from the top 1000 to top 100, 000 pages with the highest PageRank. The constant c was set to 0.15.
+To evaluate the performance and scalability of our strategy independently of implementation and platform, we focus on the size of the results rather than computation time, which is linear in the size of the results. Because of the number of trials we had to perform and limitations on resources, we computed results only up to 6 iterations, for |H| up to 100, 000. Figure 2 plots the average size of (full) hub vectors and partial vectors (recall that size is the number of nonzero entries), as computed after 6 iterations of the selective expansion algorithm, which for computing full hub vectors is equivalent to the basic dynamic programming algorithm. Note that the x-axis plots |H|
+
+17
+
+in logarithmic scale. Experiments were run using a 1.4 gigahertz CPU on a machine with 3.5 gigabytes of mem-
+ory. For |H| = 50, 000, the computation of full hub vectors took about 2.8 seconds per vector, and about 0.33 seconds for each partial vector. We were unable to compute full hub vectors for |H| = 100, 000 due to the time required, although the average vector size is expected not to vary significantly with |H| for full hub vectors. In Figure 2 we see that the reduction in size from using our technique becomes more significant as |H| increases, suggesting that our technique scales well with |H|.
+6.2 Computing the Hubs Skeleton
+We computed the hubs skeleton for |H| = 10, 000 by running the selective expansion algorithm for 6 iterations using Qk(p) = H, and then running the repeated squaring algorithm for 10 iterations (Section 5.3.2), where Qk(p) is chosen to be the top 50 entries under the top-m scheme (Section 5.2.2). The average size of the hubs skeleton is 9021 entries. Each iteration of the repeated squaring algorithm took about an hour, a cost that depends only on |H| and is constant with respect to the precision to which the partial vectors are computed.
+6.3 Constructing Hub Vectors from Partial Vectors
+Next we measured the construction of (full) hub vectors from partial vectors and the hubs skeleton. Note that in practice we may construct PPV's directly from partial vectors, as discussed in Section 5.4. However, performance of the construction would depend heavily on the user's preference vector. We consider hub vector computation because it better measures the performance benefits of our partial vectors approach.
+As suggested in Section 4.3, the precision of the hub vectors constructed from partial vectors can be varied at query time according to application and performance demands. That is, instead of using the entire set rp(H) in the construction of rp, we can use only the highest m entries, for m  |H|. Figure 3 plots the average size and time required to construct a full hub vector from partial vectors in memory versus m, for |H| = 10, 000. Results are averaged over 50 randomlychosen hub vectors. Note that the x-axis is in logarithmic scale.
+Recall from Section 6.1 that the partial vectors from which the hubs vector is constructed were computed using 6 iterations, limiting the precision. Thus, the error values in Figure 3 are roughly 16% (ranging from 0.166 for m = 100 to 0.163 for m = 10, 000). Nonetheless, this error is much smaller than that of the iteration-6 full hub vectors computed in Section 6.1, which have error (1 - c)6 = 38%. Note, however, that the size of a vector is a better indicator of precision than the magnitude, since we are usually most interested in the number of pages with nonzero entries in the distribution vector. An iteration-6 full hub vector (from Section 6.1) for page p contains nonzero
+18
+
+Average Constructed Vector Size Average Construction Time (seconds)
+
+45000000
+
+70
+
+40000000 60
+35000000
+50 30000000
+
+25000000
+
+40
+
+20000000
+
+30
+
+15000000 20
+10000000
+10 5000000
+
+0
+
+0
+
+100 200 500 1000 2000 5000 10000
+
+m (log scale)
+
+Constructed Vector Size Construction Time
+
+Figure 3: Construction Time and Size vs. Hubs Skeleton Portion (m)
+entries for pages at most 6 links away from p, 93, 993 pages on average. In contrast, from Figure 3 we see that a hub vector containing 14 million nonzero entries can be constructed from partial vectors in 6 seconds.
+
+7 Related Work
+The use of personalized PageRank to enable personalized web search was first proposed in [10], where it was suggested as a modification of the global PageRank algorithm, which computes a universal notion of importance. The computation of (personalized) PageRank scores was not addressed beyond the naive algorithm.
+In [5], personalized PageRank scores were used to enable "topic-sensitive" web search. Specifically, precomputed hub vectors corresponding to broad categories in Open Directory were used to bias importance scores, where the vectors and weights were selected according to the text query. Experiments in [5] concluded that the use of personalized PageRank scores can improve web search, but the number of hub vectors used was limited to 16 due to the computational requirements, which were not addressed in that work. Scaling the number of hub pages beyond 16 for finer-grained personalization is a direct application of our work.
+Another technique for computing web-page importance, HITS, was presented in [8]. In HITS, an iterative computation similar in spirit to PageRank is applied at query time on a subgraph consisting of pages matching a text query and those "nearby". Personalizing based on user-specified
+19
+
+web pages (and their linkage structure in the web graph) is not addressed by HITS. Moreover, the number of pages in the subgraphs used by HITS (order of thousands) is much smaller than that we consider in this paper (order of millions), and the computation from scratch at query time makes the HITS approach difficult to scale.
+Another algorithm that uses query-dependent importance scores to improve upon a global version of importance was presented in [11]. Like HITS, it first restricts the computation to a subgraph derived from text matching. (Personalizing based on user-specified web pages is not addressed.) Unlike HITS, [11] suggested that importance scores be precomputed offline for every possible text query, but the enormous number of possibilities makes this approach difficult to scale.
+The concept of using "hub nodes" in a graph to enable partial computation of solutions to the shortest-path problem was used in [3] in the context of database search. That work deals with searches within databases, and on a scale far smaller than that of the web.
+Some system aspects of (global) PageRank computation were addressed in [4]. The diskbased data-partitioning strategy used in the implementation of our algorithm is adopted from that presented therein.
+Finally, the concept of inverse P-distance used in this paper is based on the concept of expectedf distance introduced in [7], where it was presented as an intuitive model for a similarity measure in graph structures.
+8 Summary
+We have addressed the problem of scaling personalized web search:
+· We started by identifying a linear relationship that allows personalized PageRank vectors to be expressed as a linear combination of basis vectors. Personalized vectors corresponding to arbitrary preference sets drawn from a hub set H can be constructed quickly from the set of precomputed basis hub vectors, one for each hub h  H.
+· We laid the mathematical foundations for constructing hub vectors efficiently by relating personalized PageRank scores to inverse P-distances, an intuitive notion of distance in arbitrary directed graphs. We used this notion of distance to identify interrelationships among basis vectors.
+· We presented a method of encoding hub vectors as partial vectors and the hubs skeleton. Redundancy is minimized under this representation: each partial vector for a hub page p represents the part of p's hub vector unique to itself, while the skeleton specifies how partial vectors are assembled into full vectors.
+20
+
+· We presented algorithms for computing basis vectors, and showed how they can be modified to compute partial vectors and the hubs skeleton efficiently.
+· We ran experiments on real web data showing the effectiveness of our approach. Results showed that our strategy results in significant resource reduction over full vectors, and scales well with |H|, the degree of personalization.
+9 Acknowledgment
+The authors thank Taher Haveliwala for many useful discussions and extensive help with implementation.
+References
+[1] http://www.google.com.
+[2] http://dmoz.org.
+[3] Roy Goldman, Narayanan Shivakumar, Suresh Venkatasubramanian, and Hector GarciaMolina. Proximity search in databases. In Proceedings of the Twenty-Fourth International Conference on Very Large Databases, New York, New York, August 1998.
+[4] Taher H. Haveliwala. Efficient computation of PageRank. Technical report, Stanford University Database Group, 1999. http://dbpubs.stanford.edu/pub/1999-31.
+[5] Taher H. Haveliwala. Topic-sensitive PageRank. In Proceedings of the Eleventh International World Wide Web Conference, Honolulu, Hawaii, May 2002.
+[6] Jun Hirai, Sriram Raghavan, Andreas Paepcke, and Hector Garcia-Molina. WebBase: A repository of web pages. In Proceedings of the Ninth International World Wide Web Conference, Amsterdam, Netherlands, May 2000. http://www-diglib.stanford.edu/ ~testbed/doc2/WebBase/.
+[7] Glen Jeh and Jennifer Widom. SimRank: A measure of structural-context similarity. In Proceedings of the Eighth ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, Edmonton, Alberta, Canada, July 2002.
+[8] Jon M. Kleinberg. Authoritative sources in a hyperlinked environment. In Proceedings of the Ninth Annual ACM-SIAM Symposium on Discrete Algorithms, San Francisco, California, January 1998.
+21
+
+[9] Rajeev Motwani and Prabhakar Raghavan. Randomized Algorithms. Cambridge University Press, United Kingdom, 1995.
+[10] Lawrence Page, Sergey Brin, Rajeev Motwani, and Terry Winograd. The PageRank citation ranking: Bringing order to the Web. Technical report, Stanford University Database Group, 1998. http://citeseer.nj.nec.com/368196.html.
+[11] Matthew Richardson and Pedro Domingos. The intelligent surfer: Probabilistic combination of link and content information in PageRank. In Proceedings of Advances in Neural Information Processing Systems 14, Cambridge, Massachusetts, December 2002.
+22
+
+APPENDIX
+
+A Proof: Linearity Theorem
+Theorem (Linearity). For any preference vectors u1 and u2, if v1 and v2 are the two corresponding PPV's, then for any constants 1, 2  0 such that 1 + 2 = 1,
+1v1 + 2v2 = (1 - c)A(1v1 + 2v2) + c(1u1 + 2u2) Proof:
+1v1 + 2v2 = 1((1 - c)Av1 + cu1) + 2((1 - c)Av2 + cu2) = 1(1 - c)Av1 + 1cu1 + 2(1 - c)Av2 + 2cu2 = (1 - c)A(1v1 + 2v2) + c(1u1 + 2u2)
+
+B Proof: Decomposition Theorem
+
+Theorem (Decomposition). For any p  V ,
+
+|O(p)|
+
+(1 - c)
+
+rp = |O(p)|
+
+rOi(p) + cxp
+
+i=1
+
+Proof: First we rewrite equation (1) in an equivalent form. For a given preference vector u, we
+
+define the derived matrix Au as
+
+Au = (1 - c)A + cU
+
+(21)
+
+where U is the n × n matrix with Uij = ui for all i, j. If we require that |v| = 1, we can write equation (1) as
+
+v = Auv
+
+Without loss of generality, let the out-neighbors of p be 1, . . . , k. Let Ap be the derived matrix
+
+corresponding to xp, and let A1, . . . , Ak be the derived matrices for u = x1, . . . , xk, respectively.
+
+Let Up and U1, . . . , Uk be the corresponding U 's in equation (21).
+
+Let
+
+(1 - c) k
+
+vp = k
+
+ri + cxp
+
+i=1
+
+Clearly, |vp| = 1. We need to show that Apvp = vp, in which case vp = rp, since PPV's are
+
+unique (Section 1). First we have that:
+
+1-c k
+
+Apvp = Ap
+
+k
+
+ri + cxp
+
+i=1
+
+1-c k
+
+= k
+
+Apri + cApxp
+
+i=1
+
+23
+
+Using the identity
+
+Ap = Ai - cUi + cUp
+
+we have:
+
+1-c k
+
+Apvp = k
+
+(Ai - cUi + cUp)ri + cApxp
+
+i=1
+
+1-c k
+
+1-c k
+
+1-c k
+
+= k
+
+Airi - k c
+
+Uiri +
+
+c k
+
+Upri + cApxp
+
+i=1
+
+i=1
+
+i=1
+
+1-c k
+
+1-c k
+
+1-c k
+
+= k
+
+ri - k c
+
+xi +
+
+c k
+
+xp + cApxp
+
+i=1
+
+i=1
+
+i=1
+
+1-c k
+
+1-c k
+
+= k
+
+ri - k c xi + (1 - c)cxp + c((1 - c)A + cUp)xp
+
+i=1
+
+i=1
+
+1-c =
+k
+
+k
+
+1-c ri - k c
+
+k
+
+xi + (1 - c)cxp + (1 - c)cAxp + c2xp
+
+i=1
+
+i=1
+
+1-c =
+k
+
+k
+ri + (1 - c)cxp + c2xp + (1 - c)c
+
+1 Axp - k
+
+k
+xi
+
+i=1
+
+i=1
+
+1-c =
+k
+
+k
+
+ri + (1 - c)cxp + c2xp
+
+i=1
+
+1-c k
+
+= k
+
+ri + cxp
+
+i=1
+
+= vp
+
+C Inverse P-distance
+
+C.1 Relation to Personalized PageRank
+
+The relationship between inverse P-distances and personalized PageRank scores is given by the following theorem.
+
+Theorem. For all p, q  V ,
+
+rp(q) = rp(q)
+
+Proof: Writing the Decomposition Theorem in scalar form for page p, we get a set of n equations,
+
+one for each q  V , of the form
+
+
+
+|O(p)|
+
+ 
+
+(1 - c)
+
+
+
+rOi(p)(q)
+
+rp(q) =
+
+i=1 |O(p)|
+
+  
+
+(1 - c)
+
+rOi(p)(q) + c
+
+i=1
+
+(if p = q) (if p = q)
+
+24
+
+Let us now fix q, and consider the set of n equations, one for each p  V , in the above form. By a
+
+proof very similar to that given in [7], it can be shown these equations have a unique solution, so
+
+we need only show that rp(q) satisfies these equations as well. Clearly, if there is no path from p to q, then rp(q) = rp(q) = 0, so suppose q can be reached
+from p. Consider the tours t starting at p and ending at q in which the first step is to the out-
+
+neighbor Oz(p). If p = q, there is a one-to-one correspondence between such t and tours t from
+
+Oz(p) to q: for each t we may derive a corresponding t by appending the edge p, Oz(p) at the
+
+beginning. Let T be the bijection that takes each t to the corresponding t. If the length of t is l,
+
+then
+
+the
+
+length
+
+of
+
+t
+
+=
+
+T (t
+
+)
+
+is
+
+l
+
++
+
+1.
+
+Moreover,
+
+the
+
+probability
+
+of
+
+traveling
+
+t
+
+is
+
+P [t]
+
+=
+
+1 |O(p)|
+
+P
+
+[t
+
+].
+
+We can now split the sum in (5) according to the first step of the tour t to write
+
+|O(p)|
+
+rp(q) =
+
+P [T (t )]c(1 - c)l(T (t ))
+
+z=1 t : Oz(p) q
+
+|O(p)|
+1-c =
+
+P [t ]c(1 - c)l(t)
+
+|O(p)|
+
+z=1 t : Oz(p) b
+
+1 - c |O(p)|
+
+= |O(p)|
+
+rp(q)
+
+i=1
+
+If p = q, then the same correspondence holds except that there is an extra tour t from p to q = p which does not correspond to any tour t starting from an Oz(p): the zero length tour t = p . The length of this tour is 0, and in this case P [t]c(1 - c)l(t) = c. Thus
+
+when p = q.
+
+1 - c |O(p)|
+
+rp(q) = |O(p)|
+
+rOi(p)(q) + c
+
+i=1
+
+C.2 Loop Factor
+
+The use of inverse P-distances yields further insight into the fairness of PageRank scoring. Since
+
+the global PageRank for a page q is just the uniform sum
+
+n p=1
+
+rp(q)/n,
+
+we
+
+see
+
+that
+
+the
+
+PageRank
+
+of a page q is the average, over all pages p, of the inverse P-distance from p to q. The intuition
+
+is that high-PageRank pages are on average "close" to other pages under this distance measure.
+
+However, note that the summation in (5) is taken over tours that may touch q multiple times. The
+
+effect is that a page q can influence its own PageRank (by a factor less than 1/c) simply by changing
+
+its out-links. In particular, if a page q with PageRank PR(q) links to every page p for which there
+
+is a path to q (as are logically created for pages without out-links in [5, 10]), then its PageRank
+
+would be a factor c + (1 - c)PR(q) less than if it had linked to itself and no other page. This "loop
+
+25
+
+factor" can be quantified as rq(q): under the definition that tours t from p to q may touch q only once, rp(q) can be written as
+rp(q) = rq(q) P [t](1 - c)l(t)
+t:p q
+where the summation is independent of q's out-links. This is the expected-f distance [7] from p to q, for f (x) = (1 - c)x. Thus eliminating the loop factor (dividing by rq(q) to get the expected-f distance) may result in a fairer scoring.
+
+D Proof: Hubs Theorem
+
+Theorem (Hubs). For any p  V , H  V ,
+
+a)
+
+rpH
+
+=
+
+1 c
+
+(rp(h) - cxp(h)) rh - rhH - cxh
+
+hH
+
+b)
+
+rpH
+
+=
+
+1 c
+
+rp(h) - rpH (h) - cxp(h) (rh - cxh)
+
+hH
+
+Proof of (a): The idea is to separate tours t going through H into two parts, everything up to the last occurrence of a page h  H, and the rest. Let (t), for tours t : p H q, denote the beginning of t to the last occurrence of a page h  H which t passes through, so (t) = p, . . . , h . Let (t) be the rest, so (t) = h, . . . , q . Let (t) = P [t]c(1 - c)l(t) for short. Let s(t) be the set of pages that t passes through, so that rpH(q) can be written as
+
+rpH (q) =
+
+P [t]c(1 - c)l(t)
+
+t:p q s(t)H =
+
+Let us first partition the summation in (6) according to (t):
+
+rpH (q) =
+
+P [t]c(1 - c)l(t)
+
+t1|t1=(t) t:p H q t:p H q (t)=t1
+
+(22)
+
+For each t, (t) is itself a tour t : p h; conversely, each t : p h is a (t) for some t, with the exception of the zero-length tour t = p in the special case where p  H. Thus we can group the tours t by h and (t) ending at h to rewrite (22) as:
+
+rpH (q) =
+
+P [t]c(1 - c)l(t)
+
+hH t1:p h t:p H q l(t1)>0 (t)=t1
+
+26
+
+But P [t] = P [(t)]P [(t)], and l(t) = l((t)) + l((t)), so
+
+rpH (q) =
+
+P [(t)]P [(t)]c(1 - c)l((t))+l((t))
+
+hH t1:p h t:p H q l(t1)>0 (t)=t1
+
+1
+
+= c
+
+(t1)
+
+((t))
+
+hH t1:a h
+
+t:p H q
+
+l(t1)>0
+
+(t)=t1
+
+There is a canonical bijection t1 between tours t : p H q with (t) = t1 and tours t : h q
+which do not pass through H (for which s(t )  H = ), with the exception of the zero-length tour q when q  H. That is, t1(t) = (t) = t , so we can write each tour t as t = t-11(t ). Replacing (t) in the previous equation with (t) = (t-11(t )) = t and accounting for the possible zerolength tour, we have
+
+
+
+
+
+rpH (q)
+
+=
+
+1 c
+
+(t1)
+
+ 
+
+
+
+(t ) - xh(q)
+
+(t ) 
+
+hH t1:p h
+
+t :h q
+
+t= q
+
+l(t1)>0
+
+s(t )H=
+
+
+
+
+
+1 =
+c
+
+(t1)
+
+ 
+
+
+
+(t ) - xh(q)c 
+
+hH t1:p h
+
+t :h q
+
+l(t1)>0
+
+s(t )H=
+
+But the set of tours t from h to q which do not pass through H is the set of tours from h to q minus the set of tours from h to q which pass through H. Thus,
+
+rpH (q)
+
+=
+
+1 c
+
+(t1)
+
+hH t1:p h
+
+l(t1)>0
+
+(t ) -
+
+(t ) - cxh(q)
+
+t :h q
+
+t :h H q
+
+1 =
+c
+
+(t1) rh(q) - rhH(q) - cxh(q)
+
+hH t1:p h
+
+l(t1)>0
+
+Finally,
+
+(t1) = rp(h) - cxp(h)
+t1:p h l(t1)>0
+
+where cxp(h) accounts for the possible tour t1 = p when p = h, for which P [t1]c(1 - c)l(t1) = c,
+
+and we have
+
+rpH (q)
+
+=
+
+1 c
+
+(rp(h) - cxp(h)) rh(q) - rhH(q) - cxh(q)
+
+hH
+
+27
+
+This equation written in vector form is the Hubs Theorem (a).
+Proof of (b): The idea is to separate tours t going through H differently: everything up to the first (instead of last) occurrence of a page h  H, and the rest. Let (t), for tours t : p H q, denote the beginning of t to the first occurrence of a page h  H which t passes through, so (t) = p, . . . , h . Let (t) be the rest, so (t) = h, . . . , q .
+Let us first partition the summation in (6) according to (t):
+
+rpH (q) =
+
+P [t]c(1 - c)l(t)
+
+t2|t2=(t) t:p H q t:p H q (t)=t2
+
+(23)
+
+For each t, (t) is itself a tour t : h q; conversely, each t : h q is a (t) for some t, with the exception of the zero-length tour t = q in the special case where q  H. Thus we can group the tours t by h and (t) beginning at h to rewrite (23) as:
+
+rpH (q) =
+
+P [t]c(1 - c)l(t)
+
+hH t2:h q t:p H q l(t2)>0 (t)=t2
+
+But P [t] = P [(t)]P [(t)], and l(t) = l((t)) + l((t)), so
+
+rpH (q) =
+
+P [(t)]P [(t)]c(1 - c)l((t))+l((t))
+
+hH t2:h q t:p H q l(t2)>0 (t)=t2
+
+1
+
+= c
+
+(t2)
+
+((t))
+
+hH t2:h q
+
+t:p H q
+
+l(t2)>0
+
+(t)=t2
+
+There is a canonical bijection t2 between tours t : p H q with (t) = t2 and tours t : a h which do not pass through H (for which s(t )  H = ), with the exception of the
+zero-length tour p when p  H. That is, t2(t) = (t) = t , so we can write each tour t as t = t-21(t ). Replacing (t) in the previous equation with (t) = (t-11(t )) = t and accounting for the possible zero-length tour, we have
+
+
+
+
+
+rpH (q)
+
+=
+
+1 c
+
+(t2)
+
+ 
+
+
+
+(t ) - xp(h)
+
+(t ) 
+
+hH t2:h q
+
+t :p h
+
+t= p
+
+l(t2)>0
+
+s(t )H=
+
+
+
+
+
+1 =
+c
+
+(t2)
+
+ 
+
+
+
+(t ) - xp(h)c 
+
+hH t2:h q
+
+t :p h
+
+l(t2)>0
+
+s(t )H=
+
+28
+
+But the set of tours t from p to h which do not pass through H is the set of tours from p to h minus the set of tours from p to h which pass through H. Thus,
+
+rpH (q)
+
+=
+
+1 c
+
+(t2)
+
+hH t2:h q
+
+l(t2)>0
+
+(t ) -
+
+(t ) - cxp(h)
+
+t :p h
+
+t :p H h
+
+1 =
+c
+
+(t2) rp(h) - rpH(h) - cxp(h)
+
+hH t2:h q
+
+l(t2)>0
+
+Finally, (t2) = rh(q) - cxh(q)
+t2:h q l(t2)>0
+where cxh(q) accounts for the possible tour t2 = q when q = h, for which P [t2]c(1 - c)l(t2) = c, and we have
+
+rpH (q)
+
+=
+
+1 c
+
+rp(h) - rpH(h) - cxp(h) (rh(q) - cxh(q))
+
+hH
+
+This equation written in vector form is the Hubs Theorem (b).
+
+E Proof: Basic Dynamic Programming Algorithm
+
+To prove correctness of the basic dynamic programming algorithm, we need to show that for all k  0 and p  V , Dk[p] + qV Ek+1[p](q)rq = rp, and that the sequence {Ek[p]} converges to 0 as k tends towards infinity, which implies that Dk[p] converges to rp. In particular, |Ek[p]| = (1 - c)k. The proof is by induction on k. The case for k = 0 is obvious, so suppose the claim is true for k, for some k  0. First we show that Dk+1[p] + qV Ek+1[p](q)rq = rp:
+
+1 - c |O(p)|
+
+1 - c |O(p)|
+
+Dk+1[p] + Ek+1[p](q)rq = |O(p)|
+
+Dk[Oi(p)] + cxp + |O(p)|
+
+Ek[Oi(p)](q)rq
+
+qV
+
+i=1
+
+qV
+
+i=1
+
+1 - c |O(p)|
+
+= cxp + |O(p)|
+
+Dk[Oi(p)] + Ek[Oi(p)](q)rq
+
+i=1
+
+qV
+
+|O(p)|
+
+1-c
+
+= |O(p)|
+
+rOi(p) + cxp
+
+i=1
+
+= rp
+
+29
+
+where the last step is justified by the Decomposition Theorem. Now we show that |Ek+1[p]| = (1 - c)k+1:
+
+1 - c |O(p)|
+
+|Ek+1[p]| = |O(p)|
+
+Ek[Oi(p)]
+
+i=1
+
+1 - c |O(p)|
+
+= |O(p)|
+
+|Ek[Oi(p)]|
+
+i=1
+
+|O(p)|
+
+1-c =
+
+(1 - c)k
+
+|O(p)|
+
+i=1
+
+= 1 - c |O(p)|(1 - c)k |O(p)|
+
+= (1 - c)k+1
+
+F Proof: Selective Expansion Algorithm
+
+As in the proof of the basic dynamic programming algorithm, we first show that Dk+1[p] + qV Ek+1[p](q)rq = rp for an arbitrary Qk(p)  V :
+
+Dk+1[p] + Ek+1[p](q)rq
+
+qV
+
+
+
+
+
+= Dk[p] +
+
+cEk [p](q )xq 
+
+qQk (p)
+
++
+q V
+
+|O(q)|
+
+1-c
+
+Ek[p] -
+
+Ek[p](q)xq +
+
+|O(q)|
+
+Ek [p](q )xOi (q)
+
+qQk (p)
+
+qQk (p)
+
+i=1
+
+(q )rq
+
+= Dk[p] + Ek[p](q )rq +
+
+cEk[p](q)xq
+
+q V
+
+qQk (p)
+
+|O(q)|
+
+1-c
+
+-
+
+Ek[p](q)xq(q )rq +
+
+|O(q)|
+
+Ek[p](q)xOi(q)(q )rq
+
+q V qQk(p)
+
+q V qQk(p)
+
+i=1
+
+By the inductive hypothesis,
+
+Dk[p] + Ek[p](q )rq = rp
+q V
+
+so we need only show that the latter terms cancel. Since xq(q ) = 1 if q = q and 0 otherwise, and similarly for xOi(q)(q ), we have
+
+Ek[p](q)xq(q )rq =
+
+Ek[p](q)rq
+
+q V qQk(p)
+
+qQk (p)
+
+30
+
+and
+
+|O(q)|
+1-c
+
+|O(q)|
+1-c
+
+|O(q)|
+
+Ek[p](q)xOi(q)(q )rq =
+
+|O(q)|
+
+Ek [p](q )rOi (q)
+
+q V qQk(p)
+
+i=1
+
+qQk (p)
+
+i=1
+
+By the Decomposition Theorem,
+
+1 - c |O(q)|
+
+cEk[p](q)xq + |O(q)|
+
+Ek[p](q)rOi(q) = Ek[p](q)rb
+
+i=1
+
+for all q  Qk(p), which shows that the terms indeed cancel.
+Since |Dk[p]| increases by c qQk(p) Ek[p](q) each iteration, the error decreases by c qQk(p) Ek[p](q) each iteration. Thus, any choice of Qk(p) containing a maximal page q such that Ek[p](q) = max{Ek[p](q) | q  V } ensures that the error tends towards 0. In particular, such
+is the case if Qk(p) = V or Qk(p) is the top m > 0 pages q with the highest Ek[p](q).
+
+G Proof: Repeated Squaring Algorithm
+
+To verify the correctness of the repeated squaring algorithm, we show that
+
+D2k[p] +
+
+E2k[p](q)rq = rq
+
+qQk (p)
+
+for an arbitrary Qk(p)  V :
+
+D2k[p] + E2k[p](q)rq
+qV
+
+= Dk[p] +
+
+Ek[p](q)Dk[q]+
+
+qQk (p)
+
+
+
+
+
+Ek[p](q ) -
+
+Ek[p](q)xq(q ) +
+
+Ek[p](q)Ek[q](q )rq
+
+q V
+
+qQk (p)
+
+qQk (p)
+
+= Dk[p] + Ek[p](q )rq +
+
+Ek[p](q) Dk[q] - xq(q )rq + Ek[q](q )rq
+
+q V
+
+qQk (p)
+
+q V
+
+q V
+
+= rp +
+
+Ek[p](q)
+
+qQk (p)
+
+= rp +
+
+[0]
+
+qQk (p)
+
+= rp
+
+Dk[q] + Ek[q](q )rq - rq
+q V
+
+31
+
+As in the proof of the selective expansion algorithm, the error tends towards 0 if Qk(p) contains the top m > 0 pages q with the highest Ek[p](q). If Qk(p) = V , the error is squared on each iteration, for if |Ek[]| = , using equation 18 we have:
+
+|E2k[p]| =
+
+Ek[p](q)Ek[q]
+
+qV
+
+=
+
+Ek[p](q)|Ek[q]|
+
+qV
+
+= Ek[p](q)
+qV
+= |Ek[p]| =2
+
+Clearly, for all but the first two iterations, repeated squaring reduces error much faster than the decay factor of 1-c (for both the basic dynamic programming and selective expansion algorithms) when Qk(p) = V .
+
+H Proof: Computation of Partial Vectors
+
+We first show that the following hold for all k  1 and p, q  V :
+
+Dk[p](q) =
+
+P [t]c(1 - c)l(t)
+
+(24)
+
+t:p q l(t)<k s (t)H=
+
+
+
+
+
+P [t](1 - c)l(t) (if q / H)
+
+  
+
+t:p q
+
+ 
+
+l(t)=k
+
+Ek[p](q)
+
+=
+
+ 
+
+s(t)H =
+P [t](1 - c)l(t)
+
+(if q  H)
+
+(25)
+
+  
+
+t:p q
+
+ 
+
+1l(t)k
+
+ s(t)H=
+
+where s(t) is the set of pages appearing on t other than at the endpoints (i.e., pages which t passes
+
+through), and s (t) is the set of pages appearing on t other than at the beginning. Consider the
+
+case for k = 1 (recall that all pages are expanded on iteration 0). The only tours in (24) are the
+
+zero-length tours t = p when p = q (which pass through no hubs), for which P [t]c(1 - c)l(t) =
+
+c = D1[p](q). The only tours in (25) are t = p, q when q is an out-neighbor of p, for which
+
+P [t](1
+
+-
+
+c)l(t)
+
+=
+
+1-c |O(p)|
+
+=
+
+Ek[p](q).
+
+Now suppose for induction that equations (24) and (25) hold for some k  1. By equation (14)
+
+with Qk(p) = V - H, the difference between Dk+1[p](q) and Dk[p](q), for q / H, is Dk+1[p](q) -
+
+32
+
+Dk[p](q) = cE1[p](q). By the inductive hypothesis, this difference can be written as
+
+cEk[p](q) =
+
+P [t]c(1 - c)l(t)
+
+t:p q l(t)=k s(t)H =
+
+Since q / H, the restriction s(t)  H =  is equivalent to s (t)  H = , so that
+
+If q  H,
+
+Dk+1[p](q) = Dk[p](q) + cEk[p](q)
+
+=
+
+P [t]c(1 - c)l(t) +
+
+P [t]c(1 - c)l(t)
+
+t:p q l(t)<k s (t)H=
+
+t:p q l(t)=k s (t)H=
+
+=
+
+P [t]c(1 - c)l(t)
+
+t:p q l(t)<k+1 s (t)H=
+
+Dk+1[p](q) = Dk[p](q) =
+
+P [t]c(1 - c)l(t) =
+
+P [t]c(1 - c)l(t)
+
+t:p q l(t)<k s (t)H=
+
+t:p q l(t)<k+1 s (t)H=
+
+since there is no tour t : p q with l(t) > 0 for which s (t)  H = . Next we show that
+
+Ek+1[p](q) =
+
+P [t](1 - c)l(t)
+
+t:p q l(t)=k+1 s(t)H =
+
+for q / H. By equation (15) with Qk(p) = V - H, we have
+
+1-c
+
+Ek+1[p](q) =
+
+|O(q )| Ek[p](q )
+
+(26)
+
+q (V -H)I(q)
+
+since only the expansion of the in-neighbors of q can contribute to Ek+1[p](q), and of these, only the ones not in H are expanded. Expanding Ek[p](q ) using the inductive hypothesis, (26) becomes
+
+Ek+1[p](q) =
+
+1-c |O(q )|
+
+P [t ](1 - c)l(t )
+
+q (V -H)I(q)
+
+t :p q
+
+l(t )=k
+
+s (t )H=
+
+where we have replaced s(t ) in the summation with s (t ), since q / H. We want to show that
+
+this is equal to
+
+P [t](1 - c)l(t)
+
+(27)
+
+t:p q l(t)=k+1 s(t)H =
+
+33
+
+Consider the set of tours t : p q, with l(t) = k + 1 and s(t)  H = , for which the last
+
+step is from q  (V - H)  I(q) to q. There is a one-to-one correspondence between such t and
+
+tours t : p q of length k with s (t)  H = : for each t we may derive a corresponding t by
+
+appending the edge q , q at the end. Let T be the bijection that takes each t to the corresponding
+
+t. If the length of t is l, then the length of t = T (t ) is l + 1. Moreover, the probability of traveling
+
+t is P [t] =
+
+1 |O(q
+
+)| P
+
+[t
+
+].
+
+Thus
+
+we
+
+can
+
+split
+
+the
+
+summation
+
+in
+
+(27)
+
+according
+
+to
+
+q
+
+to rewrite it as
+
+P [t](1 - c)l(t) =
+
+P [T (t )](1 - c)l(T (t ))
+
+t:p q l(t)=k+1 s(t)H =
+
+q (V -H)I(q) t :p q l(t )=k
+s (t )H=
+
+=
+
+1-c
+
+P [t ](1 - c)l(t )
+
+|O(q )|
+
+q (V -H)I(q)
+
+t :p q
+
+l(t )=k
+
+s (t )H=
+
+(28)
+
+which is what we wanted to show.
+
+Now we show that
+
+Ek+1[p](q) =
+
+P [t](1 - c)l(t)
+
+t:p q 1l(t)k+1 s(t)H =
+
+for q  H. By equation (15) with Qk(p) = V - H,
+
+1-c
+
+Ek+1[p](q) = Ek[p](q) +
+
+|O(q )| Ek[p](q )
+
+q (V -H)I(q)
+
+= Ek[p](q) +
+
+1-c |O(q )|
+
+P [t ](1 - c)l(t )
+
+q (V -H)I(q)
+
+t :p q
+
+l(t )=k
+
+s(t )H=
+
+Equation (28) still applies, and we have
+
+Ek+1[p](q) = Ek[p](q) +
+
+P [t](1 - c)l(t)
+
+t:p q l(t)=k+1 s(t)H =
+
+=
+
+P [t](1 - c)l(t) +
+
+P [t](1 - c)l(t)
+
+t:p q 1l(t)k s(t)H =
+
+t:p q l(t)=k+1 s(t)H =
+
+=
+
+P [t](1 - c)l(t)
+
+t:p q 1l(t)k+1 s(t)H =
+
+which completes the proof of equations (24) and (25).
+
+34
+
+Finally, we show that for all q  V , Dk[p](q)+cEk[p](q) converges to rp(q)-rpH(q) as k  . If q / H, then Ek[p](q)  0 as k  , and
+
+Dk[p](q) + cEk[p](q) = Dk[p](q) +
+
+P [t]c(1 - c)l(t)  rp(q) - rpH (q)
+
+t:p q
+
+l(t)<k
+
+s (t)H=
+
+since s (t)  H = s(t)  H when q / H. If q  H, then
+
+Dk[p](q) + cEk[p](q) =
+
+P [t]c(1 - c)l(t) +
+
+P [t]c(1 - c)l(t)
+
+t:p q l(t)<k s (t)H=
+
+t:p q 1l(t)k s(t)H =
+
+When q  H, s (t)  H =  unless p = q and t = p . Thus,
+
+Dk[p](q) + cEk[p](q) = cxp(q) +
+
+P [t]c(1 - c)l(t)
+
+t:p q 1l(t)k s(t)H =
+
+=
+
+P [t]c(1 - c)l(t)
+
+t:p q 0l(t)k s(t)H =
+
+which converges to rp(q) - rpH(q) as k  .
+
+I Proof: Computation of the Hubs Skeleton
+Let (Di[p], Ei[p]) denote the results after i iterations of repeated squaring, so that the intermediate results left by selective expansion correspond to i = 0.
+The error initially associated with hub pages, h/H E0[p](h), is bounded by 1 - c because the first step of selective expansion expands all pages (Section 5.2.2). By equation (17) with Qi(p) = H, the error associated with hub pages on iteration i  1 of repeated squaring, qH Ei[p](q), is bounded by (1-c)2i. Moreover, the error associated with non-hub pages, q/H Ei[p](q), increases by at most (1 - c)2i q/H Ei-1[p](q) compared to the previous iteration. Using a geometric series to bound q/H Ei[p](q), the total error |Ei[p]| of iteration i is bounded by (1 - c)2i + /c.
+
+35
+
+

@@ -1,0 +1,1476 @@
+NetLLM: Adapting Large Language Models for Networking
+
+Duo Wu1, Xianda Wang1, Yaqi Qiao1, Zhi Wang2, Junchen Jiang3, Shuguang Cui1, Fangxin Wang1
+
+                                 1SSE and FNii, The Chinese University of Hong Kong, Shenzhen
+                                     2SIGS, Tsinghua University 3The University of Chicago
+
+ABSTRACT                                                                                            1 INTRODUCTION
+
+Many networking tasks now employ deep learning (DL) to solve                                        1.1 The Main Roadmap so far
+complex prediction and optimization problems. However, current
+design philosophy of DL-based algorithms entails intensive engi-                                    Over the past decades, rule-based algorithms built on handcrafted
+neering overhead due to the manual design of deep neural net-                                       control rules have played an important role in optimizing network
+works (DNNs) for different networking tasks. Besides, DNNs tend                                     systems [6, 8, 32, 107]. For instance, Copa [6] adjusts sending rates
+to achieve poor generalization performance on unseen data distri-                                   for congestion control based on measured queueing delay, while
+butions/environments.                                                                               PANDA [53] switches video streaming bitrates based on heuris-
+                                                                                                    tically estimated bandwidth. However, these algorithms heavily
+   Motivated by the recent success of large language models (LLMs),                                 rely on rule engineering, which involves intensive human efforts
+this work studies the LLM adaptation for networking to explore a                                    to devise, implement and validate the control rules for network
+more sustainable design philosophy. With the powerful pre-trained                                   optimization [11, 62, 63, 66].
+knowledge, the LLM is promising to serve as the foundation model
+to achieve "one model for all tasks" with even better performance                                      In recent years, the advancements of deep learning have prompted
+and stronger generalization. In pursuit of this vision, we present                                  extensive research into learning-based algorithms for networking.
+NetLLM, the first framework that provides a coherent design to                                      These algorithms design and train deep neural networks (DNNs)
+harness the powerful capabilities of LLMs with low efforts to solve                                 with supervised learning (SL) [95] or reinforcement learning (RL) [88]
+networking problems. Specifically, NetLLM empowers the LLM to                                       techniques to automatically discover networking solutions, thus
+effectively process multimodal data in networking and efficiently                                   eliminating the need of rule engineering. Specifically, SL is widely
+generate task-specific answers. Besides, NetLLM drastically reduces                                 adopted to train DNNs for prediction tasks in networking, such as
+the costs of fine-tuning the LLM to acquire domain knowledge for                                    traffic classification [54, 73] and bandwidth prediction [9, 64]. On
+networking. Across three networking-related use cases - viewport                                    the flip side, RL is commonly employed to solve decision-making
+prediction, adaptive bitrate streaming and cluster job scheduling, we                               problems in networking, including congestion control [1, 106], adap-
+showcase that the NetLLM-adapted LLM significantly outperforms                                      tive bitrate streaming (ABR) [44, 62] and cloud cluster job schedul-
+state-of-the-art algorithms.                                                                        ing (CJS) [63, 78]. Thanks to the strong capability of DNNs in func-
+                                                                                                    tion approximation, learning-based algorithms have demonstrated
+CCS CONCEPTS                                                                                        significant improvement over handcrafted rule-based algorithms.
+
+· Networks  Application layer protocols; · Computing                                                   Despite their promising potential, existing learning-based algo-
+methodologies  Supervised learning; Reinforcement                                                   rithms still suffer from two key limitations:
+learning;
+                                                                                                    · High model engineering costs. It has been shown that the de-
+KEYWORDS                                                                                              sign of DNN architecture is crucial to the final performance [67,
+                                                                                                      83]. Therefore, the focus of learning-based algorithms has shifted
+Deep Learning, Network Optimization, Video Streaming, Job Sched-                                      from rule engineering to model engineering. Their success is heav-
+uling, Large Language Model Adaptation                                                                ily dependent on engineering DNN models for the target network-
+                                                                                                      ing tasks, which, however, can be difficult and labor-intensive due
+ACM Reference Format:                                                                                 to the complex structures of DNNs [66]. To make things worse,
+Duo Wu, Xianda Wang, Yaqi Qiao, Zhi Wang, Junchen Jiang, Shuguang                                     the diversity of networking tasks also prevents sharing the same
+Cui, Fangxin Wang. 2024. NetLLM: Adapting Large Language Models for                                   DNN model across different tasks. This necessitates designing
+Networking. In ACM SIGCOMM 2024 Conference (ACM SIGCOMM '24), Au-                                     specialized DNNs for different tasks (i.e., one model for one task),
+gust 4­8, 2024, Sydney, NSW, Australia. ACM, New York, NY, USA, 18 pages.                             thus further increasing the engineering costs. Although some
+https://doi.org/10.1145/3651890.3672268                                                               recent works attempt to introduce structured Transformer [94]
+                                                                                                      into model design, they still necessitate manual tuning of the
+Fangxin Wang is the corresponding author: wangfangxin@cuhk.edu.cn.                                    Transformer architecture (e.g., the number of attention blocks
+                                                                                                      and attention heads) [99], or even the design of specialized tok-
+Permission to make digital or hard copies of all or part of this work for personal or                 enization scheme [36, 65] and attention mechanism [36, 57], thus
+classroom use is granted without fee provided that copies are not made or distributed                 leading to high engineering costs.
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the                  · Low generalization. DNNs trained on specific data distribu-
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or                tions/environments may struggle to perform well or even worse
+republish, to post on servers or to redistribute to lists, requires prior specific permission         than conventional rule-based algorithms on unseen data distribu-
+and/or a fee. Request permissions from permissions@acm.org.                                           tions/environments [105]. For example, an ABR model trained on
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                             smooth network conditions often achieves poor performance on
+© 2024 Copyright held by the owner/author(s). Publication rights licensed to the
+Association for Computing Machinery.
+ACM ISBN 979-8-4007-0614-1/24/08.
+https://doi.org/10.1145/3651890.3672268
+
+                                                                                               661
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                      Wu et al.
+
+  network environments with dynamic bandwidth fluctuations [44].                                 networking tasks may seem correct but physically invalid (e.g., a
+  The lack of generalization can ultimately hinder the widespread                                nonexistent bitrate for video download in ABR), which can even-
+  deployment of learning-based algorithms in practice [103, 106],                                tually impair the reliability of network systems. Second, since
+  as network operators will suspect their superiority over the in-                               tokens are predicted one at a time, LLMs often require multiple
+  cumbent rule-based algorithms in production environments.                                      inferences to generate a complete answer, thus incurring high
+                                                                                                 answer generation latency (i.e., the time to generate a complete
+1.2 New Opportunities and Challenges                                                             answer). Consequently, LLMs may fail to quickly generate an-
+                                                                                                 swers to respond to the system changes (e.g., switching to a lower
+Utilizing a single generic model for different tasks has been recog-                             bitrate when network bandwidth becomes scarce).
+nized as a significant approach to mitigate the costs of handcrafting                          · High adaptation costs. The large domain gap between network-
+specialized DNNs for each task and enhance generalization [82].                                  ing and NLP necessitates fine-tuning LLMs to acquire domain-
+This is exemplified by the recent popular large language models                                  specific knowledge for effective adaptation. However, the adapta-
+(LLMs) such as ChatGPT [72], Falcon [77] and Llama2 [92] in the                                  tion costs can be prohibitively high, especially when fine-tuning
+field of natural language processing (NLP). With billions of param-                              LLMs for decision-making tasks (e.g., ABR [44] and CJS [63])
+eters pre-trained on massive data to absorb extensive knowledge,                                 where RL is employed to solve the system optimization problems.
+LLMs have demonstrated extraordinary capacity in conversations,                                  Specifically, RL-based decision-making tasks require the active
+reasoning and text generation in NLP [96]. What's more, they also                                interaction between LLMs and environments (e.g., network en-
+exhibit emergent abilities that were not explicitly programmed                                   vironments with varying bandwidth or workload patterns) to
+into them during pre-training, such as planning, pattern mining,                                 collect experiences for performance optimization [63, 103]. Due
+problem solving and generalization to unseen conditions [102, 112].                              to the large parameter size of LLMs, the interaction process can
+These abilities have been proven to be transferable to other domains,                            be excessively time-consuming, introducing a large amount of
+including robotics [23], chip design [59], and protein structure pre-                            additional training time. What's worse, the adaptation costs can
+diction [55]. For instance, researchers have shown that LLMs can                                 further increase if fine-tuning the full parameters of LLMs, which
+generate goal-oriented plans for robotic control, adjusting plans                                is known to be resource-intensive [55, 59].
+in response to environment changes, and generalize to previously
+unseen operating environments [112].                                                           1.3 Design and Contributions
+
+   Motivated by these inspiring outcomes, we believe that LLMs can                             To overcome the aforementioned challenges, this work proposes
+serve as foundation models for networking, as many networking                                  NetLLM, the first framework that efficiently adapts LLMs for network-
+tasks can also benefit from their emergent abilities. In the context                           ing. NetLLM stands out as the first to take LLMs the extra mile
+of ABR, for example, the planning ability of LLMs can be utilized                              in context of networking and provides a coherent design to uti-
+for better bitrate decisions to optimize the video streaming sessions                          lize their powerful capabilities to generalize to various tasks with
+based on the changing network conditions. Furthermore, their gen-                              low efforts. It enables the efficient utilization of a single LLM (e.g.,
+eralization capability can be harnessed to generalize across diverse                           Llama2 [92]) as the foundation model without any modifications to
+network environments. Therefore, we envision LLM as the key to                                 tackle a wide range of networking tasks and meanwhile achieves
+achieving one model for all tasks, with little handcraft costs and                             enhanced performance. To accomplish this, NetLLM designs a mul-
+strong generalization. We try to answer the following key question:                            timodal encoder to enable the LLM to process multimodal data in
+can we embrace the era of LLMs and adapt LLMs to solve various                                 networking and implements a networking head to improve the
+                                                                                               efficiency of answer generation. Furthermore, while fine-tuning the
+networking tasks efficiently and effectively?                                                  LLM and these two modules on the target task to acquire domain
+   Unfortunately, as revealed by our analysis in §3, the adaptation                            knowledge is necessary, NetLLM designs an efficient data-driven
+                                                                                               low-rank networking adaptation (DD-LRNA) scheme to drastically
+of LLMs for networking faces the following challenges.                                         reduce the fine-tuning costs. Specifically, NetLLM incorporates the
+                                                                                               following three core design modules to efficiently adapt LLMs for
+· Large input modality gap. In networking tasks, various in-                                   networking.
+  formation observed from the system is collected as inputs for
+  networking algorithms. However, the modalities of these inputs                               · Multimodal encoder. NetLLM designs an efficient multimodal
+  differ significantly from plain text, i.e., the native input modal-                            encoder at the input side of the LLM to effectively process the
+  ity supported by LLMs1 [92, 108]. For example, in ABR, network                                 multimodal input information of networking tasks. The goal of
+  throughputs and delay are often collected for bitrate decision [62],                           this module is to automatically project task inputs to the same
+  which exhibit unique time-varying data patterns typically not                                  feature space as language tokens, so that the LLM can understand
+  found in natural text. This discrepancy prevents LLMs from ef-                                 and utilize these inputs for task solving. To achieve this, it first
+  fectively processing the input information of networking tasks.                                uses modality-specific feature encoders to extract features from
+                                                                                                 raw inputs of various modalities involved in networking. It then
+· Inefficiency of answer generation. LLMs generate answers                                       leverages trainable layers to project these features into token-like
+  using a language modeling (LM) head to predict words (tokens)                                  embedding vectors, which can be directly fed into the LLM for
+  one by one (see Figure 1) [46]. While this approach is well-suited                             effective processing.
+  in NLP, it presents several drawbacks in the networking domain.
+  First, LLMs are prone to hallucination due to the inherent uncer-
+  tainty of token prediction [41, 49]. Their generated answers for
+
+1Although multimodal LLMs have emerged recently (e.g., GPT4 [71]), their supported
+input modalities are still limited (mainly vision or audio), hindering directly applying
+them to process networking task inputs.
+
+                                                                                          662
+NetLLM: Adapting Large Language Models for Networking                          ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+· Networking head. To enable efficient answer generation, NetLLM             the LLM with our proposed NetLLM framework to achieve stronger
+  removes the default LM head used by the LLM for token predic-              generalization on unseen testing environments.
+  tion. Instead, it introduces various networking heads at the output
+  side of the LLM to generate answers for specific networking tasks.            The contributions of this paper are summarized as follows:
+  Each networking head is essentially a lightweight trainable pro-
+  jector that maps the output features of the LLM directly into              · We identify the key challenges of adapting LLMs for network-
+  task-specific answers. In other words, they eliminate token pre-             ing and demonstrate that some natural alternatives fall short in
+  diction and allow direct answer generation from the valid range              addressing these challenges (§3).
+  of possible answers (e.g., selecting a bitrate from candidate op-
+  tions in ABR). This enables the LLM to generate a valid answer             · We then design NetLLM, the first LLM adaptation framework
+  in a single inference, thus ensuring its reliability for networking          for networking that incorporates a multimodal encoder module
+  and significantly reducing generation latency.                               to encode multimodal task inputs, networking head module to
+                                                                               directly generate answers and a DD-LRNA scheme to reduce the
+· DD-LRNA. To reduce the fine-tuning costs, NetLLM designs a                   adaptation costs (§4).
+  DD-LRNA scheme for the LLM to efficiently acquire domain
+  knowledge for networking. Specifically, DD-LRNA incorporates               · We extensively evaluate NetLLM across three networking tasks.
+  a data-driven adaptation pipeline to adapt the LLM for both pre-             We showcase that the LLM adapted by our framework can signif-
+  diction and decision-making tasks. In particular, for decision-              icantly surpass state-of-the-art algorithms and achieve superior
+  making tasks, it employs the efficient data-driven RL technique [3,          generalization performance. We also conduct a deep dive into
+  79, 106] to eliminate the time-consuming interaction between                 NetLLM to provide an in-depth understanding of it (§5).
+  the LLM and environments. It collects an experience pool as
+  training dataset with existing networking algorithms and fine-             2 BACKGROUND
+  tunes the LLM over such dataset in the data-driven manner. Be-
+  sides, inspired by the advanced parameter-efficient fine-tune tech-        2.1 Learning-Based Networking Algorithms
+  nique [21, 29], DD-LRNA introduces a set of additional trainable
+  low-rank matrices for the LLM to learn networking knowledge.               Learning-based algorithms design and train deep neural networks
+  Since the low-rank matrices only account for 0.31% of the to-              (DNNs) to efficiently learn to solve networking tasks [2, 64, 103]. In
+  tal parameters, the fine-tune costs are greatly reduced, with the          particular, there are two learning paradigms commonly adopted to
+  reduction of 60.9% GPU memory and 15.1% training time.                     enable the learning process: supervised learning (SL) [95] and rein-
+                                                                             forcement learning (RL) [88]. SL is widely employed for prediction
+   NetLLM has the following important properties. i) Compatibility:          tasks in networking, such as traffic classification [54, 73], band-
+It is a generic framework that can be applied to adapt different             width prediction [64, 105] and viewport prediction [34, 85]. It trains
+LLMs for various networking tasks. ii) Reliability: It addresses the         DNNs with specific datasets to optimize a pre-defined loss function,
+hallucination issue and ensures the LLM generated answers to be              so that once trained, DNNs can be used for efficient prediction to
+always valid. iii) Efficiency: The DD-LRNA scheme significantly              assist the system control. For example, Yan et al. [105] train a DNN
+reduces the costs of fine-tuning LLM to learn domain knowledge               model over real-world bandwidth datasets to predict the future
+and the networking heads also reduce the answer generation la-               bandwidth for bitrate control on video clients. On the flip side, RL
+tency. iv) Transferability: NetLLM offers an effective solution for          is well-suited for sequential decision-making tasks in networking,
+utilizing LLMs to solve prediction and decision-making tasks at low          including congestion control [1, 106], video streaming [44, 62] and
+costs. These two types of tasks, in fact, span across diverse domains        cluster job scheduling [63, 78]. In these tasks, DNNs actively inter-
+such as medicine [17], finance [52], and telecommunication [111].            act with the environments to collect experiences, then use them to
+Hence, despite its original focus on networking, NetLLM holds the            optimize task-specific reward functions so that the performance
+potential to be applied and transferred to other fields.                     of network systems can be optimized. For instance, Mao et al. [63]
+                                                                             employ RL to train a DNN model to allocate resources to job re-
+   We have implemented NetLLM2 for three networking tasks: view-             quests so as to maximize the utilization of computing resources in
+port prediction (VP) [85] for immersive video streaming, adaptive            a distributed computing cluster.
+bitrate streaming (ABR) [103], and cluster job scheduling (CJS) [63].
+We believe these representative tasks cover the main input modal-               The major limitations of learning-based algorithms are two-
+ities of networking problems and span from prediction tasks to               fold. First, they require designing specialized DNN models for dif-
+decision-making tasks (§3). Through extensive trace-driven sim-              ferent networking tasks, thus entailing high model engineering
+ulation and real-world tests, we demonstrate the effectiveness of            overhead [66]. Second, they are prone to generalization issues, as
+NetLLM in LLM adaptation for networking. We showcase that across             DNNs may achieve poor performance on unseen data distribu-
+the three use cases, the NetLLM-adapted LLM significantly outper-            tions/environments [44]. These problems, in fact, are not unique to
+forms state of the arts with performance improvements of 10.1-               networking and have been successfully addressed in other domains
+36.6% for VP, 14.5-36.6% for ABR, 6.8-41.3% for CJS, in terms of their       (e.g., NLP [10, 45] and robotics [23, 112]) by introducing LLMs as
+respective performance metrics. Besides, our empirical test results          the foundation models to solve various downstream tasks. Hence,
+also show that we can efficiently utilize the extensive knowledge of         this work takes a pioneering step by systematically introducing
+                                                                             LLMs into networking to address these problems.
+2The codes available at: https://github.com/duowuyms/NetLLM.
+                                                                             2.2 Large Language Models
+
+                                                                             The advent of large language models (LLMs) such as ChatGPT [72],
+                                                                             PaLM [15], Llama2 [92] and OPT [108] has profoundly revolution-
+                                                                             ized the field of natural language processing (NLP). These LLMs,
+
+                                                                        663
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                     Wu et al.
+
+                  Table 1: Information of three learning-based algorithm use cases in the networking area.
+
+Task              DNN Input                                     DNN Output                        Objective                                   Learning
+                                                                                                                                              Paradigm
+Viewport          time-series: historical viewports;            future viewports                  minimize error between predicted
+Prediction (VP)   image: video content information                                                and actual viewports                             SL
+                  time-series: historical throughputs, delay;
+Adaptive Bitrate  sequence: chunk sizes at different bitrates;  bitrate selected for the next     maximize user's Quality of                      RL
+Streaming (ABR)   scalar: current buffer length                 video chunk                       Experience (QoE)
+                  graph: DAGs describing dependency and                                                                                           RL
+Cluster Job       resource demands of job execution stages      job stage to run next, number of  minimize job completion time
+Scheduling (CJS)                                                executors allocated to the stage
+
+pre-trained over large public corpora (e.g., wikis and books) to                                                       "6" "371" "km" <EOS>
+acquire extensive knowledge, have demonstrated remarkable capa-
+bility across a wide range of applications that largely affect our daily                                                      Language Modeling Head
+life, including dialogue systems [31], step-by-step reasoning [45],
+and even code generation [13].                                                                    LLM Output Features
+
+   LLMs are essentially large DNNs built on top of Transformer [94],              Token           Large Language Model (e.g., GPT-3, Llama2)
+the de facto standard architecture for sequence modeling in NLP                Embedding                                 Vocabulary
+tasks. They model the inputs and outputs as sequences of tokens
+representing sub-words in NLP (e.g., a word "awesome" can be split                Token "the" "earth" "average" "radius" "is"  "6" "371" "km"
+into two tokens: "aw" and "esome"). Specifically, they take as input
+a sequence of tokens, and generate another sequence of tokens                                     Tokenizer
+as answer with the assistance of three key components: tokenizer,
+vocabulary and language modeling (LM) head. Figure 1 illustrates the              Text         "the earth average radius is"   Answer: "6371 km"
+answer generation mechanism of LLM. Given an input sentence, the
+tokenizer splits it into a list of tokens. Then the vocabulary is used         Figure 1: Illustration of the token-based answer generation mecha-
+to map each token into an embedding vector that can be understood              nism of LLMs.
+and effectively processed by LLM. Afterwards, LLM encodes these
+token embeddings into high-level features, which are subsequently              3 MOTIVATION
+passed to the LM head to predict the probability distribution of next
+token. Note that the output tokens are generated one by one in the             In this section, we identify the key challenges of LLM adaptation
+autoregressive manner [46, 61]. Both the sequence of input tokens              for networking, which motivate the design of NetLLM. We use
+and previously generated tokens are repeatedly fed into the LLM                the following three tasks (summarized in Table 1) to make our
+to predict the next token, until an end-of-sentence token (<EOS>)              discussion concrete:
+is emitted.
+                                                                               · Viewport prediction (VP) serves as a fundamental building
+2.3 Domain-Adapted LLMs                                                          block of the emerging streaming systems of immersive videos
+                                                                                 (e.g., 360 videos [33] and volumetric videos [37]), where only
+The impressive performance of LLMs has sparked pioneering re-                    the video content within the viewer's viewport (the region visible
+search to adapt LLMs for other domains [23, 55, 59, 112]. For ex-                to viewer) is streamed in high quality to reduce the bandwidth
+ample, PaLM-E [23] adapts PaLM [15] to generate step-by-step                     consumption of video transmission [33, 57]. To accomplish this,
+controlling commands for robotic manipulation. ESMFFold [55]                     the VP model predicts viewer's future viewport positions based
+showcases the successful applications of LLM in biological fields,               on historical viewports, and potentially incorporates video con-
+which leverages LLM to predict atomic-level protein structure.                   tent information (e.g., video frame) to enhance prediction perfor-
+                                                                                 mance [85, 98]. The goal of VP is to minimize the error between
+   Inspired by these promising outcomes, this work explores the                  the predicted and viewer's actual viewports.
+adaptation of LLMs for networking to address the limitations of ex-
+isting learning-based algorithms, hoping to pave the way for more              · Adaptive bitrate streaming (ABR) utilizes a RL model to dy-
+sustainable design philosophy of networking solutions. Unfortu-                  namically adjust chunk-level bitrates based on the perceived net-
+nately, although some prior studies have showcased that LLMs are                 work conditions and playback buffer length during the streaming
+capable of generating some technical documents for networking                    session of a video [44, 103]. The objective of ABR is to maximize
+(e.g., description documents of digital twin for data centers [51]),             user's Quality of Experience (QoE), which is quantified by factors
+none of the existing works provide an in-depth investigation on                  such as chunk bitrate, bitrate fluctuation, and rebuffering time.
+whether and how LLMs can be adapted to solve networking tasks.
+Hence, this work tries to bridge this research gap and proposes an             · Cluster job scheduling (CJS) trains a RL scheduler to schedule
+LLM adaptation framework for networking.                                         incoming jobs within the distributed computing cluster [63, 78].
+                                                                                 Each job is represented as a directed acyclic graph (DAG), which
+                                                                                 describes the dependency of each execution stage of the job and
+
+                                                                          664
+NetLLM: Adapting Large Language Models for Networking                          ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+                                                                                                      Parameter Update            Experience Collection
+                                                                                            28.47h(47.73%)                31.18h(52.27%)
+Avg. Mean AbsoluteBaseline100100% 4
+   Error (Degrees)TRACK
+                                    Fraction of Valid9                         Standard RL
+                                       Answers (%)
+                                  3                                                         29.03h(99.63%)                0.11h(0.37%)
+                                                                               Avg. Ans. Generation
+                                                                                  Time (Seconds)NetLLM
+
+                                                                                                                                             Fraction of Trainable6952Response02040                                                                60
+                                                                                                                                                Parameters (%)
+                                                                                                                                                                                    GPU MemoryDeadlineTraining Time on ABR (Hours)
+                                  1
+                                                                                                                                                                                        Consumption (GB)Standard RL87.33h(60.75%)56.42h(39.25%)
+                                                                                                                                                                                                                            Training Time
+3 Prompt NetLLM                                                                                                                                                                                                                (Hours)90 Token NetLLM0 Token NetLLMNetLLM88.51h(98.79%)1.08h(1.21%)
+  Learning          Prediction     Prediction
+                                                                                       0                    50                     100                                                                                                             150
+                                                                                                      Training Time on CJS (Hours)
+Figure 2: Illustration of the ineffectiveness for some natural alterna-
+tives with VP task as the example. Left: Prompt learning [60, 68] that         Figure 3: Using standard RL techniques [86, 93] to adapt LLM for
+transforms data into textual prompts achieves sub-optimal perfor-              RL-based decision-making tasks (ABR and CJS) incurs high training
+mance, while NetLLM with a multimodal encoder to encode task input             time due to the active environment interaction for experience collec-
+data effectively outperforms baseline. Middle, Right: Token-based              tion. NetLLM eliminates this time-consuming process by designing an
+prediction with LM head fails to guarantee valid answers and pro-              efficient data-driven adaptation pipeline in the DD-LRNA scheme.
+duce stale responses, while NetLLM efficiently addresses these issues
+with the networking head module.                                               100 100%                          65.88GB                                                                                                                   8 7.9h
+                                                                                                            60
+                                                                                                                                                                                                                                                   6.7h
+
+  the resource demand of each stage. The primary task of RL sched-             50                           30            27.24GB                                                                                                          4
+  uler is to select the next stage of a job to run and allocate a number
+  of executors (computing resources) to that particular stage. The             0 Full          0.31%        0 Full NetLLM                                                                                                                  0 Full NetLLM
+  objective is to minimize the average job completion time, so that                Fine-tune  NetLLM          Fine-tune                                                                                                                      Fine-tune
+  the system-level utilization of computing resources is optimized
+  within the cluster.                                                          Figure 4: Illustration of the high adaptation costs of full-parameter
+                                                                               fine-tune [16, 92] on the VP task. The DD-LRNA scheme of NetLLM
+Why these tasks? We choose these tasks for several reasons.                    efficiently reduces the costs by introducing a set of small trainable
+                                                                               low-rank matrices.
+· First, they cover the two learning paradigms commonly adopted
+  in networking, i.e., SL for prediction tasks (VP) and RL for decision-       in CJS) into textual prompts. Second, even if certain data can be
+  making tasks (ABR and CJS).                                                  converted into texts (e.g., time-series viewports in VP), we empiri-
+                                                                               cally observe that such transformation can be sub-optimal. To give
+· Second, they include both centralized control (CJS) and distributed          a concrete example, we use this approach to adapt Llama2-7B [92]
+  control (ABR) networking tasks. Specifically, the CJS scheduler is           for the VP task. We design a template to encapsulate viewport data
+  responsible for the entire cluster, while the ABR client indepen-            into prompts (we exclude video content information since it can-
+  dently selects bitrates without considering other clients.                   not be incorporated into prompts directly). Based on this prompt
+                                                                               template, we instruct Llama2 to predict the future viewports in the
+· Finally, they involve diverse input modalities, covering the pri-            next 1 second based on the historical viewports in the last 1 second
+  mary data modalities in many networking tasks. For example,                  (detailed setup of this measurement can be found in §A.1).
+  many continuous signals in network adaptation problems (e.g.,
+  packet loss rate in congestion control [106]) are represented as                Figure 2 (left) reports the performance of prompt-learning-adapted
+  scalar data.                                                                 Llama2 in terms of mean absolute error (MAE). Lower MAE means
+                                                                               better prediction performance. As shown, under the prompt learn-
+In particular, we choose VP as it encompasses multiple input modali-           ing framework, Llama2 achieves poor performance with 11.1%
+ties and requires cross-modality fusion, making it more challenging            higher MAE than the state-of-the-art VP model TRACK [85]. This
+for LLM adaptation than other prediction tasks that generally in-              could be attributed to the significant modality gap between text
+volve single input modality (e.g., bandwidth prediction [64]). The             and time-series data, as textual representation may not effectively
+                                                                               express the characteristics of time-series data. For instance, the
+characteristics of these tasks ensure that our subsequent discussion is        time-varying patterns are typically not found in natural text.
+
+representative and applicable to a wide range of networking scenarios.         Challenge 2: Inefficiency of token-based answer generation.
+Challenge 1: Large modality gap. As shown in Table 1, different                As introduced in §2.2, by default, LLMs generate answers with LM
+networking tasks have different input information of diverse modal-            head by predicting next tokens in an autoregressive manner. This,
+ities, spanning from time-series network throughputs to DAG data.              however, exhibits two main drawbacks in the networking area.
+However, most LLMs are designed to accept plain text as inputs.
+Due to the substantial modality gap, it is impractical to directly feed           First, the uncertainty of token prediction increases the risk of
+the input information of networking tasks into LLMs for effective              LLM-generated answers to be physically invalid, a phenomenon
+processing.                                                                    known as hallucination [41, 49]. To quantify this issue, we calculate
+                                                                               the fraction of valid answers (see §A.1) when adapting Llama2 for
+   One seemingly natural approach to tackle this challenge is prompt           VP task based on token prediction. Figure 2 (middle) shows that
+learning [60, 68, 81], which transforms data into texts through a              Llama2 fails to guarantee the generated answers to be 100% valid
+prompt template. Specifically, it designs a textual template that              when using token prediction. This raises concerns regarding the
+provides the information of task specifications, and uses this tem-            reliability of deploying LLMs for real-world network systems.
+plate to transform task inputs into textual prompts to instruct the
+LLM to generate desired answers that solve the tasks. While this
+approach shows promise in other fields, it falls short in the network-
+ing domain due to the following reasons. First, it is not feasible to
+transform data of complex modalities (e.g., image in VP and DAG
+
+                                                                          665
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                             Wu et al.
+
+   Second, due to the sub-word nature of tokens, a single word may                              4 NETLLM DESIGN
+span multiple tokens. In consequence, LLMs often require multiple
+inferences to generate a single answer, as depicted in Figure 1. This                           In this section, we elaborate the detailed design of NetLLM, an inno-
+can produce delayed or even stale answers that fail to quickly adapt                            vative LLM adaptation framework for networking that efficiently
+to the system changes. For instance, we measure the average time                                solves the aforementioned challenges. As shown in Figure 5, NetLLM
+for Llama2 to generate a single answer for the VP task. Figure 2                                comprises three main building blocks:
+(right) shows that it takes up to 3.84s for per-answer generation,
+which significantly exceeds the 1-second response deadline required                             · Multimodal encoder. NetLLM solves challenge 1 by designing
+for predicting future viewports in the next second.                                               an encoder module to encode multimodal input data of network-
+                                                                                                  ing tasks into token-like embeddings, which can be effectively
+   Note that the above problems are not unique to the networking                                  processed by the LLM.
+area. Nevertheless, they reduce the efficiency of LLMs in network-
+ing, since networking tasks often require high reliability and quick                            · Networking head. To address challenge 2, NetLLM replaces the
+responsiveness [11, 66].                                                                          LM head for token prediction with different networking heads,
+Challenge 3: High adaptation costs. Many networking tasks                                         which enable direct generation of a valid answer for specific tasks
+such as ABR [103] and CJS [78] employ RL to solve complex system                                  in a single inference.
+optimization problems, which involve active interaction between
+the environments (e.g., network environments with varying band-                                 · Data-driven low-rank networking adaptation (DD-LRNA).
+width or workload patterns) to collect experiences for reward opti-                               To reduce the costs of adaptation, NetLLM develops an efficient
+mization. In this context, simply fine-tuning LLMs for these tasks                                DD-LRNA scheme to solve challenge 3. It incorporates a data-
+based on standard RL techniques (e.g., PPO [86] and DQN [93]) will                                driven pipeline to adapt LLMs for both prediction and decision-
+introduce prohibitive adaptation costs due to the time-consuming                                  making tasks, and introduces different low-rank matrices to learn
+process of environment interaction. To be more specific, we mea-                                  domain knowledge to further minimize the adaptation costs.
+sure the amount of time of fine-tuning Llama2 over ABR (CJS) task
+for 10000 (100) iterations with standard RL. Each iteration involves                            Note that during fine-tune, the parameters of the LLM are frozen
+interacting with the environment for one episode3 to collect experi-                            to preserve pre-trained knowledge, while the multimodal encoder,
+ences, followed by optimizing rewards based on these experiences.                               networking heads, and low-rank matrices are tunable to optimize
+As depicted in Figure 3, the experience collection caused by active                             performance for different tasks. The details of each blocks are de-
+environment interaction introduces additional 31.18h (56.42h), ac-                              scribed as follows.
+counting for 52.27% (39.25%) of the total training time on ABR (CJS)
+task. While this problem has been observed in prior works [62, 63],                             4.1 Multimodal Encoder
+it becomes intractable in the context of adapting LLMs for network-
+ing given their large parameter sizes.                                                          The key to processing task-specific information is to project the
+                                                                                                multimodal input data into token space to enable efficient utiliza-
+   The adaptation costs become even more expensive when fine-                                   tion by the LLM. To achieve this, we design a multimodal encoder
+tuning the full parameters of LLMs [21, 29]. As shown in Figure 4,                              to automatically learn such projection. Figure 6 illustrates the ar-
+fully fine-tuning Llama2-7B for the VP task consumes 65.88GB GPU                                chitecture of this module, which incorporates two blocks.
+memory and 7.9h of training time. This is because full-parameter                                Feature encoder. We first employ different feature encoders to
+fine-tune requires extensive memory and computation to store and                                extract features from raw input data of various modalities. A key
+maintain the training states due to the large parameter size. In                                design consideration here is the choice of feature encoder for each
+fact, another practical drawback associated with full-parameter                                 modality. Instead of handcrafting feature encoders from scratch,
+fine-tune is that it may disrupt the pre-trained knowledge of LLM                               which entails high model engineering costs, we reuse the exist-
+since it updates all the parameters of LLM. As a result, this may                               ing well-designed encoders tailored for specific modalities. For
+prevent a single LLM to share across different networking tasks.                                example, Decima [63] for CJS task develops a graph neural net-
+Summary. In a nutshell, we observe three challenges of LLM adap-                                work (GNN) [101] encoder to extract features from DAG informa-
+tation for networking.                                                                          tion, and Vision Transformer (ViT) [22] has been widely used to
+                                                                                                encode images into hidden features. These designs are precious
+· The large modality gap makes the input information of network-                                research outcomes and prove effective in processing specific modal-
+  ing tasks incompatible with the LLM, preventing the LLM from                                  ities. Therefore, we cherish and efficiently utilize these designs by
+  effectively processing task inputs.                                                           integrating them into our multimodal encoder module. Specifically,
+                                                                                                we leverage the following feature encoders to encode different data
+· The default token-based answer generation of the LLM exhibits                                 modalities involved in networking: ViT for images, 1D-CNN for
+  inefficiency in the networking domain, which reduces the relia-                               time-series and sequence data (e.g., historical throughputs and fu-
+  bility and responsiveness for the LLM to serve network systems.                               ture chunk sizes at different bitrates in ABR), fully connected layer
+                                                                                                for scalar data (e.g., buffer occupancy in ABR), and GNN for graph
+· The large parameter size of the LLM leads to significant costs to                             information (e.g., DAGs in CJS).
+  acquire domain-specific knowledge for networking, especially                                  Linear projection. The features extracted by encoders, however,
+  for RL-based tasks which require environment interaction.                                     may not align to the token space. For instance, features extracted
+                                                                                                by ViT have a dimension of 768 [22], while Llama2 requires an
+3An episode in RL refers to a single round of a RL model to interact with the environ-          input dimension of 4096 [92]. To address this issue, we design
+ment from the initial state to final state. For example, in ABR task, the RL model starts       a set of trainable linear layers to project the features extracted
+streaming the first video chunk (initial state) and stops until all chunks are downloaded       by different encoders. These layers automatically learn a highly
+(final state).
+
+                                                                                           666
+NetLLM: Adapting Large Language Models for Networking                         ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+                                                        §4.3 Data-Driven Low-Rank                                                 Trainable
+                                                                                                                                  Frozen
+             §4.1 Multimodal                            Networking Adaptation                       §4.2 Networking Head
+                                                                                                                          Viewport
+                   Encoder    Token-Like Embedding      Low-Rank                                                          Prediction
+                                                           Matrices
+Image              ViT                                                     +  Large Language Model
+                      Linear
+
+                   CNN                                  Low-Rank           +                                              Adaptive Bitrate
+                      Linear                               Matrices                                                       Streaming
+
+Time-Series
+
+                   GNN                                  Low-Rank           +                                              Cluster Job
+                      Linear                               Matrices                                                       Scheduling
+
+Graph              ...                   ...
+
+ ...
+
+Figure 5: NetLLM consists of three core components: multimodal encoder to encode task inputs, networking head to generate task-specific
+answers and data-driven low-rank networking adaptation to efficiently learn domain knowledge for networking. The framework is illustrated
+with three tasks: VP, ABR and CJS, but all ideas can be easily applied to other networking tasks.
+
+                        Example of Viewport Prediction                     the networking head is designed as a trainable linear layer to predict
+                                                                           task-specific answers based on LLM output features, which can be
+Multimodal Data    Image       Viewport       Viewport                     flexibly customized according to specific networking tasks. Unlike
+Feature Encoder                   1                                        LM head, the networking head constrains the answer generation
+                                                                           into the valid range of possible answers, such as the range of valid
+                   ViT        1D Convolution                               viewport coordinates in VP and the set of video bitrates in ABR.
+                                                                           In this way, all answers generated by LLM are guaranteed to be
+Linear Projection                                                          valid, ensuring the reliability of LLM for networking. Moreover,
+                                                                           LLM can generate one answer within a single round of inference,
+                   Layer Normalization                                     thus significantly reducing the generation latency.
+                                                                           Example. Figure 7 compares the difference between LM head for
+                   Token-Like Embedding                                    token prediction and networking head with ABR task as the ex-
+                                                                           ample. As depicted, the LM head generates answers by predicting
+                              Large Language Model                         next tokens autoregressively, which requires multiple rounds of
+                                                                           inference and thus entails high generation latency. Besides, due to
+Figure 6: Illustration of the multimodal encoder of NetLLM to encode       the inherent uncertainty of token-based prediction, the generated
+multimodal data.                                                           answers may be invalid, such as a bitrate that does not exist. In
+                                                                           contrast, the networking head is specially designed to predict the
+efficient mapping from feature space to token space, producing a           probability distribution of bitrates, enabling direct answer gener-
+set of token-like embeddings that can be effectively utilized by the       ation within a single round of inference (e.g., the bitrate with the
+LLM. Additionally, we further enhance the projection process by            maximum probability is chosen as the answer in Figure 7). Fur-
+normalizing the output embeddings with layer normalization [7]             thermore, since the outputs of networking head are limited to the
+to ensure training stability.                                              discrete set of candidate bitrates, the generated answers are guar-
+Example. Figure 6 illustrates the multimodal encoder with VP task          anteed to be always valid. The superiority of networking head over
+as a concrete example. The ViT and 1D convolution layer (1D-CNN)           LM head is also illustrated in Figure 2 (middle, right), where NetLLM
+are first used to encode the image and time-series viewport data,          uses it to ensure the validness of answers and quickly produces
+respectively. Next, the extracted features are projected into token-       answers before the response deadline for VP task.
+like embeddings with separate linear projection layers. Finally, all
+embeddings are normalized through layer normalization to ensure            4.3 Data-Driven Low-Rank Networking
+training stability, and passed to the LLM for further processing.
+Figure 2 (left) also provides statistical results to confirm the ef-             Adaptation
+fectiveness of multimodal encoder to project task-specific input
+data. As shown, empowered by this module, NetLLM significantly             In this part, we delve into the detailed design of the proposed
+outperforms prompt-learning based data processing scheme [60],             data-driven low-rank networking adaptation (DD-LRNA) scheme
+with the average reduction of 19.7% MAE for the VP task.                   to efficiently fine-tune LLMs to acquire domain knowledge. The
+                                                                           DD-LRNA comprises the following two core designs: i) a data-
+4.2 Networking Head                                                        driven adaptation pipeline for both prediction and decision-making
+                                                                           networking tasks; ii) a low-rank adaptation approach to constrain
+With the multimodal encoder, the LLM is capable to extract high-           the fine-tuning process to a small number of parameters for more
+level features that encompass important task-specific information          efficient adaptation.
+from input data of various modalities. These features are then fed
+into the networking head for direct answer generation. Specifically,
+
+                                                                      667
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                                                                   Wu et al.
+
+LM Head              Video chunks in                                                                                label              Compute Loss 
+                     Different Bitrates                                                                                                            update
+          "7"                                                                                  Trainable            Dataset
+          "0"                                                                                  Frozen               input 
+          "0"                                                                                                       label 
+          <EOS>                                                                         Adaptation for
+                                                                                        Prediction Tasks
+Large Language Model            download                                                                                                  Low-Rank
+                 700 kbps                                                                                                                 Matrices
+                                                                                                                                                                               Large Language Model(Invalid)
+
+                                          750 kbps                                                                                                         +                                           prediction 
+
+                                                                                                                                                
+
+                                          2850 kbps                                                                 Dataset               Low-Rank
+                                                                                                                    return                Matrices
+                                download                                                Existing Policy              state 
+                 750 kbps                                                                         Collect           action                                 +                                           generated
+                                                                                                                                                                                                        action 
+                  (Valid)                                                                      Experiences          action 
+
+                                          4300 kbps                                      Environment                                            
+
+ABR Head                                                                                 Adaptation for                                            update
+                                                                                     Decision-Making Tasks                             Compute Loss 
+
+Figure 7: Comparison between LM head and networking head with                  Figure 8: Illustration of the data-driven low-rank networking adap-
+ABR task as an example. For illustration, we assume that video                 tation scheme of NetLLM.
+chunks are encoded into three bitrate versions {750, 2850, 4300} kbps.
+
+Data-driven networking adaptation. In the case of prediction                    by return  =                                    representing               the    cumulative                                rewards
+networking tasks, it is straightforward to fine-tune the LLM through                                                 =
+the standard SL data-driven training pipeline. Specifically, given             expected to receive from state  . Additionally, considering that
+a task-specific dataset D = {X, Y} of inputs   X and labels
+  Y, we leverage the multimodal encoder to encode input data ,                 the state or action in some tasks may be constituted by multiple
+elicit prediction results ^ from the LLM with networking head, and
+compute loss for parameter update by:                                          pieces of information (e.g., the state in ABR includes past network
+
+                                                                               throughput and playback buffer length), we further discretize each
+
+                                                                               state and action:               =    {1, · · ·    ,     },          =  {1, · · ·                                      ,  }. This leads to
+
+                                                                                                                                                                                                        
+
+           =  (, ^)                                  (1)                       the following representation of trajectory:
+
+where  is the loss function which can be cross entropy (CE) for                                             =  {    ,    1,  ··  ·  ,        1,    ·  ··   ,      }=1                                               (2)
+classification tasks (e.g., traffic classification [73]) or mean square
+error (MSE) for regression tasks (e.g., bandwidth prediction [64]                                                                       ,                     
+and VP [85]).                                                                                                                           
+                                                                                                                                                               
+   Nevertheless, when it comes to the decision-making tasks, the
+traditional RL training pipeline becomes impractical due to the                Based on the above trajectory representation, we then fine-tune
+time-consuming process of the interaction between the LLM and
+environments. To tackle this challenge, we design our RL adaptation            the LLM to learn the distribution of returns. At each training step,
+pipeline based on the efficient data-driven RL techniques [79, 106],
+which tackle the same problem as traditional RL but without the                we randomly sample a sequence of data from the dataset:
+need of environment interaction. Specifically, we collect the experi-
+ence dataset with any existing (non-LLM) networking algorithms,                                     =  {    ,   1,  ···  ,       1,    ·  ·  ·  ,     }=      -+1                                      D            (3)
+and exploit this dataset to fine-tune the LLM for reward optimiza-
+tion. The intuition behind is to let the LLM learn a better policy by                                                         ,                    
+observing the behaviors of existing algorithms [47]. That means,                                                              
+the LLM should not only learn from the good actions that lead to                                                                                    
+good performance, but also try to understand why some actions
+will lead to bad performance [106].                                            where  is the context window to facilitate the learning of return
+
+   It is worth noting that, unlike traditional RL that requires periodic       distribution. Next, we feed data  to the LLM to generate actions
+refreshing of the experience dataset during training [86, 93], our ap-
+proach allows the dataset to be collected only once and used through-          {^1,  ·  ·  ·  ,  ^  }=    -+1.      Notably,        we       consider         return                                   and  each    piece
+out the entire training process. As a result, the costs of adapting
+LLMs for RL-based networking tasks can be significantly reduced                                   
+(e.g., with 51.1%/37.7% reduction of training time for ABR/CJS task
+under the same training iterations, as depicted in Figure 3).                  of state, action information as different modalities, and process
+
+   The proposed RL adaptation pipeline is described as follows,                them separately. Finally, the training loss is calculated by:
+which is built on top of the Transformer based data-driven RL [12,
+40] that caters to the sequence modeling nature of Transformer.                                                              1    
+Given a RL-based networking task, we first employ an existing                                                                
+policy (e.g, Decima [63] for CJS) to collect an experience dataset                                                                                    (       ^ 
+which consists of experience trajectories: D = {1, · · · , | D | }.
+Each trajectory  = { ,  ,  }=1 is composed of rewards  , states                                                     =                                      ,      )                                                 (4)
+ and actions , where  denotes the episode length. For each
+sample in a trajectory { ,  ,  }  , we substitute the reward                                                                    =1 =1
+
+                                                                               where             measures      the      difference           between          action                                   and  the     gen-
+
+                                                                                                                                                                          
+
+                                                                               erated action ^  , which can be CE for discrete actions or MSE for
+
+                                                                                                     
+
+                                                                               continuous actions.
+
+                                                                               The underlying rationale of the above training procedure is to
+
+                                                                               train the LLM to model the distribution of returns conditioned on
+
+                                                                               specific states, so that once trained, it can be used to generate a
+
+                                                                               series of actions that achieve the desired returns [12]. In particular,
+
+                                                                               during the inference stage, we specify a target return based on
+
+                                                                               the desired performance (e.g., maximum possible return to achieve
+
+                                                                               excellent performance) to trigger the LLM to generate answers.
+
+                                                                               Low-rank networking adaptation. With the data-driven adap-
+
+                                                                               tation pipeline in place, the LLM can now be fine-tuned for net-
+
+                                                                               working adaptation. Given the pre-trained parameters of the LLM
+
+                                                                               denoted as 0, the goal of fine-tuning is to search for the parameter
+                                                                               update  such that the resulting parameters  = 0 +  are
+                                                                               optimized for the specific networking task. Nevertheless, due to
+
+                                                                               the large parameter size of the LLM, directly fine-tuning the full
+
+                                                                               parameters entails prohibitive computation costs, as the dimension
+
+                                                                               of learned parameters || is equal to |0| (e.g., |0| = 540 billion
+                                                                               for PaLM [15]).
+
+                                                                          668
+NetLLM: Adapting Large Language Models for Networking                          ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+         Adapted_LLM =                                NetLLM Integration       Avgerage MAE (Degrees)                 VP (  Better)      Avgerage QoE Scores                ABR (  Better)     Avgerage JCT (Seconds)                CJS (  Better)
+         Adapt(LLM, Dataset, NumIters)                   SL codebase:                                  20                                                     1.0                                                      80
+                                                         - Simulator
+         Performance =                                   - Dataset                                     15                                                     0.8                                                      60
+         Test(Adapted_LLM, EnvSettings, NumIters)
+NetLLM                                                   RL codebase:                                                                                         0.6
+Adaptor  Dataset =                                       - Simulator
+         RL_Collect(Policies, EnvSettings, NumIters)     - Policies                                    10                                                                                                              40
+
+                                                                                                                                                              0.4
+
+                                                                                                       5                                                      0.2                                                      20
+
+                                                                                                       0 LR Velocity TRACK NetLLM                             0.0 BBA MPC GENETNetLLM                                  0 FIFO Fair DecimaNetLLM
+
+Figure 9: Components and interfaces needed to integrate NetLLM with                                               (a) Average performance with different random seeds
+an existing SL/RL codebase for LLM adaptation.
+                                                                                                                                                                           ABR                                                         CJS
+                                                                                                                  VP                                          1.0                                                      1.0
+                                                                                                       1.0                                                    0.8                                                      0.8                     Better
+   To combat the above limitation, we freeze the parameters of                                         0.8            Better                                  0.6                  Better                              0.6
+LLM and introduce additional low-rank matrices to approximate                                          0.6                                                    0.4                                                      0.4                         FIFO
+the changes needed in the LLM parameters to learn domain-specific              CDF                     0.4            LR                 CDF                  0.2                  BBA         CDF                     0.2                         Fair
+knowledge. The underlying insight is that the parameter changes                                        0.2            Velocity                                0.0                  MPC                                 0.0                         Decima
+during adaptation (i.e., ) reside on an intrinsic low rank [4, 38].                                    0.0            TRACK                                                        GENET                                                           NetLLM
+Therefore, for each pre-trained matrix 0  0 of dimension  × ,                                                         NetLLM                                         0             NetLLM                                  0  100 200 300
+we hypothesize the existence of a low rank   min{,  } and                                                  0                                                                                                                   JCT (Seconds)
+construct two low-rank matrices ,  of dimension  × ,  ×  to                                                   20  40  60             80                                 1       2           3
+approximate the update of0, i.e., = 0 + = 0 +. During                                                                                                                   QoE Scores
+adaptation, 0 is frozen and all parameter update is constrained on                                            MAE (Degrees)
+matrices  and . As shown in Figure 4, this significantly reduces
+the fine-tuning costs with the reduction of 60.9% GPU memory and                                                                                              (b) CDF Performance
+15.1% training time, since the low-ranks only introduces 0.31% of
+trainable parameters. Another benefit of this approach is that the             Figure 10: Comparing NetLLM-adapted Llama2 for VP, ABR, and CJS,
+pre-trained knowledge of the LLM is preserved as each 0  0                     with baselines in testing environments generated with the same
+is retained without any update. Hence, the same LLM can serve as               settings as training environments.
+the foundation model for different tasks, and train different copies
+of ,  to acquire different domain knowledge.                                      We have integrated NetLLM into three existing codebases for
+Putting all together. The DD-LRNA scheme is briefly summarized                 VP [99], ABR [103], and CJS [30], and implemented the above APIs
+in Figure 8. As shown, we freeze the parameters of LLM and allocate            based on the functionalities provided in the codebases. More details
+different trainable low-rank matrices for each task. These matri-              of implementation are provided in §A.2.
+ces are then fine-tuned over a dataset to acquire domain-specific
+knowledge. For decision-making tasks, the dataset is collected by              5 EVALUATION
+using existing algorithms to interact with environments. At each
+fine-tuning step, we sample a batch of data from the dataset, feed             5.1 Setup
+data to the LLM to generate answers, compute loss according to
+equation (1) for prediction tasks or equation (4) for decision-making          Simulation setup. By default, we utilize Llama2-7B [92] as the
+tasks, and update the low-rank matrices through gradient descent.              foundation LLM. We then use NetLLM to adapt Llama2 for three
+Note that in addition to low-rank matrices, the gradients are also             networking tasks VP [99], ABR [103], and CJS [63]. We generate
+propagated to update the parameters of multimodal encoder and                  different simulation environments with real-world and synthetic
+networking head for performance optimization.                                  datasets for training and testing, following the settings described in
+                                                                               §A.4 and Table 2, 3, 4. These settings cover the key factors that affect
+4.4 Implementation                                                             the model performance. For instance, in ABR task, our environment
+                                                                               settings consider the range and changing frequency of bandwidth
+NetLLM is fully implemented in Python and Bash, and can be easily              as well as video bitrates.
+integrated into existing SL/RL codebases to adapt LLMs for net-                Baselines. We implement three state-of-the-art learning-based al-
+working tasks. As depicted in Figure 9, it interacts with an existing          gorithms for comparison: TRACK [85] for VP, GENET [103] for ABR
+codebase with three APIs. First, Adapt triggers NetLLM to use the              and Decima [63] for CJS. We choose these baselines because they
+provided dataset to adapt the LLM to learn domain-specific knowl-              have open source implementation. In addition, we also compare
+edge for the target task, and returns the snapshot of the adapted              with other rule-based (non-DNN) algorithms for each task: linear
+LLM. Second, Test evaluates the performance of the adapted LLM                 regression (labeled "LR") [80] and velocity-based prediction (labeled
+on the testing environments generated with the given simulation                "Velocity") [24] for VP, BBA [39] and MPC [107] for ABR, first-in-
+settings. Finally, for RL-based tasks without an available dataset             first-out (labeled "FIFO") and fair scheduling (labeled "Fair") [87]
+for adaptation, NetLLM offers the RL_Collect API to collect the ex-            for CJS. Appendix §A.3 provides the brief overview of all baselines.
+perience dataset by using the given RL policies to interact with the           Metrics. For performance metrics, we consider mean absolute
+environments. Afterwards, the collected dataset can be plugged                 error (MAE) for VP, Quality of Experience (QoE) scores for ABR,
+into the Adapt API to adapt the LLM.                                           job completion time (JCT) for CJS. Lower MAE, higher QoE and
+                                                                               lower JCT indicate better performance. In particular, following
+                                                                               the same formula in [62, 103], QoE is calculated as the weighted
+                                                                               linear combination of bitrate, rebuffering time and bitrate changes.
+                                                                               Appendix §A.6 provides the details of three metrics.
+                                                                               Hardware settings. We conduct experiments on a Linux server
+                                                                               equipped with eight Intel(R) Xeon(R) Gold 5318Y CPUs and two
+                                                                               NVIDIA 40GB A100 GPUs.
+
+                                                                          669
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                                                                                        Wu et al.
+
+MAE (Degrees)               Unseen Setting1       MAE (Degrees)               Unseen Setting2       MAE (Degrees)               Unseen Setting3            even more powerful capabilities in function approximation, pat-
+               40                                                40                                                50                                      tern mining and long-term planning, owing to its large parameter
+               30                                                30                                                40                                      size and large-scale pre-training. Hence, by effectively utilizing the
+               20                                                20                                                30                                      strengths of LLM to solve networking tasks, NetLLM achieves supe-
+               10                                                10                                                20                                      rior performance compared to the other learning-based algorithms.
+                                                                                                                   10                                      In addition, it is worth mentioning that the performance gain of
+                0                                                 0                                                                                        learning-based algorithms relies on engineering specialized DNN
+                        LR Velocity TRACK NetLLM                          LR Velocity TRACK NetLLM                  0                                      models for the target tasks. In contrast, NetLLM efficiently utilizes
+                                                                                                                            LR Velocity TRACK NetLLM       the LLM as the foundation model for task solving. That said, it
+                                                                    (a) VP ( Better)                                                                       uses the same LLM to solve various networking tasks without any
+                                                                                                                                                           further modification on the model, thus significantly reducing the
+                            Unseen Setting1                                    Unseen Setting2                                   Unseen Setting3           overhead of model engineering.
+               2.0                                               2.4                                               2.1
+                                                                                                                   1.8                                     5.3 Generalization
+QoE Scores     1.5                                QoE Scores     2.1                                QoE Scores     1.5
+                                                                                                                   1.2                                     Next, we evaluate the generalization performance of all methods for
+               1.0                                                                                                 0.9 BBA MPC GENET NetLLM                each task in testing environments generated with various settings
+                                                                                                                                                           different from the training environments (see §A.4). As depicted in
+                                                                 1.8                                                                                       Figure 11, NetLLM-adapted Llama2 consistently outperforms base-
+                                                                                                                                                           lines in terms of average values and distributions across all cases.
+               0.5                                                                                                                                         For instance, compared to the learning-based algorithms, it reduces
+                                                                                                                                                           the MAE by 1.7-9.1%, improves the QoE by 3.9-24.8% and reduces the
+               0.0                                               1.5                                                                                       JCT by 2.5-6.8% on average. This suggests that, enabled by NetLLM,
+                                                                                                                                                           Llama2 demonstrates superior generalization performance.
+               -0.5           MPC GENET NetLLM                   1.2          MPC GENET NetLLM
+                         BBA                                             BBA                                                                                  From Figure 11, we also notice that learning-based algorithms
+                                                                                                                                                           do not always outperform conventional rule-based algorithms for
+                                                                 (b) ABR ( Better)                                                                         the ABR task. Figure 12 breaks down the QoE scores of all ABR
+                                                                                                                                                           methods for more detailed analysis. As shown, GENET is surpassed
+                             Unseen Setting1                                   Unseen Setting2                                   Unseen Setting3           by MPC with 5.2%/5.9% lower average QoE on unseen setting 1/2.
+               240                                               120                                               200                                     More specifically, on unseen setting 1, where the streaming video is
+                                                                                                                                                           different from training one, GENET fails to optimize video bitrates
+JCT (Seconds)  180                                JCT (Seconds)  90                                 JCT (Seconds)  150                                     and thus achieves worse performance than MPC. On the other hand,
+                                                                                                                                                           GENET struggles to adapt to the dynamic fluctuations of bandwidth
+               120                                               60                                                100                                     on unseen setting 2, where the testing bandwidth traces change
+                                                                                                                                                           more frequently than training ones. It may inappropriately select
+               60                                                30                                                50                                      high bitrates when the current bandwidth resources become scarce,
+                                                                                                                                                           and thus produces the highest rebuffering time among other meth-
+               0 FIFO         Fair DecimaNetLLM                  0 FIFO       Fair DecimaNetLLM                    0 FIFO  Fair DecimaNetLLM               ods. In contrast, NetLLM-adapted Llama2 strikes a good balance
+                                                                                                                                                           between the three QoE factors and thus achieves the highest QoE
+                                                                      (c) CJS ( Better)                                                                    scores on all settings. These cases exemplify that conventional DNN
+                                                                                                                                                           models may perform poorly in unseen environments. In compari-
+Figure 11: Comparing the generalization performance of NetLLM-                                                                                             son, leveraging our NetLLM framework, we can indeed efficiently
+adapted Llama2 for VP, ABR, and CJS, with baselines in testing                                                                                             utilize the extensive knowledge of the LLM to achieve stronger
+environments generated with settings different from training envi-                                                                                         generalization.
+ronments. The shape of box shows the distribution and the triangle
+in each box denotes average.                                                                                                                                  Real-world tests. As a final test of generalization, we evaluate
+                                                                                                                                                           NetLLM-adapted Llama2 in a real-world client-server ABR system
+5.2 General Evaluation                                                                                                                                     under different network connections (see §A.5 for detailed setup).
+                                                                                                                                                           The results are reported in Figure 14. On each network, the adapted
+In this part, we first compare NetLLM-adapted Llama2 with other                                                                                            Llama2 outperforms the baselines. This indicates that the LLM
+methods across three different tasks over the testing environments                                                                                         adapted by NetLLM is able to generalize to real-world scenarios.
+with the same settings as training environments (see §A.4). In other
+words, for each task, we adapt Llama2 and train learning-based                                                                                             5.4 Deep Dive
+algorithms over the environment generated with the target setting,
+and test all methods in the new environment from the same setting.                                                                                         Importance of pre-trained and domain knowledge. To gain a
+                                                                                                                                                           deeper understanding of why LLMs can be adapted for networking,
+   Figure 10 presents the performance of each method for the corre-                                                                                        we investigate the importance of both the pre-trained and learned
+sponding tasks. As shown in Figure 10, NetLLM-adapted Llama2 con-                                                                                          domain knowledge of LLMs in networking adaptation. We use
+sistently outperforms other methods across all cases. It surpasses
+all baselines by reducing 10.1-36.6% of MAE for VP, improving
+14.5-36.6% of QoE for ABR and reducing 6.8-41.3% of JCT for CJS.
+Figure 10 also provides more detailed results in the form of CDF for
+each task. It can be seen that a large proportion of NetLLM-adapted
+Llama2 is concentrated in the range of lower MAE, higher QoE and
+lower JCT. For instance, for CJS task, the 90th percentile JCT of
+Llama2 is 97.3 seconds, while this value dramatically increases to
+109.3 seconds for Decima, 135.6 seconds for Fair and 187.5 seconds
+for FIFO. The above outcomes highlight the effectiveness of NetLLM
+in LLM adaption for networking.
+
+   It can be seen that there is a clear ranking among the three
+baselines on each task, where the learning-based algorithms con-
+sistently yield improvement over traditional rule-based algorithms.
+This can be attributed to the inherent strength of DNNs in fitting
+complex functions for prediction. However, the LLM demonstrates
+
+                                                                                                                                                      670
+NetLLM: Adapting Large Language Models for Networking                                                                                                                                                                                                                                                                    ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+Normalized Mean Values     0.8  BBA           MPC                                                                                                              GENET  NetLLM                                                                                           Normalized Mean Values  0.8  BBA        MPC       GENET                        NetLLM                   Normalized Mean Values  0.8  BBA                       MPC    GENET     NetLLM
+
+                           0.6                                                                                                                                                                                                                                                                 0.6                                                                                                     0.6
+
+                           0.4                                                                                                                                                                                                                                                                 0.4                                                                                                     0.4
+
+                           0.2                                                                                                                                                                                                                                                                 0.2                                                                                                     0.2
+
+                           0.0  QoE           Bitrate                                                                                                          Rebuffering  Bitrate Variation                                                                                                  0.0  QoE        Bitrate   Rebuffering  Bitrate Variation                                                0.0  QoE   Bitrate                    Rebuffering  Bitrate Variation 
+
+                                (a) ABR Unseen Setting 1                                                                                                                                                                                                                                            (b) ABR Unseen Setting 2                                                                                (c) ABR Unseen Setting 3
+
+Figure 12: Comparing NetLLM-adapted Llama2 with baselines for ABR by breaking down their performance on individual QoE factors in
+different unseen environments. Results are normalized through min-max. Arrow  /  means higher/lower is better.
+
+Average MAE (Degrees)           no Pre-trained Knowledge                                                                                                       no Domain Knowledge                                                                                                             Full Knowledge                                         Average QoE Scores  1.0  BBA                          MPC                       GENET  NetLLM
+
+                       20                                                                                                                                                                                                                     80Average JCT (Seconds)
+                                                                                                                                   1.0                                                                                                        60
+                                                                                                                                      Average QoE Scores                                                                                      40
+                                                                                                                                                                                                                                              20                                                                                                                          0.8
+
+                       15                                                                                                                                 0.8
+
+                                                                                                                                                                                                                                                                                                                                                                          0.6
+
+                                                                                                                                   0.6                                                                                                                                                                                                                                    0.4
+                       10
+                                                                                                                                                                                                                                                                                                                                                                          0.2
+                                                                                                                                   0.4
+
+                        5
+                                                                                                                                   0.2
+
+                       0                                                                                                                                  0.0                                                                                                          0                                                                                                  0.0  Broadband                                                     Cecullar
+
+                               VP (  Better)                                                                                                                       ABR (  Better)                                                                                             CJS (  Better)
+
+Figure 13: Exploring the importance of pre-trained and learned                                                                                                                                                                                                                                                           Figure 14: Comparing NetLLM-adapted Llama2 with baselines for ABR
+domain-specific knowledge of LLM in networking adaptation.                                                                                                                                                                                                                                                               on real-world environments with different network connections.
+
+Llama2-7B as the LLM for our exploration. First, we disable the pre-                                                                                                                                                                                                                                                     Average MAE (Degrees)                     VP (  Better)                                  Average QoE Scores                   ABR (  Better)
+trained weights of Llama2 that represent its pre-trained knowledge,
+randomly initialize its weights and train it from scratch for each task.                                                                                                                                                                                                                                                                        13.5                                                                                  1.0
+As depicted in Figure 13, the absence of pre-trained knowledge leads
+to dramatic performance drop across all tasks. This indicates that                                                                                                                                                                                                                                                                              12.0                                                                                  0.8
+while LLMs are pre-trained over text corpora to acquire language
+knowledge, their emergent abilities (e.g., planning [102], pattern                                                                                                                                                                                                                                                                              10.5                                                                                  0.6
+mining [112]) are indeed universal and applicable across domains,
+including networking. For instance, the pattern mining ability of                                                                                                                                                                                                                                                                               9.0 OPT Mistral LLaVa Llama2 TRACK                                                    0.4 OPT Mistral LLaVa Llama2 GENET
+LLM can be utilized to mine complex changing patterns of viewport
+movement for accurate viewport prediction. Hence, the pre-trained                                                                                                                                                                                                                                                        Figure 15: Comparing the performance of different LLMs adapted
+knowledge of LLMs is crucial for networking adaptation.                                                                                                                                                                                                                                                                  by NetLLM for VP and ABR with learning-based algorithms.
+
+   Next, we preserve the pre-trained knowledge of Llama2 but                                                                                                                                                                                                                                                             are presented in Figure 16. As shown, when the parameter size
+disable the low-rank matrices that represent the learned domain                                                                                                                                                                                                                                                          exceeds 1B, the adapted OPT achieves superior or comparable per-
+knowledge. As reported in Figure 13, the absence of domain knowl-                                                                                                                                                                                                                                                        formance to the advanced learning-based algorithms. However,
+edge also results in performance degradation on each task, which                                                                                                                                                                                                                                                         for the ABR task, OPT-0.35B performs significantly worse than
+highlights the importance of NetLLM to acquire domain knowledge.                                                                                                                                                                                                                                                         all baselines, potentially due to the limited common knowledge
+Impacts of different types of LLMs. To validate whether NetLLM                                                                                                                                                                                                                                                           to generalize across tasks. This suggests that, in practice, LLMs
+is applicable to various LLMs, we employ it to adapt three addi-                                                                                                                                                                                                                                                         with parameter sizes greater than 1B are suitable for networking
+tional LLMs besides Llama2 for the VP and ABR tasks: OPT [108],                                                                                                                                                                                                                                                          adaptation, while those smaller than 1B may not be the optimal
+Mistral [42] and LLaVa [56]. The size of each LLM is set to 7B for                                                                                                                                                                                                                                                       choices for adaptation.
+fair comparison. It is worth mentioning that LLaVa is a multimodal                                                                                                                                                                                                                                                       Computation overhead. To measure the overhead of deploying
+LLM trained on the combination of image and text corpora. We se-                                                                                                                                                                                                                                                         NetLLM-adapted LLM to solve networking tasks, we profile the LLM
+lect LLaVa for our evaluation to investigate whether the pre-trained                                                                                                                                                                                                                                                     answer generation process. Overall, loading a 7B LLM like Llama2-
+knowledge of multimodal fusion is applicable for networking.                                                                                                                                                                                                                                                             7B requires 29 GB memory and takes about 0.1s0.3s to generate
+                                                                                                                                                                                                                                                                                                                         one answer. The computation overhead can be reduced by utilizing
+   As shown in Figure 15, all the adapted LLMs outperform the                                                                                                                                                                                                                                                            the advanced model compression techniques [19, 104] (discussed
+state of the arts on both tasks, which confirms the compatibility                                                                                                                                                                                                                                                        in §6), or employing smaller LLMs such as OPT-1.3B which also
+of NetLLM. Interestingly, we observe that the multimodal LLaVa                                                                                                                                                                                                                                                           achieves superior performance over baselines (see Figure 16). Specif-
+performs worse than to single-modal Llama2. This suggests that                                                                                                                                                                                                                                                           ically, for OPT-1.3B, it only takes 7GB to load the model, which can
+the knowledge acquired by LLaVa in multimodal fusion during pre-                                                                                                                                                                                                                                                         be accommodated by commercial GPUs like NVIDIA 10GB 3080.
+training may not be directly beneficial in the networking domain4.                                                                                                                                                                                                                                                       Besides, it takes about 0.04s for OPT-1.3B to generate one answer,
+Impacts of different sizes of LLMs. Next, we investigate the                                                                                                                                                                                                                                                             which is acceptable for many networking tasks.
+impacts of LLM sizes on the adaptation performance. We select
+OPT [108] as the foundational model for this investigation, which                                                                                                                                                                                                                                                        6 DISCUSSION
+offers different versions with varying parameter sizes. The results
+                                                                                                                                                                                                                                                                                                                         Q1: What considerations are needed when adapting LLMs for
+4We leave deeper investigation of the efficacy of multimodal LLMs in networking for                                                                                                                                                                                                                                      specific networking tasks using NetLLM?
+future work.
+                                                                                                                                                                                                                                                                                                                            While NetLLM's overall design is independent of specific net-
+                                                                                                                                                                                                                                                                                                                         working tasks, some considerations are needed when applying it
+                                                                                                                                                                                                                                                                                                                         for LLM adaptation. Specifically, when adapting LLMs for the target
+
+                                                                                                                                                                                                                                                                                                               671
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                                                                   Wu et al.
+
+                        VP                                                                                       ABR                  to decrease the bit-width of OPT-1.3B from originally 16 bits to 4
+                                                                                                                                      bits with negligible performance degradation while significantly
+30                                                                                        25                                          reducing the model size by 4×. These active lines of research can
+% of Average MAE                                                                                                                      be integrated into NetLLM to reduce the overhead of LLMs when
+   better than baselines15                                                                0                                           deploying them for networking in practice. While the trade-off
+                                                                                                                                      between performance and resource consumption should be consid-
+                                                                % of Average QoE0         -25  Baseline: BBA                          ered when applying these techniques, we leave further exploration
+                                                                   better than baselines-15-50 Baseline: MPC                          of this trade-off for future work.
+-30    Baseline: LR                                                                       -75  Baseline: GENET
+       Baseline: Velocity                                                                                                             Q4: Why can LLMs be useful in networking?
+       Baseline: TRACK                                                                                                                   In §5.4, we have identified from the high-level perspective that
+
+0.35B 1.3B 2.7B             7B  13B                                                       0.35B 1.3B 2.7B             7B  13B         the pre-trained knowledge of LLMs is one of the dominant factors
+       Parameter Sizes of LLM (Billion)                                                        Parameter Sizes of LLM (Billion)       to their success in networking. However, further investigations into
+                                                                                                                                      the internal working mechanisms of LLMs are crucial to improve
+Figure 16: Exploring the impacts of LLM sizes in networking adapta-                                                                   their explainability. Gaining deeper insights into the explainability
+tion, with OPT [108] as the foundation model.                                                                                         of LLMs enables researchers to comprehend their capabilities, limi-
+                                                                                                                                      tations, and areas for improvement [5, 110]. This understanding, in
+networking task, the creation of a new networking head is nec-                                                                        turn, paves the way for the development of more reliable and secure
+essary, and the selection of a modality-specific feature encoder is                                                                   LLM-based networking systems that can be trustfully deployed in
+also needed when dealing with a new modality. However, NetLLM                                                                         real-world scenarios. Therefore, a significant future research di-
+minimizes the ad-hoc design costs associated with these considera-                                                                    rection lies in designing an interpretable system to elucidate the
+tions. On one hand, the networking head in NetLLM is essentially                                                                      behaviors of LLMs in the context of networking, which will greatly
+a simple linear layer that can be easily customized based on the                                                                      facilitate the effective utilization of LLMs in networking.
+task output space. For example, in VP task, the networking head is
+simply designed with three neurons to output the viewport coordi-                                                                     7 CONCLUDING REMARKS
+nates, i.e., roll, pitch and yaw (see §A.2). On the other hand, NetLLM
+facilitates efficiency by allowing the reuse of existing encoders to                                                                  In this paper, we for the first time explore the utilization of LLMs
+process specific modalities, eliminating the need of handcrafting                                                                     as foundation models for networking to reduce handcraft costs
+encoders from scratch. Furthermore, as the current LLM research                                                                       involved in algorithm design and achieve strong generalization. To
+landscape actively explores multimodality [28, 50, 71, 91], NetLLM                                                                    achieve this, we propose NetLLM, the first framework that efficiently
+stands to benefit from the advancements in this field. With the de-                                                                   adapts LLMs for different networking tasks. Across three use cases
+velopment of more generic and powerful LLMs that support more                                                                         in networking, we show that NetLLM enables the effective utilization
+modalities, NetLLM can utilize their built-in encoders to effectively                                                                 of a single LLM to achieve superior performance and generalization
+process multimodal data.                                                                                                              in multiple networking tasks. While NetLLM by no means is the final
+                                                                                                                                      answer, we hope that it serves as a stepping stone towards a more
+Q2: How does NetLLM compare to retrieval-augmented genera-                                                                            sustainable design philosophy for future networking algorithms
+                                                                                                                                      and demonstrates the potential of adapting LLMs for networking.
+tion (RAG)?
+   Retrieval-augmented generation (RAG) [48, 74, 100] has been                                                                        Ethics: This work does not raise any ethical issues.
+
+recently proposed to enhance the capabilities of LLMs. RAG con-                                                                       ACKNOWLEDGEMENTS
+structs a large corpus as an external knowledge base to store domain-
+specific knowledge. During the inference stage, relevant informa-                                                                     We thank the anonymous SIGCOMM reviewers and our shepherd,
+tion is retrieved from the knowledge base and attended to the input                                                                   Shay Vargaftik, for their invaluable feedbacks. This work was sup-
+context of LLMs to provide domain knowledge. Although RAG has                                                                         ported in part by NSFC with Grant No. 62293482, the Basic Research
+shown efficacy in improving the performance of LLMs in NLP tasks,                                                                     Project No. HZQB-KCZYZ-2021067 of Hetao Shenzhen-HK S&T Co-
+it faces challenges when applied in the networking field. This is                                                                     operation Zone, NSFC with Grant No. 62102342, the Shenzhen Sci-
+because, unlike NLP where knowledge can be stored explicitly in                                                                       ence and Technology Program with Grant No. RCBS20221008093120
+the textual form (e.g., the names of presidents of different coun-                                                                    047, the Young Elite Scientists Sponsorship Program of CAST with
+tries), representing domain knowledge in networking as plain texts                                                                    Grant No. 2022QNRC001, the Shenzhen Outstanding Talents Train-
+is challenging due to the abstract and implicit nature of networking                                                                  ing Fund 202002, the Guangdong Research Projects No. 2017ZT07X1
+knowledge (e.g., the ABR policy to dynamically adjust bitrates based                                                                  52 and No. 2019CX01X104, the Guangdong Provincial Key Labora-
+on the changing network conditions). As a result, constructing an                                                                     tory of Future Networks of Intelligence (Grant No. 2022B1212010001),
+external knowledge base for RAG is rather challenging in the field                                                                    and the Shenzhen Key Laboratory of Big Data and Artificial Intelli-
+of networking. In contrast, NetLLM takes a different approach by                                                                      gence (Grant No. ZDSYS201707251409055). Zhi Wang's work was
+designing an efficient DD-LRNA module, which enables LLMs to                                                                          supported in part by Shenzhen Science and Technology Program
+automatically and effectively learn domain-specific knowledge for                                                                     (Grant No. JCYJ20220818101014030). Junchen Jiang's work was
+networking. With this module, NetLLM facilitates efficient acquisi-                                                                   supported in part by NSF CNS 2146496, 1901466, 2313190, 2131826.
+tion of networking knowledge without relying on the construction
+of an external knowledge base.
+
+Q3: How to reduce the computation overhead of LLMs?
+   There is a wealth of research in model compression [19, 104]
+
+which can be leveraged to reduce the computation overhead of
+LLMs, including model pruning [58, 109], quantization [89, 90]
+and knowledge distillation [69, 75]. For example, SparseGPT [26]
+demonstrates that LLMs can be pruned to ignore at least 50% param-
+eters with minimal performance loss. OPTQ [27] uses quantization
+
+                                                                                                                                 672
+NetLLM: Adapting Large Language Models for Networking                                          ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+REFERENCES                                                                                     Meier-Hellstern, Douglas Eck, Jeff Dean, Slav Petrov, and Noah Fiedel. 2023.
+
+  [1] Soheil Abbasloo, Chen-Yu Yen, and H Jonathan Chao. 2020. Classic meets                   Palm: Scaling language modeling with pathways. Journal of Machine Learning
+        modern: A pragmatic learning-based congestion control for the internet. In
+        Proceedings of the 2020 ACM SIGCOMM Conference. 632­647.                               Research 24, 240 (2023), 1­113.
+
+  [2] Soheil Abbasloo, Chen-Yu Yen, and H. Jonathan Chao. 2021. Wanna make your                [16] Hyung Won Chung, Le Hou, Shayne Longpre, Barret Zoph, Yi Tay, William
+        tcp scheme great for cellular networks? Let machines do it for you! IEEE Journal
+        on Selected Areas in Communications 39, 1 (2021), 265­279.                             Fedus, Yunxuan Li, Xuezhi Wang, Mostafa Dehghani, Siddhartha Brahma, Al-
+
+  [3] Rishabh Agarwal, Dale Schuurmans, and Mohammad Norouzi. 2020. An opti-                   bert Webson, Shixiang Shane Gu, Zhuyun Dai, Mirac Suzgun, Xinyun Chen,
+        mistic perspective on offline reinforcement learning. In Proceedings of the 2020
+        International Conference on Machine Learning. PMLR, 104­114.                           Aakanksha Chowdhery, Alex Castro-Ros, Marie Pellat, Kevin Robinson, Dasha
+
+  [4] Armen Aghajanyan, Luke Zettlemoyer, and Sonal Gupta. 2020. Intrinsic di-                 Valter, Sharan Narang, Gaurav Mishra, Adams Yu, Vincent Zhao, Yanping Huang,
+        mensionality explains the effectiveness of language model fine-tuning. arXiv
+        preprint arXiv:2012.13255 (2020).                                                      Andrew Dai, Hongkun Yu, Slav Petrov, Ed H. Chi, Jeff Dean, Jacob Devlin, Adam
+
+  [5] J Alammar. 2021. Ecco: An open source library for the explainability of trans-           Roberts, Denny Zhou, Quoc V. Le, and Jason Wei. 2022. Scaling instruction-
+        former language models. In Proceedings of the 59th Joint Conference of the 59th
+                                                                                               finetuned language models. arXiv preprint arXiv:2210.11416 (2022).
+        Annual Meeting of the Association for Computational Linguistics and the 11th
+                                                                                               [17] Jan Clusmann, Fiona R Kolbinger, Hannah Sophie Muti, Zunamys I Carrero,
+        International Joint Conference on Natural Language Processing: System Demon-
+        strations. 249­257.                                                                    Jan-Niklas Eckardt, Narmin Ghaffari Laleh, Chiara Maria Lavinia Löffler, Sophie-
+  [6] Venkat Arun and Hari Balakrishnan. 2018. Copa: Practical delay-based conges-
+        tion control for the internet. In 2018 USENIX Symposium on Networked Systems           Caroline Schwarzkopf, Michaela Unger, Gregory P Veldhuizen, et al. 2023. The fu-
+        Design and Implementation (NSDI). USENIX Association, 329­342.
+  [7] Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E. Hinton. 2016. Layer Normal-              ture landscape of large language models in medicine. Communications medicine
+        ization. arXiv preprint arXiv:1607.06450 (2016).
+  [8] Wei Bai, Li Chen, Kai Chen, Dongsu Han, Chen Tian, and Hao Wang. 2015.                   3, 1 (2023), 141.
+        Information-agnostic flow scheduling for commodity data centers. In 2015
+        USENIX Symposium on Networked Systems Design and Implementation (NSDI).                [18] Federal Communications Commission. 2016.            Raw data -
+        455­468.
+  [9] Abdelhak Bentaleb, Christian Timmerer, Ali C. Begen, and Roger Zimmermann.               measuring broadband america.          (2016).            https://www.fcc.
+        2019. bandwidth prediction in low-latency chunked streaming. In Proceedings
+                                                                                               gov/reports- research/reports/measuring- broadband- america/
+        of the 2019 ACM Workshop on Network and Operating Systems Support for Digital
+        Audio and Video. 7­13.                                                                 raw- data- measuring- broadband- america- 2016
+ [10] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan,
+        Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda             [19] Lei Deng, Guoqi Li, Song Han, Luping Shi, and Yuan Xie. 2020. Model compres-
+        Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan,
+        Rewon Child, Aditya Ramesh, Daniel Ziegler, Jeffrey Wu, Clemens Winter, Chris          sion and hardware acceleration for neural networks: A comprehensive survey.
+        Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess,
+        Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya Sutskever,          Proc. IEEE 108, 4 (2020), 485­532.
+        and Dario Amodei. 2020. Language Models are Few-Shot Learners. In Advances
+        in Neural Information Processing Systems, Vol. 33. 1877­1901.                          [20] Ning Ding, Shengding Hu, Weilin Zhao, Yulin Chen, Zhiyuan Liu, Haitao Zheng,
+ [11] Li Chen, Justinas Lingys, Kai Chen, and Feng Liu. 2018. Auto: Scaling deep
+        reinforcement learning for datacenter-scale automatic traffic optimization. In         and Maosong Sun. 2022. OpenPrompt: An open-source framework for prompt-
+        Proceedings of the 2018 ACM SIGCOMM Conference. 191­205.
+ [12] Lili Chen, Kevin Lu, Aravind Rajeswaran, Kimin Lee, Aditya Grover, Misha                 learning. In Proceedings of the 2022 Annual Meeting of the Association for Com-
+        Laskin, Pieter Abbeel, Aravind Srinivas, and Igor Mordatch. 2021. Decision
+        transformer: Reinforcement learning via sequence modeling. Advances in Neural          putational Linguistics: System Demonstrations. 105­113.
+        Information Processing Systems 34 (2021), 15084­15097.
+ [13] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde de                      [21] Ning Ding, Yujia Qin, Guang Yang, Fuchao Wei, Zonghan Yang, Yusheng Su,
+        Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas Joseph, Greg
+        Brockman, Alex Ray, Raul Puri, Gretchen Krueger, Michael Petrov, Heidy Khlaaf,         Shengding Hu, Yulin Chen, Chi-Min Chan, Weize Chen, et al. 2023. Parameter-
+        Girish Sastry, Pamela Mishkin, Brooke Chan, Scott Gray, Nick Ryder, Mikhail
+        Pavlov, Alethea Power, Lukasz Kaiser, Mohammad Bavarian, Clemens Winter,               efficient fine-tuning of large-scale pre-trained language models. Nature Machine
+        Philippe Tillet, Felipe Petroski Such, Dave Cummings, Matthias Plappert, Fotios
+        Chantzis, Elizabeth Barnes, Ariel Herbert-Voss, William Hebgen Guss, Alex              Intelligence 5, 3 (2023), 220­235.
+        Nichol, Alex Paino, Nikolas Tezak, Jie Tang, Igor Babuschkin, Suchir Balaji,
+        Shantanu Jain, William Saunders, Christopher Hesse, Andrew N. Carr, Jan Leike,         [22] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weissenborn,
+        Josh Achiam, Vedant Misra, Evan Morikawa, Alec Radford, Matthew Knight,
+        Miles Brundage, Mira Murati, Katie Mayer, Peter Welinder, Bob McGrew, Dario            Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer,
+        Amodei, Sam McCandlish, Ilya Sutskever, and Wojciech Zaremba. 2021. Evalu-
+        ating Large Language Models Trained on Code. arXiv preprint arXiv:2107.03374           Georg Heigold, Sylvain Gelly, Jakob Uszkoreit, and Neil Houlsby. 2021. An
+        (2021).
+ [14] Tatsuhiro Chiba and Tamiya Onodera. 2016. Workload characterization and                  image is worth 16x16 words: Transformers for image recognition at scale. arXiv
+        optimization of TPC-H queries on Apache Spark. In 2016 IEEE International
+        Symposium on Performance Analysis of Systems and Software (ISPASS). IEEE,              preprint arXiv:2010.11929 (2021).
+        112­121.
+ [15] Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma, Gaurav                  [23] Danny Driess, Fei Xia, Mehdi S. M. Sajjadi, Corey Lynch, Aakanksha Chowdh-
+        Mishra, Adam Roberts, Paul Barham, Hyung Won Chung, Charles Sutton, Se-
+        bastian Gehrmann, Parker Schuh, Kensen Shi, Sasha Tsvyashchenko, Joshua                ery, Brian Ichter, Ayzaan Wahid, Jonathan Tompson, Quan Vuong, Tianhe Yu,
+        Maynez, Abhishek Rao, Parker Barnes, Yi Tay, Noam Shazeer, Vinodkumar
+        Prabhakaran, Emily Reif, Nan Du, Ben Hutchinson, Reiner Pope, James Brad-              Wenlong Huang, Yevgen Chebotar, Pierre Sermanet, Daniel Duckworth, Sergey
+        bury, Jacob Austin, Michael Isard, Guy Gur-Ari, Pengcheng Yin, Toju Duke,
+        Anselm Levskaya, Sanjay Ghemawat, Sunipa Dev, Henryk Michalewski, Xavier               Levine, Vincent Vanhoucke, Karol Hausman, Marc Toussaint, Klaus Greff, Andy
+        Garcia, Vedant Misra, Kevin Robinson, Liam Fedus, Denny Zhou, Daphne Ip-
+        polito, David Luan, Hyeontaek Lim, Barret Zoph, Alexander Spiridonov, Ryan             Zeng, Igor Mordatch, and Pete Florence. 2023. Palm-e: An embodied multimodal
+        Sepassi, David Dohan, Shivani Agrawal, Mark Omernick, Andrew M. Dai, Thanu-
+        malayan Sankaranarayana Pillai, Marie Pellat, Aitor Lewkowycz, Erica Moreira,          language model. arXiv preprint arXiv:2303.03378 (2023).
+        Rewon Child, Oleksandr Polozov, Katherine Lee, Zongwei Zhou, Xuezhi Wang,
+        Brennan Saeta, Mark Diaz, Orhan Firat, Michele Catasta, Jason Wei, Kathy               [24] Xianglong Feng, Zeyang Bao, and Sheng Wei. 2021. Liveobj: Object semantics-
+
+                                                                                               based viewport prediction for live mobile virtual reality streaming. IEEE Trans-
+
+                                                                                               actions on Visualization and Computer Graphics 27, 5 (2021), 2736­2745.
+
+                                                                                               [25] DASH Industry Form. 2016. Reference Client 2.4.0. (2016). http://mediapm.
+
+                                                                                               edgesuite.net/dash/public/nightly/samples/dash- if- reference- player/index.
+
+                                                                                               html.
+
+                                                                                               [26] Elias Frantar and Dan Alistarh. 2023. Sparsegpt: Massive language models
+
+                                                                                               can be accurately pruned in one-shot. In Proceedings of the 2023 International
+
+                                                                                               Conference on Machine Learning. PMLR, 10323­10337.
+
+                                                                                               [27] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh. 2022. Optq:
+
+                                                                                               Accurate quantization for generative pre-trained transformers. In Proceedings
+
+                                                                                               of the 2022 International Conference on Learning Representations.
+
+                                                                                               [28] Chaoyou Fu, Peixian Chen, Yunhang Shen, Yulei Qin, Mengdan Zhang, Xu Lin,
+
+                                                                                               Jinrui Yang, Xiawu Zheng, Ke Li, Xing Sun, et al. 2023. Mme: A comprehensive
+
+                                                                                               evaluation benchmark for multimodal large language models. arXiv preprint
+
+                                                                                               arXiv:2306.13394 (2023).
+
+                                                                                               [29] Zihao Fu, Haoran Yang, Anthony Man-Cho So, Wai Lam, Lidong Bing, and
+
+                                                                                               Nigel Collier. 2023. On the effectiveness of parameter-efficient fine-tuning.
+
+                                                                                               Proceedings of the 2023 AAAI Conference on Artificial Intelligence, 12799­12807.
+
+                                                                                               [30] Archie Gertsman. 2024. spark-sched-sim: An apache spark job scheduling
+
+                                                                                               simulator, implemented as a Gymnasium environment. (2024). https://github.
+
+                                                                                               com/ArchieGertsman/spark- sched- sim
+
+                                                                                               [31] Amelia Glaese, Nat McAleese, Maja Trbacz, John Aslanides, Vlad Firoiu, Timo
+
+                                                                                               Ewalds, Maribeth Rauh, Laura Weidinger, Martin Chadwick, Phoebe Thacker,
+
+                                                                                               et al. 2022. Improving alignment of dialogue agents via targeted human judge-
+
+                                                                                               ments. arXiv preprint arXiv:2209.14375 (2022).
+
+                                                                                               [32] Robert Grandl, Ganesh Ananthanarayanan, Srikanth Kandula, Sriram Rao, and
+
+                                                                                               Aditya Akella. 2014. Multi-resource packing for cluster schedulers. In Proceedings
+
+                                                                                               of the 2014 ACM SIGCOMM Conference. 455­466.
+
+                                                                                               [33] Yu Guan, Chengyuan Zheng, Xinggong Zhang, Zongming Guo, and Junchen
+                                                                                               Jiang. 2019. Pano: Optimizing 360 video streaming with a better understanding
+
+                                                                                               of quality perception. In Proceedings of the 2019 ACM SIGCOMM Conference.
+
+                                                                                               394­407.
+
+                                                                                               [34] Quentin Guimard, Lucile Sassatelli, Francesco Marchetti, Federico Becattini,
+
+                                                                                               Lorenzo Seidenari, and Alberto Del Bimbo. 2022. Deep variational learning for
+                                                                                               multiple trajectory prediction of 360 head movements. In Proceedings of the
+
+                                                                                          673
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                           Wu et al.
+
+        2022 ACM Multimedia Systems Conference. 12­26.                                                Rives. 2023. Evolutionary-scale prediction of atomic-level protein structure
+ [35] Antonio Gulli and Sujit Pal. 2017. Deep learning with Keras. Packt Publishing                   with a language model. Science 379, 6637 (2023), 1123­1130.
+                                                                                                [56] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. 2023. Visual
+        Ltd.                                                                                          instruction tuning. arXiv preprint arXiv:2304.08485 (2023).
+ [36] Satyandra Guthula, Navya Battula, Roman Beltiukov, Wenbo Guo, and Arpit                   [57] Junhua Liu, Boxiang Zhu, Fangxin Wang, Yili Jin, Wenyi Zhang, Zihan Xu, and
+                                                                                                      Shuguang Cui. 2023. Cav3: Cache-assisted viewport adaptive volumetric video
+        Gupta. 2023. netFound: Foundation Model for Network Security. arXiv preprint                  streaming. In Proceedings of the 2023 IEEE Conference Virtual Reality and 3D User
+        arXiv:2310.17025 (2023).                                                                      Interfaces (VR). 173­183.
+ [37] Bo Han, Yu Liu, and Feng Qian. 2020. Vivo: Visibility-aware mobile volumetric             [58] Jing Liu, Bohan Zhuang, Zhuangwei Zhuang, Yong Guo, Junzhou Huang, Jin-
+        video streaming. In Proceedings of the 2020 ACM Annual International Conference               hui Zhu, and Mingkui Tan. 2022. Discrimination-aware network pruning for
+        on Mobile Computing and Networking. Article 11, 13 pages.                                     deep model compression. IEEE Transactions on Pattern Analysis and Machine
+ [38] Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean                  Intelligence 44, 8 (2022), 4035­4051.
+        Wang, Lu Wang, and Weizhu Chen. 2021. Lora: Low-rank adaptation of large                [59] Mingjie Liu, Teodor-Dumitru Ene, Robert Kirby, Chris Cheng, Nathaniel Pinck-
+        language models. arXiv preprint arXiv:2106.09685 (2021).                                      ney, Rongjian Liang, Jonah Alben, Himyanshu Anand, Sanmitra Banerjee, Ismet
+ [39] Te-Yuan Huang, Ramesh Johari, Nick McKeown, Matthew Trunnell, and Mark                          Bayraktaroglu, Bonita Bhaskaran, Bryan Catanzaro, Arjun Chaudhuri, Sharon
+        Watson. 2014. A buffer-based approach to rate adaptation: Evidence from a large               Clay, Bill Dally, Laura Dang, Parikshit Deshpande, Siddhanth Dhodhi, Sameer
+        video streaming service. In Proceedings of the 2014 ACM SIGCOMM Conference.                   Halepete, Eric Hill, Jiashang Hu, Sumit Jain, Brucek Khailany, George Kokai,
+        187­198.                                                                                      Kishor Kunal, Xiaowei Li, Charley Lind, Hao Liu, Stuart Oberman, Sujeet Omar,
+ [40] Michael Janner, Qiyang Li, and Sergey Levine. 2021. Offline reinforcement                       Sreedhar Pratty, Jonathan Raiman, Ambar Sarkar, Zhengjiang Shao, Hanfei Sun,
+        learning as one big sequence modeling problem. Advances in Neural Information                 Pratik P Suthar, Varun Tej, Walker Turner, Kaizhe Xu, and Haoxing Ren. 2023.
+        Processing Systems 34 (2021), 1273­1286.                                                      Chipnemo: Domain-adapted llms for chip design. arXiv preprint arXiv:2311.00176
+ [41] Ziwei Ji, Nayeon Lee, Rita Frieske, Tiezheng Yu, Dan Su, Yan Xu, Etsuko Ishii,                  (2023).
+        Ye Jin Bang, Andrea Madotto, and Pascale Fung. 2023. Survey of hallucination            [60] Pengfei Liu, Weizhe Yuan, Jinlan Fu, Zhengbao Jiang, Hiroaki Hayashi, and
+        in natural language generation. Comput. Surveys 55, 12, Article 248 (2023),                   Graham Neubig. 2023. Pre-train, prompt, and predict: A systematic survey
+        38 pages.                                                                                     of prompting methods in natural language processing. Comput. Surveys 55, 9
+ [42] Albert Q. Jiang, Alexandre Sablayrolles, Arthur Mensch, Chris Bamford, De-                      (2023), 1­35.
+        vendra Singh Chaplot, Diego de las Casas, Florian Bressand, Gianna Lengyel,             [61] Yuhan Liu, Hanchen Li, Kuntai Du, Jiayi Yao, Yihua Cheng, Yuyang Huang, Shan
+        Guillaume Lample, Lucile Saulnier, Lélio Renard Lavaud, Marie-Anne Lachaux,                   Lu, Michael Maire, Henry Hoffmann, Ari Holtzman, Ganesh Ananthanarayanan,
+        Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix,                   and Junchen Jiang. 2023. CacheGen: Fast Context Loading for Language Model
+        and William El Sayed. 2023. Mistral 7b. arXiv preprint arXiv:2310.06825 (2023).               Applications. arXiv preprint arXiv:2310.07240 (2023).
+ [43] Yili Jin, Junhua Liu, Fangxin Wang, and Shuguang Cui. 2022. Where are you                 [62] Hongzi Mao, Ravi Netravali, and Mohammad Alizadeh. 2017. Neural adaptive
+        looking? A large-scale dataset of head and gaze behavior for 360-degree videos                video streaming with pensieve. In Proceedings of the 2017 ACM SIGCOMM
+        and a pilot study. In Proceedings of the 2022 ACM International Conference on                 Conference. 197­210.
+        Multimedia. 1025­1034.                                                                  [63] Hongzi Mao, Malte Schwarzkopf, Shaileshh Bojja Venkatakrishnan, Zili Meng,
+ [44] Nuowen Kan, Yuankun Jiang, Chenglin Li, Wenrui Dai, Junni Zou, and Hongkai                      and Mohammad Alizadeh. 2019. Learning scheduling algorithms for data pro-
+        Xiong. 2022. Improving generalization for neural adaptive video streaming                     cessing clusters. In Proceedings of the 2019 ACM SIGCOMM Conference. 270­288.
+        via meta reinforcement learning. In Proceedings of the 2022 ACM International           [64] Lifan Mei, Runchen Hu, Houwei Cao, Yong Liu, Zifan Han, Feng Li, and Jin Li.
+        Conference on Multimedia. 3006­3016.                                                          2020. Realtime mobile bandwidth prediction using lstm neural network and
+ [45] Takeshi Kojima, Shixiang Shane Gu, Machel Reid, Yutaka Matsuo, and Yusuke                       bayesian fusion. Computer Networks 182 (2020), 107515.
+        Iwasawa. 2022. Large language models are zero-shot reasoners. Advances in               [65] Xuying Meng, Chungang Lin, Yequan Wang, and Yujun Zhang. 2023. Net-
+        Neural Information Processing Systems 35 (2022), 22199­22213.                                 gpt: Generative pretrained transformer for network traffic. arXiv preprint
+ [46] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng,                              arXiv:2304.09513 (2023).
+        Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. 2023. Efficient                [66] Zili Meng, Minhu Wang, Jiasong Bai, Mingwei Xu, Hongzi Mao, and Hongxin
+        memory management for large language model serving with pagedattention.                       Hu. 2020. Interpreting deep learning-based networking systems. In Proceedings
+        In Proceedings of the 2023 ACM Symposium on Operating Systems Principles.                     of the 2020 ACM SIGCOMM Conference. 154­171.
+        611­626.                                                                                [67] Risto Miikkulainen, Jason Liang, Elliot Meyerson, Aditya Rawal, Dan Fink,
+ [47] Sergey Levine, Aviral Kumar, George Tucker, and Justin Fu. 2020. Offline                        Olivier Francon, Bala Raju, Hormoz Shahrzad, Arshak Navruzyan, Nigel Duffy,
+        reinforcement learning: Tutorial, review, and perspectives on open problems.                  and Babak Hodjat. 2024. Evolving deep neural networks. In Artificial Intelligence
+        arXiv preprint arXiv:2005.01643 (2020).                                                       in the Age of Neural Networks and Brain Computing (Second Edition) (second
+ [48] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir                          edition ed.), Robert Kozma, Cesare Alippi, Yoonsuck Choe, and Francesco Carlo
+        Karpukhin, Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim                        Morabito (Eds.). Academic Press, 269­287.
+        Rocktäschel, Sebastian Riedel, and Douwe Kiela. 2020. Retrieval-Augmented               [68] Bonan Min, Hayley Ross, Elior Sulem, Amir Pouran Ben Veyseh, Thien Huu
+        Generation for Knowledge-Intensive NLP Tasks. In Advances in Neural Informa-                  Nguyen, Oscar Sainz, Eneko Agirre, Ilana Heintz, and Dan Roth. 2023. Recent
+        tion Processing Systems, Vol. 33. 9459­9474.                                                  advances in natural language processing via large pre-trained language models:
+ [49] Junyi Li, Xiaoxue Cheng, Wayne Xin Zhao, Jian-Yun Nie, and Ji-Rong Wen. 2023.                   A survey. Comput. Surveys 56, 2 (2023), 1­40.
+        Halueval: A large-scale hallucination evaluation benchmark for large language           [69] Seyed Iman Mirzadeh, Mehrdad Farajtabar, Ang Li, Nir Levine, Akihiro Mat-
+        models. In Proceedings of the 2023 Conference on Empirical Methods in Natural                 sukawa, and Hassan Ghasemzadeh. 2020. Improved knowledge distillation
+        Language Processing. 6449­6464.                                                               via teacher assistant. In Proceedings of the 2020 AAAI Conference on Artificial
+ [50] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi. 2023. Blip-2: Boot-                      Intelligence. 5191­5198.
+        strapping language-image pre-training with frozen image encoders and large              [70] Ravi Netravali, Anirudh Sivaraman, Somak Das, Ameesh Goyal, Keith Winstein,
+        language models. arXiv preprint arXiv:2301.12597 (2023).                                      James Mickens, and Hari Balakrishnan. 2015. Mahimahi: accurate record-and-
+ [51] Minghao Li, Ruihang Wang, Xin Zhou, Zhaomeng Zhu, Yonggang Wen, and                             replay for http. In 2015 USENIX Annual Technical Conference (USENIX ATC).
+        Rui Tan. 2023. Chattwin: Toward automated digital twin generation for data                    417­429.
+        center via large language models. In Proceedings of the 2023 ACM International          [71] OpenAI. 2023. Gpt-4 technical report. arXiv preprint arXiv:2303.08774 (2023).
+        Conference on Systems for Energy-Efficient Buildings, Cities, and Transportation.       [72] OpenAI. 2024. Chatgpt. (2024). https://chat.openai.com/chat
+        208­211.                                                                                [73] Fannia Pacheco, Ernesto Exposito, Mathieu Gineste, Cedric Baudoin, and Jose
+ [52] Yinheng Li, Shaofei Wang, Han Ding, and Hang Chen. 2023. Large Language                         Aguilar. 2018. Towards the deployment of machine learning solutions in network
+        Models in Finance: A Survey. In Proceedings of the ACM International Conference               traffic classification: A systematic survey. IEEE Communications Surveys &
+        on AI in Finance. Association for Computing Machinery, New York, NY, USA,                     Tutorials 21, 2 (2018), 1988­2014.
+        374­382.                                                                                [74] Shirui Pan, Linhao Luo, Yufei Wang, Chen Chen, Jiapu Wang, and Xindong Wu.
+ [53] Zhi Li, Xiaoqing Zhu, Joshua Gahm, Rong Pan, Hao Hu, Ali C Begen, and David                     2024. Unifying Large Language Models and Knowledge Graphs: A Roadmap.
+        Oran. 2014. Probe and adapt: Rate adaptation for http video streaming at scale.               IEEE Transactions on Knowledge and Data Engineering (2024), 1­20.
+        IEEE Journal on Selected Areas in Communications 32, 4 (2014), 719­733.                 [75] Wonpyo Park, Dongju Kim, Yan Lu, and Minsu Cho. 2019. Relational knowledge
+ [54] Xinjie Lin, Gang Xiong, Gaopeng Gou, Zhen Li, Junzheng Shi, and Jing Yu.                        distillation. In Proceedings of the 2019 IEEE/CVF Conference on Computer Vision
+        2022. Et-bert: A contextualized datagram representation with pre-training                     and Pattern Recognition. 3967­3976.
+        transformers for encrypted traffic classification. In Proceedings of the 2022 ACM       [76] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gre-
+        Web Conference. 633­642.                                                                      gory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga,
+ [55] Zeming Lin, Halil Akin, Roshan Rao, Brian Hie, Zhongkai Zhu, Wenting Lu,                        Alban Desmaison, Andreas Kopf, Edward Yang, Zachary DeVito, Martin Raison,
+        Nikita Smetanin, Robert Verkuil, Ori Kabeli, Yaniv Shmueli, Allan dos San-
+        tos Costa, Maryam Fazel-Zarandi, Tom Sercu, Salvatore Candido, and Alexander
+
+                                                                                           674
+NetLLM: Adapting Large Language Models for Networking                                            ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+        Alykhan Tejani, Sasank Chilamkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and            [94] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+        Soumith Chintala. 2019. Pytorch: An imperative style, high-performance deep                     Aidan N Gomez, Lukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you
+        learning library. Advances in Neural Information Processing Systems 32 (2019).                  need. Advances in Neural Information Processing Systems 30 (2017).
+ [77] Guilherme Penedo, Quentin Malartic, Daniel Hesslow, Ruxandra Cojocaru,
+        Alessandro Cappelli, Hamza Alobeidli, Baptiste Pannier, Ebtesam Almazrouei,              [95] Xiangwen Wang, Xianghong Lin, and Xiaochao Dang. 2020. Supervised learning
+        and Julien Launay. 2023. The refinedweb dataset for falcon llm: Outper-                         in spiking neural networks: A review of algorithms and evaluations. Neural
+        forming curated corpora with web data, and web data only. arXiv preprint                        Networks 125 (2020), 258­280.
+        arXiv:2306.01116 (2023).
+ [78] Yanghua Peng, Yixin Bao, Yangrui Chen, Chuan Wu, Chen Meng, and Wei Lin.                   [96] Jason Wei, Maarten Bosma, Vincent Y Zhao, Kelvin Guu, Adams Wei Yu, Brian
+        2021. Dl2: A deep learning-driven scheduler for deep learning clusters. IEEE                    Lester, Nan Du, Andrew M Dai, and Quoc V Le. 2022. Finetuned language
+        Transactions on Parallel and Distributed Systems 32, 8 (2021), 1947­1960.                       models are zero-shot learners. arXiv preprint arXiv:2109.01652 (2022).
+ [79] Rafael Figueiredo Prudencio, Marcos R. O. A. Maximo, and Esther Luna Colom-
+        bini. 2023. A survey on offline reinforcement learning: Taxonomy, review, and            [97] Chenglei Wu, Zhihao Tan, Zhi Wang, and Shiqiang Yang. 2017. A dataset for
+        open problems. IEEE Transactions on Neural Networks and Learning Systems                        exploring user behaviors in VR spherical video streaming. In Proceedings of the
+        (2023), 1­21.                                                                                   8th ACM on Multimedia Systems Conference. 193­198.
+ [80] Feng Qian, Bo Han, Qingyang Xiao, and Vijay Gopalakrishnan. 2018. Flare:
+        Practical viewport-adaptive 360-degree video streaming for mobile devices. In            [98] Chenglei Wu, Ruixiao Zhang, Zhi Wang, and Lifeng Sun. 2020. A spherical
+                                                                                                        convolution approach for learning long term viewport prediction in 360 immer-
+        Proceedings of the 2018 ACM Annual International Conference on Mobile Comput-                   sive video. In Proceedings of the 2020 AAAI Conference on Artificial Intelligence.
+        ing and Networking. 99­114.                                                                     14003­14040.
+ [81] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang,
+        Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. 2020. Exploring the limits          [99] Duo Wu, Panlong Wu, Miao Zhang, and Fangxin Wang. 2023. Mansy: General-
+        of transfer learning with a unified text-to-text transformer. The Journal of                    izing neural adaptive immersive video streaming with ensemble and represen-
+        Machine Learning Research 21, 1 (2020), 5485­5551.                                              tation learning. arXiv preprint arXiv:2311.06812 (2023).
+ [82] Scott Reed, Konrad Zolna, Emilio Parisotto, Sergio Gomez Colmenarejo, Alexan-
+        der Novikov, Gabriel Barth-Maron, Mai Gimenez, Yury Sulsky, Jackie Kay,                 [100] Yuxiang Wu, Yu Zhao, Baotian Hu, Pasquale Minervini, Pontus Stenetorp, and
+        Jost Tobias Springenberg, Tom Eccles, Jake Bruce, Ali Razavi, Ashley Edwards,                   Sebastian Riedel. 2022. An Efficient Memory-Augmented Transformer for
+        Nicolas Heess, Yutian Chen, Raia Hadsell, Oriol Vinyals, Mahyar Bordbar, and                    Knowledge-Intensive NLP Tasks. In Proceedings of the 2022 EMNLP Conference.
+        Nando de Freitas. 2022. A generalist agent. arXiv preprint arXiv:2205.06175                     5184­5196.
+        (2022).
+ [83] Pengzhen Ren, Yun Xiao, Xiaojun Chang, Po-yao Huang, Zhihui Li, Xiaojiang                 [101] Zonghan Wu, Shirui Pan, Fengwen Chen, Guodong Long, Chengqi Zhang, and
+        Chen, and Xin Wang. 2021. A Comprehensive Survey of Neural Architecture                         Philip S. Yu. 2021. A Comprehensive Survey on Graph Neural Networks. IEEE
+        Search: Challenges and Solutions. ACM Comput. Surv. 54, 4, Article 76 (may                      Transactions on Neural Networks and Learning Systems 32, 1 (2021), 4­24.
+        2021), 34 pages.
+ [84] Haakon Riiser, Paul Vigmostad, Carsten Griwodz, and Pål Halvorsen. 2013.                  [102] Zhiheng Xi, Wenxiang Chen, Xin Guo, Wei He, Yiwen Ding, Boyang Hong, Ming
+        Commute path bandwidth traces from 3G networks: analysis and applications.                      Zhang, Junzhe Wang, Senjie Jin, Enyu Zhou, et al. 2023. The rise and potential
+        In Proceedings of the 2013 ACM Multimedia Systems Conference. 114­118.                          of large language model based agents: A survey. arXiv preprint arXiv:2309.07864
+ [85] Miguel Fabián Romero Rondón, Lucile Sassatelli, Ramón Aparicio-Pardo, and                         (2023).
+        Frédéric Precioso. 2022. Track: A new method from a re-examination of deep
+        architectures for head motion prediction in 360 videos. IEEE Transactions on            [103] Zhengxu Xia, Yajie Zhou, Francis Y Yan, and Junchen Jiang. 2022. Genet:
+        Pattern Analysis and Machine Intelligence 44, 9 (2022), 5681­5699.                              Automatic curriculum generation for learning adaptation in networking. In
+ [86] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov.                    Proceedings of the 2022 ACM SIGCOMM Conference. 397­413.
+        2017. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347
+        (2017).                                                                                 [104] Canwen Xu and Julian McAuley. 2023. A survey on model compression and
+ [87] Apache Spark. 2024. Job Scheduling - Spark 3.5.0 Documentation. (2024).                           acceleration for pretrained language models. In Proceedings of the 2023 AAAI
+        https://spark.apache.org/docs/latest/job-scheduling.html Accessed: 2024-01-08.                  Conference on Artificial Intelligence. 10566­10575.
+ [88] Richard S Sutton and Andrew G Barto. 2018. Reinforcement learning: An intro-
+        duction. MIT press.                                                                     [105] Francis Y Yan, Hudson Ayers, Chenzhi Zhu, Sadjad Fouladi, James Hong, Keyi
+ [89] Chen Tang, Kai Ouyang, Zhi Wang, Yifei Zhu, Wen Ji, Yaowei Wang, and Wenwu                        Zhang, Philip Levis, and Keith Winstein. 2020. Learning in situ: A random-
+        Zhu. 2022. Mixed-precision neural network quantization via learned layer-wise                   ized experiment in video streaming. In 2020 USENIX Symposium on Networked
+        importance. In Proceedings of the 2022 European Conference on Computer Vision.                  Systems Design and Implementation (NSDI). 495­511.
+        Springer Nature Switzerland, 259­275.
+ [90] Chen Tang, Haoyu Zhai, Kai Ouyang, Zhi Wang, Yifei Zhu, and Wenwu Zhu.                    [106] Chen-Yu Yen, Soheil Abbasloo, and H Jonathan Chao. 2023. Computers Can
+        2022. Arbitrary bit-width network: A joint layer-wise quantization and adaptive                 Learn from the Heuristic Designs and Master Internet Congestion Control. In
+        inference approach. In Proceedings of the 2022 ACM International Conference on                  Proceedings of the 2023 ACM SIGCOMM Conference. 255­274.
+        Multimedia. 2899­2908.
+ [91] Gemini Team, Rohan Anil, Sebastian Borgeaud, Yonghui Wu, Jean-Baptiste                    [107] Xiaoqi Yin, Abhishek Jindal, Vyas Sekar, and Bruno Sinopoli. 2015. A control-
+        Alayrac, Jiahui Yu, Radu Soricut, Johan Schalkwyk, Andrew M Dai, Anja Hauth,                    theoretic approach for dynamic adaptive video streaming over http. In Proceed-
+        et al. 2023. Gemini: a family of highly capable multimodal models. arXiv preprint               ings of the 2015 ACM SIGCOMM Conference. 325­338.
+        arXiv:2312.11805 (2023).
+ [92] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi,                   [108] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen, Shuohui
+        Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti                      Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria Lin, Todor Mihaylov,
+        Bhosale, Dan Bikel, Lukas Blecher, Cristian Canton Ferrer, Moya Chen, Guillem                   Myle Ott, Sam Shleifer, Kurt Shuster, Daniel Simig, Punit Singh Koura, Anjali
+        Cucurull, David Esiobu, Jude Fernandes, Jeremy Fu, Wenyin Fu, Brian Fuller,                     Sridhar, Tianlu Wang, and Luke Zettlemoyer. 2022. Opt: Open pre-trained
+        Cynthia Gao, Vedanuj Goswami, Naman Goyal, Anthony Hartshorn, Saghar                            transformer language models. arXiv preprint arXiv:2205.01068 (2022).
+        Hosseini, Rui Hou, Hakan Inan, Marcin Kardas, Viktor Kerkez, Madian Khabsa,
+        Isabel Kloumann, Artem Korenev, Punit Singh Koura, Marie-Anne Lachaux,                  [109] Yihua Zhang, Yuguang Yao, Parikshit Ram, Pu Zhao, Tianlong Chen, Mingyi
+        Thibaut Lavril, Jenya Lee, Diana Liskovich, Yinghai Lu, Yuning Mao, Xavier                      Hong, Yanzhi Wang, and Sijia Liu. 2022. Advancing model pruning via bi-level
+        Martinet, Todor Mihaylov, Pushkar Mishra, Igor Molybog, Yixin Nie, Andrew                       optimization. Advances in Neural Information Processing Systems 35 (2022),
+        Poulton, Jeremy Reizenstein, Rashi Rungta, Kalyan Saladi, Alan Schelten, Ruan                   18309­18326.
+        Silva, Eric Michael Smith, Ranjan Subramanian, Xiaoqing Ellen Tan, Binh Tang,
+        Ross Taylor, Adina Williams, Jian Xiang Kuan, Puxin Xu, Zheng Yan, Iliyan               [110] Haiyan Zhao, Hanjie Chen, Fan Yang, Ninghao Liu, Huiqi Deng, Hengyi Cai,
+        Zarov, Yuchen Zhang, Angela Fan, Melanie Kambadur, Sharan Narang, Aurelien                      Shuaiqiang Wang, Dawei Yin, and Mengnan Du. 2024. Explainability for large
+        Rodriguez, Robert Stojnic, Sergey Edunov, and Thomas Scialom. 2023. Llama 2:                    language models: A survey. ACM Transactions on Intelligent Systems and Tech-
+        Open foundation and fine-tuned chat models. arXiv preprint arXiv:2307.09288                     nology 15, 2 (2024), 1­38.
+        (2023).
+ [93] Hado Van Hasselt, Arthur Guez, and David Silver. 2016. Deep reinforcement                 [111] Hao Zhou, Chengming Hu, Ye Yuan, Yufei Cui, Yili Jin, Can Chen, Haolun
+        learning with double q-learning. In Proceedings of the 2016 AAAI Conference on                 Wu, Dun Yuan, Li Jiang, Di Wu, et al. 2024. Large Language Model (LLM) for
+        Artificial Intelligence, Vol. 30.                                                               Telecommunications: A Comprehensive Survey on Principles, Key Techniques,
+                                                                                                        and Opportunities. arXiv preprint arXiv:2405.10825 (2024).
+
+                                                                                                [112] Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia, Jialin
+                                                                                                       Wu, Paul Wohlhart, Stefan Welker, Ayzaan Wahid, Quan Vuong, Vincent Van-
+                                                                                                        houcke, Huong Tran, Radu Soricut, Anikait Singh, Jaspiar Singh, Pierre Ser-
+                                                                                                        manet, Pannag R. Sanketi, Grecia Salazar, Michael S. Ryoo, Krista Reymann,
+                                                                                                        Kanishka Rao, Karl Pertsch, Igor Mordatch, Henryk Michalewski, Yao Lu, Sergey
+                                                                                                        Levine, Lisa Lee, Tsang-Wei Edward Lee, Isabel Leal, Yuheng Kuang, Dmitry
+                                                                                                        Kalashnikov, Ryan Julian, Nikhil J. Joshi, Alex Irpan, Brian Ichter, Jasmine Hsu,
+                                                                                                        Alexander Herzog, Karol Hausman, Keerthana Gopalakrishnan, Chuyuan Fu,
+                                                                                                        Pete Florence, Chelsea Finn, Kumar Avinava Dubey, Danny Driess, Tianli Ding,
+                                                                                                        Krzysztof Marcin Choromanski, Xi Chen, Yevgen Chebotar, Justice Carbajal,
+                                                                                                        Noah Brown, Anthony Brohan, Montserrat Gonzalez Arenas, and Kehang Han.
+                                                                                                        2023. Rt-2: Vision-language-action models transfer web knowledge to robotic
+                                                                                                        control. In Proceedings of the 2023 PMLR Conference on Robot Learning (CoRL).
+                                                                                                        2165­2183.
+
+                                                                                           675
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                      Wu et al.
+
+ History       Timestep   Roll          Pitch   Yaw                         Table 2: Summary of setting information in VP simulation. hw/pw
+Viewports          1     6.7602        4.4046  150.33                       is short for historical window/prediction window.
+                   ...
+(Time-series)              ...           ...     ...   Wrapped                  Setting      Viewport Dataset  Prediction Setup
+                   5                                       by
+                         6.0234        8.7424  151.76                        default train          Jin2022     hw =2s, pw = 4s
+                                                       Template               default test          Jin2022     hw = 2s, pw = 4s
+               The past 5 viewports were:                                   unseen setting1         Jin2022     hw = 4s, pw = 6s
+Prompt         (6.7602,4.4046,150.33)                                       unseen setting2        Wu2017       hw = 2s, pw = 4s
+               ...                                                          unseen setting3        Wu2017       hw = 4s, pw = 6s
+  (Text)
+               (6.0234,8.7424,151.76)
+               What are the next 5 viewports?
+
+                         Llama2-7B (LLM)               Tunable                 For the multimodal encoder, we utilize ViT [22] to encode images,
+                                                                            and 1D-CNN [62] to encode time-series and sequence data (e.g.,
+Answer         (5.3556,8.4978,151.91)                                       historical throughputs and future chunk sizes at different bitrates
+               ...                                                          in ABR). We leverage fully connected layer to extract features from
+  (Text)                                                                    scalar data (e.g., buffer occupancy in ABR), and use GNN [63, 101]
+               (12.782,0.7158,123.76)                                       to process graph information (e.g., DAGs in CJS). By default, the
+                                                          Post              multimodal encoders are trainable, except that the parameters of
+Predicted      Timestep   Roll          Pitch   Yaw    Processing           ViT are frozen. This is because ViT has open source pre-trained
+Viewports          6     5.3556        8.4978  151.91                       weights which can be used to effectively extract image features.
+                   ...
+(Time-series)              ...           ...     ...                           The networking heads can be easily customized according to
+                   10                                                       the target networking tasks. Specifically, we design the VP head
+                         12.782        0.7158  123.76                       to predict the viewport coordinates of roll, pitch, and yaw values.
+                                                                            The ABR head is designed to output the probability distribution of
+Figure 17: Illustration of using prompt learning [60] to adapt the          candidate bitrates. As for CJS task, we design two heads for action
+Llama2-7B LLM [92] for the VP task.                                         generation: one to determine the next job stage to run and the other
+                                                                            to decide the number of executor resources allocated to that stage.
+A APPENDICES
+                                                                               Regarding the DD-LRNA scheme, we configure the context win-
+Appendices are supporting material that has not been peer-reviewed.         dow  for learning return distribution as 10 and 20 for ABR and
+                                                                            CJS, respectively. We then set the rank  of low-rank matrices to
+A.1 Details of Figure 2                                                     be 32, 128 and 128, for VP, ABR and CJS, respectively. While ad-
+                                                                            ditional tuning of ,  may be beneficial, we empirically find that
+The details to produce the results of "Prompt Learning" and "Token          NetLLM performs well across a wide range of hyperparameter val-
+Prediction" in Figure 2 are illustrated in Figure 17 and described          ues (generally,   10 and   32 will yield good performance).
+as follows. We use prompt learning [60] to adapt the Llama2-7B              Thus, we do not employ sophisticated methods to tune these hy-
+LLM for the VP task. Specifically, we design a prompt template              perparameters and keep them fixed throughout the experiments
+to encapsulate time-series viewports into textual prompts, and              in §5. As for experience collection, we use GENET [103] and Dec-
+instruct Llama2 [92] to generate answers for the VP task based              ima [63] to collect experience datasets for the RL-based ABR and
+on token prediction. We conduct our measurements on an existing             CJS tasks, respectively. While using more algorithms to interact
+immersive video viewport dataset [43]. As a motivating example,             with the environments for more epochs to expend the datasets may
+we use Llama2 to predict future viewports in the next 1 second              yield potential benefits, we leave this for future exploration.
+based on past viewports in the last 1 second. Following previous
+works [34, 85], the viewport sampling rate is set to 5Hz, thus the          A.3 Overview of Baselines
+future viewports and historical viewports are both 5-sample long.
+Note that Llama2 initially achieves poor performance without any            In our evaluation, we compare the performance of the LLM adapted
+fine-tuning. Hence, we further use OpenPrompt [20], an open-                by our NetLLM framework with three baselines for each task, in-
+source prompt learning framework, to fine-tune Llama2 for 100000            cluding state-of-the-art learning-based algorithms and rule-based
+iterations over the viewport dataset.                                       algorithms. The following provides an overview of each baseline
+                                                                            used in our evaluation.
+   Note that in Figure 2 (middle), we calculate the fraction of valid       Baselines for VP. We implement the following three baselines
+answers generated by token prediction. In our practical implemen-           for performance comparison for the VP task: TRACK [85], linear
+tation, we consider an answer as valid if we can extract viewports          regression (labeled "LR") [80], and velocity-based prediction (la-
+from it following a series of pre-defined string parsing operations.        beled "Velocity") [24]. TRACK [85] is a learning-based algorithm
+On the other hand, an invalid answer is often the case where it             that designs a DNN model based on Long Short Term Memory
+contains invalid characters (e.g., unexpected punctuation) or misses        (LSTM) architecture for VP. It considers both viewer's historical
+some values. While designing complex rules to post-process an-              viewports and video saliency map as inputs to achieve state-of-the-
+swers can alleviate the issue of invalid answers, it introduces the         art performance, where saliency map is an image that describes
+overhead of answer engineering [51].                                        viewer's potential attention on the video content. LR [80] assumes
+                                                                            the movement of viewer's viewports as a linear function related
+A.2 Details of NetLLM Implementation
+
+We have integrated NetLLM into three existing codebases for VP [99],
+ABR [103], and CJS [30]. We have implemented the APIs in Figure 9
+based on the functionalities provided in the codebases. Additional
+details of NetLLM implementation are explained as follows.
+
+                                                                       676
+NetLLM: Adapting Large Language Models for Networking                                   ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+Table 3: Summary of setting information in ABR simulation.                              Table 4: Summary of setting information in CJS simulation.
+
+    Setting      Video Dataset  Bandwidth Traces                                            setting      Job Requests  Executor Resources(k)
+
+ default train   Envivio-Dash3           FCC                                             default train         200                  50
+  default test   Envivio-Dash3           FCC                                              default test         200                  50
+unseen setting1  Envivio-Dash3       SynthTrace                                         unseen setting1        200                  30
+unseen setting2                          FCC                                            unseen setting2        450                  50
+unseen setting3    SynthVideo        SynthTrace                                         unseen setting3        450                  30
+                   SynthVideo
+
+to time, then uses linear regression to estimate such function for                      Furthermore, we make use of the pre-trained model weights of Dec-
+predicting viewer's viewports. Velocity [24] calculates the moving                      ima6 provided in [30]. Additionally, we adopt the implementation
+speed of viewer's historical viewports and uses it to estimate the                      of FIFO and Fair from the same source [30].
+positions of viewer's future viewports.
+                                                                                        A.4 Details of Simulation Settings
+   Note that since the open-source codes of TRACK are originally
+written in Keras [35], we carefully convert its codes into PyTorch [76]                 We generate different simulation environments with real-world
+to make TRACK compatible with the VP codebase [99]. We have                             and synthetic datasets for training and testing to comprehensively
+ensured that our implementation preserves the same functionality                        evaluate the performance of the LLM adapted by NetLLM against
+of TRACK as its original implementation. Besides, as TRACK does                         baselines. The detailed simulation settings for each task are ex-
+not offer pre-trained model weights, we re-train it from scratch on                     plained as follows.
+our datasets with the same training hyperparameters described in                        VP simulation. As shown in Table 2, by default, we train and
+TRACK's paper and codes. As for rule-based algorithms LR and                            test each method on a large-scale viewport dataset Jin2022 [43]
+Velocity, which do not provide open source implementation, we                           which records the viewport traces from 84 viewers7 watching 27
+implement them ourselves by strictly following the same ideas and                       60-second immersive videos. We randomly select 15 videos and 42
+formulas presented in their respective papers.                                          viewers for training, 6 videos and 21 viewers for validation, 6 videos
+Baselines for ABR. As for ABR, the following baselines are im-                          and 21 viewers for testing. This results in a total of 882 traces for
+plemented for comparison: GENET [103], BBA [39] and MPC [107].                          experiments. The historical window (hw) and prediction window
+GENET [103] is a RL-based streaming algorithm improved over                             (pw) are set to be 2 seconds and 4 seconds, respectively, for the
+Pensieve [62]. It introduces a curriculum learning technique to                         default training and testing settings.
+facilitate the RL training process to improve convergence perfor-
+mance. BBA [39] considers buffer occupancy as a critical signal                            When evaluating generalization performance, we test each method
+for bitrate control and designs an algorithm to maintain the play-                      on a new viewport dataset (i.e., new data distributions) and/or with
+back buffer occupancy at a desired level. MPC [107] leverages both                      a new prediction setup (i.e., increasing prediction difficulty). For
+throughput estimates and buffer occupancy to choose bitrates by                         instance, on unseen setting2, we evaluate each method on the new
+optimizing a given QoE metric over a future chunk horizon.                              Wu2017 dataset [97]. This dataset contains 9 videos8 with an av-
+                                                                                        erage length of 242 seconds watched by 48 viewers. We randomly
+   To implement the aforementioned ABR baselines, we utilize                            sample 4 videos and 9 viewers from the dataset, resulting in 36 long
+the open-source codes of GENET [103], which already include the                         viewport traces for testing generalization. As for unseen setting1,
+implementation of the three algorithms. Furthermore, we re-use                          we increase pw to increase the prediction difficulty for each method.
+the pre-trained model weights of GENET5 for our experiments.                            Following the setting in [80], we roughly set hw  pw / 2 across all
+Baselines for CJS. The following three baselines are implemented                        settings. Changing the coefficient does not qualitatively affect the
+for the CJS task: Decima [63], first-in-first-out scheduling (labeled                   results.
+"FIFO") [87] and fair scheduling (labeled "Fair") [87]. Decima [63]                     ABR simulation. Table 3 summarizes the simulation settings for
+is a RL model for job scheduling in the distributed computing clus-                     ABR. By default, we train and test all methods to stream the Envivio-
+ter, which develops a graph neural network (GNN) to efficiently                         Dash3 video from the DASH-246 JavaScript reference client [25],
+process DAG information of job properties (e.g., resource demands                       whose format follows the GENET [103] and Pensieve [62] setting.
+and dependency). Both FIFO and Fair are two common scheduling                           We use the broadband FCC [18] traces as the default bandwidth
+algorithms used by data processing system Spark [87]. The former                        dataset. In particular, we use the same traces for training and val-
+schedules jobs in the order of their arrival and allocates the re-                      idation as those used by GENET, which compromise 235 traces
+quested amount of resources to each job, while the latter schedules                     for training and 150 traces for validation. Then, we randomly sam-
+jobs in a "round robin" fashion to ensure that each job receives a                      ple 100 traces from the remaining dataset for testing. This results
+roughly equal share of the cluster.                                                     in the use of more than 90 hours of bandwidth traces for exper-
+                                                                                        iments. To simulate environments for generalization testing, we
+   We utilize the PyTorch re-implementation of Decima [30] for our                      follow the method in Pensieve [62] to generate a synthetic video
+experiments as the original implementation is somewhat outdated.
+                                                                                        6 https://github.com/ArchieGertsman/spark- sched- sim/tree/main/models/decima
+5 https://github.com/GenetProject/Genet/tree/main/src/emulator/abr/pensieve/data/       7The Jin2022 dataset originally contains the viewport traces from 100 viewers [43].
+mahimahi_new_best_models/ADR_model                                                      We filter out those incomplete ones (i.e., less than 60 seconds in duration) and finally
+                                                                                        use the traces from 84 viewers for experiments.
+                                                                                        8The Wu2017 dataset originally includes 18 videos. We use the first 9 videos as viewers
+                                                                                        are free to look around when watching these videos.
+
+                                                                                   677
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                               Wu et al.
+
+SynthVideo which shares a similar format of Envivio-Dash3 but               Mahimahi [70] to emulate different network environments from
+with a larger video bitrate. Besides, we also generate a new band-          the broadband traces [18] and cellular mobile traces [84], along
+width dataset SynthTrace with 100 traces according to the method            with an 80ms RTT, between the client and server. In particular, we
+in Pensieve [62], which exhibits a larger bandwidth range and more          randomly sample 100 traces from both the broadband and cellular
+dynamic fluctuation patterns than FCC.                                      mobile bandwidth datasets for network environment emulation.
+CJS simulation. Table 4 provides the detailed information of the
+CJS simulation. Following Decima [63], we simulate different work-          A.6 Evaluation Metrics
+load traces using a real-world dataset TPC-H [14] which contains
+job requests of large data volumes, high executor demands, and              Metric for VP. We use mean absolute error (MAE) as the evaluation
+high degree of complexity. To be consistent with the settings used
+by the pre-trained Decima in [30], we set the number of job re-             metric for the VP task. Let  = ( ,  ,  ) denote the viewport co-
+quests to be 200 and the number of executor resources (represent-           ordinate at timestep , where , ,  represent the roll, pitch and yaw
+ing computation resources) to be 50k units as the default training
+and testing settings. To evaluate the generalization performance            values, respectively. Given ,  as the predicted and ground-truth
+of each method, we simulate various unseen harder workloads by              viewports and  as the prediction horizon, the MAE is calculated
+increasing the number of job requests and reducing the number of
+executor resources, as also done in Decima [63]. Note that in each          by:
+setting the job requests are randomly sampled from the TPC-H
+dataset. Besides, when evaluating on the default testing setting, we                 1       |   -      |  +  |  -     |  +  |   -  )|
+have ensured that the job requests are different from those in the
+training setting. This can be easily done by setting different random                                               
+seeds for data sampling.                                                                          
+                                                                                  =
+A.5 Real-world ABR Testbed Setup                                                                                 3
+                                                                                      =1
+We leverage the testbed from GENET [103] to test the NetLLM-
+adapted Llama2 in a real-world client-server ABR system. The                Metric for ABR. We use quality of experience (QoE) as the eval-
+testbed modifies dash.js (version 2.4) to support BBA, MPC and              uation metric for the ABR task, which is defined as the weighted
+GENET streaming algorithms. We further modify the dash.js to                linear combination of three metrics [62, 103]:
+support the adapted Llama2. In our real-world tests, the client
+video player is a Google Chrome browser (version 87) and the video                =       (      -               -  )
+server (Apache version 2.7) runs on the same machine as the client.                   =1
+All tests are performed on our Linux server, with two different
+ports to emulate the ABR client and video server. We then use                                                 
+
+                                                                            where  is the bitrate in Mbps of chunk ,   is the re-
+                                                                            buffering time in seconds of downloading chunk , 
+                                                                            is the bitrate change in Mbps between consequtive chunks,  is the
+
+                                                                            number of chunks of the video and ,  are the weight parameters.
+
+                                                                            Following Pensieve [62], we set  = 4.3 and  = 1.
+
+                                                                            Metric for CJS. We use job completion time (JCT) [63] as the
+
+                                                                            evaluation metric for the CJS task. Let  denote the arrival time of
+                                                                            a job and  denote the finishing time of a job. The JCT is calculated
+                                                                            by:
+
+                                                                                              =  - 
+
+                                                                       678
+

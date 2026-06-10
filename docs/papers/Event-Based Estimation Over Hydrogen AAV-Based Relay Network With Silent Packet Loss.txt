@@ -1,0 +1,869 @@
+          This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+IEEE TRANSACTIONS ON CYBERNETICS                                                                                                                            1
+
+Event-Based Estimation Over Hydrogen AAV-Based
+       Relay Network With Silent Packet Loss
+
+          Shi Liang , Hong Lin , Min Xia , Member, IEEE, and Yukang Cui , Senior Member, IEEE
+
+   Abstract--Silent packet loss (SPL) poses a significant challenge         yk, Yk   Measurements obtained by the estimator
+for state estimation, due to the lack of information regarding the          k
+packet loss status (PLS). This issue is particularly prominent in           , ek     at time k; Set of measurements that Yk =
+event-based systems, where the interplay between event-triggered            k        {y1, y2, . . . , yk}.
+feedback mechanisms and SPL complicates the estimation pro-                 I,       Status information about whether Cxk has
+cess. Existing approaches often employ detectors, but achieving             k, vk
+100% detection accuracy remains nearly impossible, and false                         been transmitted.
+detections further complicate the probability distribution of               ~k, v~k
+system states. In this article, we propose a silent message-passing                  Scheduler's threshold for transmitting
+mechanism (SMPM) to address the SPL of measurements, which
+may be coupled with an event-based scheduler, as the feedback                        sensor data yk; ek yk - E[yk|Yk-1] is the
+channel is also affected by the SPL. Besides, a dynamic Chi-
+square (d­X 2) detector is proposed, whose detection accuracy is                     innovation.
+proven to converge to 100% with time. Subsequently, an estima-
+tor based on the d­X 2 detector under the SMPM is designed                           Status information about whether Cxk has
+for unstable systems with the SPL of measurements. More
+importantly, a stability condition is established, revealing the                     been lost or not; It follows a Bernoulli
+relationship between the SPL rate and estimation performance.
+Both simulations and experiments validate the effectiveness of                       distribution.
+the theoretical findings presented in this article.
+                                                                                     Packet         loss  status                          (PLS):
+   Index Terms--Chi-square detector, event-based scheduling,
+silent packet loss (SPL), stability analysis, state estimation.                      I       {1, 2, . . . , k}; Packet loss rate
+
+                           NOMENCLATURE                                              (PLR): E[k].
+
+                                                                                     Process noise follows a Gaussian distri-
+
+                                                                                     bution Gk (0, R); Channel noise follows
+                                                                                     a Gaussian distribution Gvk (0, Q), in the
+
+                                                                                     channel of sensor to estimator.
+
+                                                                                     Status information transmitted in the
+
+                                                                                     feedback channel; Channel noise in the
+
+                                                                                     feedback channel.
+
+A, B, C   System parameters satisfied without                                                         I. INTRODUCTION
+xk, C xk  assumption AS (state, control, and
+          measurement matrixes, respectively).                              S TATE estimation over networks has become indispensable
+          Object's real state; Packets sent from sen-                            with the widespread adoption of wireless sensor networks
+          sors at time k.                                                   and the rise of distributed cyber-physical systems (CPSs)
+                                                                            [1]. One of the inherent challenges in networked systems
+   Received 10 April 2025; revised 15 October 2025 and 1 December           is packet loss, which significantly impacts estimation perfor-
+2025; accepted 3 December 2025. This work was supported in part by          mance. Extensive research has been conducted, resulting in
+the Research Projects of Department of Education of Guangdong Province      the development of numerous estimators aimed at addressing
+under Grant 2025KTSCX251, in part by Shenzhen Polytechnic University        packet loss issues. These advancements have substantially
+Research Fund under Grant 602331015PQ, in part by Guangdong Basic           contributed to various applications, such as autonomous aerial
+and Applied Basic Research Foundation under Grant 2024A1515030153           vehicle (AAV) formation control [2]. Silent packet loss (SPL)
+and Grant 2025A1515011587, in part by the Project of Department of          is the most challenging type among all estimation problems
+Education of Guangdong Province under Grant 2023ZDZX4046, in part           involving packet loss [3]. To clarify, in general estimation
+by Shenzhen Natural Science Fund (Stable Support Plan Program) under        problems with packet loss, the system is typically assumed that
+Grant 20231122121608001, and in part by Shenzhen­Hong Kong­Macau            the status of inputs from controller or/and measurements from
+Technology Research Program under Grant SGDX20230821091559019. This         sensors is known, that is, the PLS of the inputs/measurements
+article was recommended by Associate Editor T. H. Lee. (Corresponding       at each time is known to the estimator [4], [5]. Most exist-
+author: Hong Lin.)                                                          ing studies suppose that the PLS are available in all time.
+                                                                            Actually, this assumption cannot always hold [6], [7], [8].
+   Shi Liang and Min Xia are with Nanjing University of Information Sci-    This brings another interesting and research-worthy problem:
+ence and Technology, Nanjing 210000, China (e-mail: liangshi@nuist.edu.cn;  how to achieve the state estimation for a system without the
+xiamin@nuist.edu.cn).                                                       information of the PLS. In such situations, packet losses occur
+                                                                            silently to the estimator, making state estimation challenging.
+   Hong Lin is with the Institute of Intelligence Science and Engineering,
+Shenzhen Polytechnic University, Shenzhen 518055, China (e-mail: linhong@
+szpu.edu.cn).
+
+   Yukang Cui is with the College of Mechatronics and Control
+Engineering, Shenzhen University, Shenzhen 518060, China (e-mail:
+cuiyukang@gmail.com).
+
+   Color versions of one or more figures in this article are available at
+https://doi.org/10.1109/TCYB.2025.3641593.
+
+   Digital Object Identifier 10.1109/TCYB.2025.3641593
+
+     2168-2267 © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and
+                    similar technologies. Personal use is permitted, but republication/redistribution requires IEEE permission.
+                                      See https://www.ieee.org/publications/rights/index.html for more information.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+   This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+2                                                                    IEEE TRANSACTIONS ON CYBERNETICS
+
+                                     TABLE I
+   COMPARISON OF ESTIMATION METHODS FOR SPLM SYSTEMS
+
+   Early research focused on system with the SPL of inputs,          Fig. 1. Typical scenario with SPL of measurements: communication between
+where the PLS of inputs from controllers is unknown                  AAV-based Ad Hoc networks and ground stations.
+to the estimator, known as UDP-like systems (or non-
+acknowledgment, NACK systems) [9], [10]. For systems with               Studies on the stability of estimators have been conducted
+the SPL of inputs, the optimal estimator was derived in [11].        [23]; however, these primarily focus on event-based estimation
+Due to the difficulty of implementing the optimal estimator          without considering a feedback channel or assume that the
+in practice, suboptimal estimators were proposed along with          feedback channel is free from packet loss [24]. In the former
+performance analysis and stability proofs [5], [12]. These           case, the methods are only applicable to stable systems [25]. In
+studies revealed an important fact: regardless of packet loss        the latter, while they can be applied to unstable systems, they
+in inputs, the stability of the estimator remains unaffected.        do not account for scenarios where the feedback channel expe-
+Although the above studies also involved packet loss of sensor       riences packet loss, let alone the more complex SPLM system.
+measurements, all of them were still assumed that the PLS is         In contrast to SPL, replay-attack resilient control demonstrates
+known to the estimator. The unknown PLS of measurements              that a disturbance-observer H controller can ensure stochas-
+is more challenging to detect and has a greater impact on            tic stability [26]. Unlike event-triggered estimation for PLS,
+estimation performance and stability compared to control             this line of research focuses on integrity attacks under multi-
+inputs [13]. Similar to previous research on control input, state    sensor output-feedback. Recently, while neural networks [27]
+estimation problems with SPL of measurements were studied,           and other emerging methods [28] have addressed estimation
+including the optimal estimator [14], then designed suboptimal       and control for the SPLM system, determining their stability
+estimators [15], linear estimators [16], [17], Bayesian filter [7],  remains challenging. In general, achieving 100% accurate
+and the multi-sensor cases [18]. By analyzing both perfor-           detection of SPL remains challenging, and determining the sta-
+mance and stability, these studies concluded that estimators         bility of the corresponding estimators is even more difficult, as
+can maintain stability even when suffering from the SPL              summarized in the Table I. Therefore, event-based estimation
+of measurements, under the same stability conditions as in           for SPLM systems encounters the following two challenges.
+general cases, as stated in [4]. These systems involving the
+SPL of measurements has many names, such as unobservable                1) Detection Difficulty of SPL Under the Event-Based
+measurements loss systems. In our paper, they are formally                  Framework: In general, detecting SPL with 100% accu-
+referred to the system with SPL of measurements, for short,                 racy is challenging [29], an illustrative example is
+SPLM system. For the SPLM system, above research on                         provided in the Appendix. Additionally, the coupling of
+estimation problems has made significant progress. However,                 event-trigger mechanisms and SPL, due to the feedback
+until now, event-based estimation for an SPLM system remains                channel also experiencing SPL, introduces further inter-
+largely unexplored.                                                         ference, complicating the detection process.
+
+   Event-triggered schedulers have well-known advantages,               2) Unexplored Estimator Design and Stability Analysis for
+such as reduced communication load and improved resource                    Unstable System: Both event-triggering [30] and packet
+efficiency [19], [20], [21], which is crucial in resource-                  loss [31] inherently reduce the amount of information
+constrained environments. These advantages are due to the                   available to the estimator. For the SPLM system, the
+event-triggered mechanism but this mechanism also brings the
+risk of SPL. For instance, in AAV-based Ad Hoc networks,
+these networks play a crucial role in restoring communica-
+tion in disaster recovery scenarios. Due to limited energy
+resources and bandwidth constraints, communication relay
+AAVs (rAAVs) often employ event-based estimation for target
+AAVs, as illustrated in Fig. 1. Such scenarios are prone to
+SPL, which can have a significant impact on the estimation
+accuracy, as stated in [3]. Compared with the system with
+the known PLS, the SPLM introduces additional challenges,
+though some pioneering work has addressed this. In [22] the
+optimal estimator was obtained, and a suboptimal one was also
+designed, but their stability has not been investigated.
+
+   Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+LIANG et al.: EVENT-BASED ESTIMATION OVER AAV-BASED RELAY NETWORK                                                                                 3
+
+       design of an appropriate estimator and the stability con-    A. System Model and Setup
+       ditions within the event-based framework for unstable
+       systems remain largely unknown.                                 Consider the system shown in Fig. 2, where the scheduler
+                                                                    suffers from SPLM. The system can be formulated as follows:
+   Focusing on the above challenges, this article addresses
+event-based estimation for SPLM systems. The main results           xk = Axk-1 + k                                                                (1)
+and contributions are summarized as follows.
+                                                                          (
+   1) Design of a Silent­Message­Passing Mechanism
+       (SMPM): We propose a SMPM capable of reducing                yk =  kC xk + vk,              if k = 1                                       (2)
+       ambiguity in state estimation. This mechanism has                  ,                        if k = 0
+       two main functions: a) detecting SPLM in the sensor-
+       to-estimator channel and b) decoupling the detection         where  is the emptyset, which means nothing has been
+       results of SPLM from the SPL in the feedback channel.
+                                                                    received. The decision rule of the scheduler by variable k
+   2) Development of a Detector Achieving 100% Accuracy:
+       A novel Chi-square detector with a dynamic threshold                  (
+       is introduced, designed to ensure that detection accuracy
+       asymptotically reaches 100%. This detector significantly     k =         1,             if  ek                                             (3)
+       improves SPL detection within event-based frameworks                     0,             if  ek  < 
+       by exploiting the detector's time-dependent threshold
+       mechanism.                                                   in which the meanings of the symbols are all listed in
+
+   3) Cooperative Estimator Design and Stability Analysis:          Nomenclature. There are several commonly used: The initial
+       We proposed a cooperative estimator within the pro-          system state x0  Gx0 (x^0, P0); x0, wk, and vk are mutually
+       posed framework and conduct a comprehensive stability        independent; (A, Q1/2) is controllable and (A, C) is observ-
+       analysis by establishing the critical stability conditions.
+       This reveals how the estimator`s stability depends on        able. Here, an assumption commonly used in state estimation
+       the SPLM rate, guiding the design of robust estimation
+       strategies. The proposed theories are validated through      research when dealing with packet loss, is introduced below.
+       both simulations and case-study demonstrations.                 In our notation, k  {0, 1} represents the sensor-side
+
+   The rest of this article is organized as follows. The sys-       scheduling decision (event trigger): k = 0 means the mea-
+tem setup and problem formulation are stated in Section II.         surement is intentionally not transmitted (deliberate silence),
+The main results are presented in Section III, and Sec-             whereas k  {0, 1} represents the channel outcome con-
+tion IV describes simulations and a case study validation. The      ditioned on transmission: k = 0 means the packet was
+Appendix provides additional essential proofs.                      transmitted but lost. The estimator only observes the composite
+                                                                    effect k = kk on the measurement channel; thus k = 0 is
+   Notation:                                                        ambiguous between "not sent" and "lost," which is precisely
+
+   1) Gx(m, M) is a Gaussian probability distribution function      the source of SPLM. This operational distinction (design-
+       (pdf) with respect to the random variable x with the         side k versus environment-side k) motivates our subsequent
+       mean m and covariance M.                                     mechanisms that decouple detection from feedback-channel
+
+   2) T (X) XX , where X maybe a matrix or a vector.                losses and enable stability-aware estimator design.
+   3) Matrix X > 0 means X is a positive-definite matrix.              Assumption AS : All the status information of the SPL, that
+   4) (x^, P) is regarded as an estimation pair of the state x,
+                                                                    is I, is known to the estimator.
+       in which x^ is the estimate and P is the estimation error       However, this article does not employ such a AS assump-
+       covariance.
+   5) p(·) is the pdf of a random variable and P(·) is a prob-      tion, as it focuses on state estimation problems for PLM
+      ability measure; E(·) and cov(·) denote the expectation
+       and the covariance of a random variable, respectively.       systems.
+       Ex,y(·) is used to emphasize that the expectation is taken
+       with respect to both the random variables x and y.           B. Estimation Problems With SPL
+   6) (X) means the spectral radius of matrix X and trace(X)
+       means the trace of matrix X.                                    Before formulating the estimation problems, three defini-
+   7) |X| represents the absolute value when X is a scalar, and     tions are provided here.
+       the determinant when X is a matrix.
+   8) Let N+ be the set of positive integers and N be the set          Definition 1 (SPL): The status information I
+       of non-negative integers.                                    {1, 2, . . . , k} of packet loss of measurements is unknown
+                                                                    to estimator during the state estimation.
+     II. SYSTEM SETUP AND PROBLEM FORMULATION
+                                                                       Definition 2 (Optimal Estimation): The optimal estimation
+   In this section, we first introduce the system model with        means to obtain the optimal estimate x^k that minimizes the
+SPLM and its associated scheduler. Subsequently, we provide         estimation error covariance E[T (xk - x^k)|Yk].
+a detailed problem formulation for this SPLM system.
+                                                                       Definition 3 (Stability Condition): An estimator is said to
+                                                                    be stable, if its estimation error covariance is bounded in the
+                                                                    mean sense, E[Pk] < + k.
+
+                                                                       Problem 1 (Optimal Estimation is Computationally Infea-
+                                                                    sible): Without Assumption AS , the resources required for
+                                                                    real-time computation of the optimal estimator grow expo-
+                                                                    nentially. In an SPLM system, the unknown PLS I cannot
+                                                                    be exactly detected, even with a commonly used Chi-square
+                                                                    detectors X 2.
+
+                                                                       Problem 2 (Detector Result is Unreliable and Disrupted):
+                                                                    The result {^k} of original Chi-square X 2 detector cannot be
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+   This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+4                                                                                                     IEEE TRANSACTIONS ON CYBERNETICS
+
+100% accurate (see Appendix A for details). Additionally, the      vk, making it possible to capture k in event-based sensor
+detection result is also affected by SPL and noise during the      scheduling by using a Chi-square detector. The SMPM only
+feedback Channel, making the received results uncertain.           impose minimal computational overhead. The reason is that
+                                                                   the normal trigger component is already part of the built-
+   Problem 3 (Stability Condition is Unknown): Both the            in event-based scheduler, and the SAR can be implemented
+event-triggered mechanism (when k = 0, measurements are            as a lightweight activation function at the algorithmic level.
+not sent) and SPL (no PLS information is available when k =        This design aligns well with the principles of event-based
+0, measurements are lost) inherently reduce the information        estimation, facilitating real-time implementation under limited
+available to the estimator. Designing an estimator and ensuring    resource conditions.
+its stability for such unstable system are critical issues.
+
+   To address on the above problems, a mechanism is proposed       B. Design and Analysis of d­X 2 Detector
+to aware the silent message, then a detector is given, which          First, a stand Chi-square detector X 2 is introduced [32]
+is achieving 100% detection accuracy. Finally, we derive a
+detector-assisted estimator and prove its stability.                                                  k             H0
+
+                         III. MAIN RESULTS                                                gk =     X                    
+
+   This section presents the main results of the article. First,                                             zk zk  H1
+an awareness mechanism for the SPL of measurements is
+designed. Under this mechanism, a d­X 2 detector is proposed.                                      i=k-J+1
+Subsequently, a d­X 2 based estimator is developed, along with
+the derivation of the stability conditions.                        where J is the window size of detection,  is the detection
+
+                                                                   threshold, and zk denotes the input needed to begin detected.
+                                                                   In this article, J = 1 is employed and the sensor measurement
+                                                                   yk is the input. Thus, a standard X 2 detector for detecting the
+                                                                   SPL status k can be constructed as follows:
+
+A. Awareness Mechanism for SPL                                                              gk     =  yk yk   H0                                        (4)
+
+   Using the fact that silence can convey a negative message,                                                 
+we also note that this approach can sometimes be better
+than transmitting a negative message because it will not be                                                   H1
+disrupted by the noise and SPL. Therefore, we designed the
+following SMPM.                                                    where H0 denotes the hypotheses that the measurement is
+                                                                   lost (that is k = 0) and H1 denotes the hypotheses that the
+   As the system shown in Fig. 3, a new component named            measurement is successfully received (that is k = 1),
+"silence-aware receiver" (SAR) is employed, forming a "T-R"
+pair with the normal trigger.                                         Detector Design: A dynamic X 2 detector (d­X 2 detector)
+
+   1) Normal Trigger: It is a usual component of event-based       is designed as follows:
+       scheduler controlled by k or k. For example, when
+       k = 1, the sensor measurement is sent; otherwise,                       yk yk  H0    (k) ,        (k)      C Qk C   (1-      )/m                 (5)
+       when k = 0, the measurement is not sent because the                                                                 
+       innovation is below the threshold .                                            
+
+   2) SAR: To ensure accurate feedback for the detector, we                           H1
+       introduced a new component called the SAR, controlled
+       by the value from the normal trigger. For example, in       where (k) is a time-varying threshold with a designed bound,
+       the channel from detector to sensor, only if the received
+       signal is , standing for the channel remains silent, that   in which      R+   is  arbitrarily    small,     Qk  =  Pk       Ai Q(Ai )        ,  and
+       is ^k = 0. Consequently, if the SAR detects any signal, it
+       concludes ^k = 1. This design eliminates potential issues                                                               i=0
+       stemming from possible packet loss (~k) and another
+       channel noise (v~k) in general architectures.               m is the dimensionality of the yk.
+
+   Such a system contains two such pairs.                          Remark 1: In implementation, we update Qk+1 = AQkA +
+
+   1) "T-R" Pair From the Sensor to the Estimator: When it          Q0  0, and then evaluate the threshold per (5): (k) 
+       keep the silence, it pass this message "yk - E[yk|Yk-1] 
+       "; Otherwise, any signal indicates that the sensor mea-     |CQkC |(1-)/m. Absolutely, it is finite for any finite (k). Hence
+       surement yk has been transmitted, mixed with channel
+       noise vk and suffering from SPL.                            no infinite or truncated series is required.
+
+   2) "T-R" Pair From the Detector to the Sensor: When             Then, we will prove that the detection accuracy of the d­X 2
+       silent, the detection result is k = 0; any signal presence
+       results in k = 1. Thus, it prevents ^k from being           proposed in this article, is expected to converge to 100% as k
+       disrupted by noise and the SPL of the feedback channel.
+                                                                   increases.
+   Utilizing such "T-R" pairs allows for message transmission,
+decoupling k and k from the interference of channel noise          Theorem 1 (Detector Convergence): Consider the d­X 2
+
+                                                                   detector as stated in (5), the following detection results hold:
+
+                                                                                            lim P (k = dk) = 1                                          (6)
+                                                                                          k+
+
+                                                                   where k and dk represent the true status of SPL and the
+                                                                   detection result of the d­X 2 detector, respectively.
+
+                                                                      Proof of Theorem 1: It is easy to see that (6) is equivalent
+
+                                                                   to the following two cases:
+
+                                                                                      lim P ( dk = 0| k = 0) = 1                                        (7a)
+                                                                                      k+
+
+                                                                                      lim P ( dk = 0| k = 1) = 0.                                       (7b)
+                                                                                      k+
+
+                                                                   Then, the proof naturally divides into two parts.                     Let  yi k
+                                                                   {yk  Rm|||yk|| < (k)1/2|k = i}, where i = 0 or 1.
+
+   Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+                        This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+LIANG et al.: EVENT-BASED ESTIMATION OVER AAV-BASED RELAY NETWORK                                                                                                         5
+
+   For (7a), limk+ P(||yk|| < (k)1/2|k = 0) = 1 which                                                  Remark 2: The standard chi-square X 2 detector can detect
+means the H0 hypotheses in (5) holds. Since k = 0 and then                                          k, but its detection rate is imperfect due to inherent false
+yk = vk, we have that                                                                               detections. A time-varying (k) can reduce false positives
+                                                                                                    for H1, but may introduce inaccuracies for H0. This creates
+                                             Z                                                      a trade-off between H0 and H1. Achieving a 100% detection
+                                                                                                    rate requires selecting an appropriate expansion rate, which
+                 P  0yk       k  =  0     =          p (yk|k = 0) dyk
+                                                                                                    is designed by this theorem to ensure detection accuracy
+
+                                                y0k                                                 converges to 100% as k increases.
+
+                                             Z
+
+                                          = Gyk (0, Q) dyk.
+
+                                                0yk
+
+With respect to k  +, (k)1/2  +. Then
+
+                                      Z                                                             C. Estimator Design and Stability Determination
+                                lim vkdyk = 1.
+                                                                                                       Before giving the minimum mean squared error (MMSE)
+                               k+ 0yk                                                               estimator under the SMPM, a lemma is introduced as follows.
+
+   Equation (7a) has been proved. Similarly, (7b) is equivalent                                        Lemma 1: Define a function
+to the following one:
+                                                                                                             k k, , dk = (1 - k)   + kdk.
+                                       <        (k)1/2          k   =        = 0.
+                 lim        P    yk                                    1                      (8)
+
+                 k+                                                                                 Then   the following facts hold.
+                                                                                                       1)  E[k] = (2 dQ() + 2/ 2
+Thus,                                                                                                                                       e-2  /2  )[1  -  2Q()]m-1.
+
+                                             Z                                                      2) 0  E[k]  1.
+
+             P      1yk     k    =  1     =          p ( yk| k = 1) dyk                             where  is the measurement transmitting threshold
+                          
+
+                                                1yk
+
+                                             Z                                                               E k 1 - 1 - 2Q  m
+
+                                          = Gyk (C x¯k, Mk) dyk.                                                  =    2         e-  2      1 - 2Q           -1
+                                                                                                                                     2
+                                                1yk
+
+Note Gyk (Cx¯k, Mk) is a m-dimensional Gaussian distribution                                                          2
+
+                               exp     -  1  (yk     -  C     x¯k)  Mk-1 (yk    - C x¯k)            and Q()  R +  1/         x2  /2  d  x.
+                                          2                                                                             2e-
+      Gyk (C x¯k, Mk) =                                                                                       
+                                                  (2)m/2 |Mk|1/2
+                                                                                                    Then, this MMSE can be derived as follows:
+
+                                       1                   .                                        Theorem 2 (Estimator Design): Consider the system with
+                               (2)m/2 |Mk
+                                                     |1/2                                           SPL of measurements in (1)­(3), the d­X 2 detector based
+
+Additionally, this is the k = 1 case, then                                                          MMSE estimator can be given recursively
+
+                 Mk = CAkP0 Ak C + CQkC + R.                                                  (9)            x¯k = Ax^k                                          (12a)
+                                                                                                             P¯ k = APk-1A + Q                                   (12b)
+    Using the inequality                                                                                     Kk = P¯ kC CP¯ kC + R -1                            (12c)
+                                                                                                             x^k = x¯k + kE[k|dk]Kk (yk-C x¯k)                   (12d)
+                    P     1yk    k     =  1          Vm  (k)1/2                               (10)           Pk = P¯ k - k k, , E[k|dk] KkCP¯ k                  (12e)
+                                                     (2)m/2 |Mk|1/2
+
+where V(·) denotes the sphere volume with the given radius                                          where k(k, , E[k|dk]) = (1-k)()+kE[k|dk], in which
+                                                                                                    E[k|dk] is a function of .
+                 V       (k)1/2        =         m/2            1)     (k)m/2
+                                              (m/2 +                                                   Proof of Theorem 2: Based on (1)­(3) and Nomenclature,
+                                                                                                    the combination of k and k encompasses four cases.
+in which (·) is the Gamma function. Since other factors are
+                                                                                                       1) When k = 1 and k = 0, this represents the estimator's
+constants, for (10) to approach 0, the following expression                                                worst case. The event is triggered because the error
+                                                                                                           ek exceeds the threshold  and the measurement is
+must hold:                                 (k)m/2                                                          also lost. There is no information for estimation error
+                                           | Mk |1/2
+                                lim                           = 0.                            (11)         covariance Pk reduction. Thus, the state estimation can
+                                                                                                           only depend on prediction, that is x^k = x¯k and Pk = P¯k.
+                               k+                                                                      2) When k = 1 and k = 1, this represents the most
+                                                                                                           favorable case, as yk is transmitted via an event-triggered
+Based on (9), the following inequality holds:                                                              mechanism and is not lost (k = 1). The standard
+                                                                                                           Kalman filter is sufficient for handling this case (to
+             0           (k)m/2             (k)m/2               |CQkC|-
+                         | Mk |1/2        |CQkC |1/2                                                       save space, detailed (15) are provided in Appendix B):
+                                                                                                           x^k = x¯k + Kk(yk-C x¯k) and Pk = (I - KkC)P¯ k.
+where (k)                                 (1-     )/m      is       satisfied.     By   noting         3) When k = 0, the cases k = 0 and k = 1 are identical.
+                              C Qk C                                                                       This is because the measurement Cxk is not transmitted,
+                                                                                                           rendering packet loss in the channel irrelevant. In this
+that, Q in Qk is a positive definite matrix, then, the
+                                                                    Pk                                     case, the estimation can only be implemented by the
+last  step   is     to  prove       that     limk+              |C           Ak(Ak)  C    |-  =
+                                                                        i=0
+             Pk         Ak(Ak)                                                R+, then
+0.    Since                                + and
+                 i=0
+limk+ |CQkC |- = 0 holds. Thus, (11) is true, and then
+
+(7b) has been proved. By combining (7a) and (7b), this proof is
+
+completed.
+
+       Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+   This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+6                                                                   IEEE TRANSACTIONS ON CYBERNETICS
+
+   even-based Kalman filter (given in [24, Th. 3.2]) x^k = x¯k
+
+   and that
+                      Pk = I -   KkC P¯ k.
+
+       where () has been given in Lemma 1.
+
+   Based on the above cases, we derive the MMSE estimator
+with respect to k, which is suffering from the SPL
+
+   x^k = (1 - k) x^k                                                Fig. 2. Event-based estimation for SPLM system. "S/E" stands for the
+          + kk x¯k + Kk (yk - C x¯k) + k (1 - k) x¯k                smart sensor with an estimation function, "T" denotes a scheduler, and "E"
+                                                                    represents a remote estimator.
+      = x¯k + kkKk (yk - C x¯k)
+
+where dk is the detection result of the SPL, which follows
+E[k|dk] = pkdk + (1 - pk)(1 - dk) and pk is given by another
+threshold . Since k is unknown and can only be inferred
+
+from dk, based on Theorem 1, we have that
+
+   x^k = x¯k + kE[k|dk]Kk (yk-C x¯k) .                (13)
+
+Then, the overall estimation error covariance can be obtained
+
+   Pk = (1 - k) I -   KkC P¯ k
+          + k (1 - k) P¯ k + kk (I-KkC) P¯ k
+
+      = °I - (1 - k)   + kk KkC« P¯ k
+      = °I - (1 - k)   + kE[k|dk] KkC« P¯ k.
+
+According to Lemma 1
+
+   Pk = I - k k, , E[k|dk] KkC P¯k.                   (14)
+
+By combining (13) and (14), this theorem is proven.                 Fig. 3. Event-based scheduling estimation for SPLM system based on SMPM.
+   Remark 3: The factor k is determined by the event-based
+                                                                    where k is defined in Lemma 1 and ^ is a threshold depended
+scheduler, while k remains uncertain, as the original X 2           by system parameters.
+detector result dk is not always accurate. Although E[k|dk] is
+optimal in (12d) and (12e), it is less accurate than the estimator     Proof of Theorem 3: For convenience, we use (12b) and
+based on E[k|Yk] from [14] and [33]. To mitigate this, an           (12e) at time k +1 to obtain a Riccati-like equation as follows:
+appropriate choice of (k), such as the one derived in (5), can
+significantly improve detection accuracy. For example, setting             P¯ k+1 = A P¯ k - k k, , E[k|dk] KkCP¯ k A + Q
+(k) = 1/n|CQkC |(1- )/m, n  N+ ensures that the detection                        = AP¯ kA - k k, , E[k|dk]
+accuracy of the d­X 2 detector asymptotically approaches                             × P¯ kC CP¯ kC + R -1 CP¯ k + Q.
+
+100% over time. Then the estimation performance of the              Based on Theorem 1, we know that the probability P(dk =
+                                                                    i|k = i) is 100%, when k  +, where i = 0, 1.
+MMSE estimator will converge to the optimal one.                    Then E[k|dk] = pkdk + (1 - pk)(1 - dk) = dk, and then
+                                                                    k(k, , E[k|dk]) degrades to k(k, , dk). From Lemma 1,
+   Lemma 2: For the following Riccati-like equation:                we know that 0  E[k(k, , dk)]  1. Its value depends on
+                                                                    the thresholds E[k] and E[dk], of which E[k] is related to
+      Xk+1 = AXkA - kAXkC CXC + R -1 CXkA + Q                       the scheduling thresholds. Thus, if E[k]  ^ is satisfied, this
+                                                                    theorem has been proved by using Lemma 2.
+then the following facts holds:
+                                                                                  IV. SIMULATIONS AND CASE STUDY
+     lim E [Xk] = +, for 0  E k  ^ and X0  0
+                                                                       This section consists of two parts. First, numerical examples
+      k+                                                            illustrate the theoretical results from Theorems 1 to 3. Next,
+                                                                    these results are experimentally validated through the docking
+      lim E[Xk]  X¯ , for ^  E[k]  1 and X0  0                      of parent and child AAVs (cAAVs) in an aerial charging
+                                                                    scenario.
+       k+
+
+where X¯ is the upper bound depending on X0 of E[Xk] with
+respect to k  +, and the critical value ^ is a function of
+only A and C, no matter of Q, R, or X0.
+
+   This lemma is obtained by [4, Th. 2].
+   Theorem 3 (Stability Condition): Consider an event-based
+estimation for the unstable system ((A)  1) in Fig. 3 dealing
+with SPL but without Assumptions. The estimator (12) based
+on the d­X 2 detector can be stable with following condition:
+
+    lim E P¯k < +, for E k  ^
+
+   k+
+
+   Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+               This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+LIANG et al.: EVENT-BASED ESTIMATION OVER AAV-BASED RELAY NETWORK                                                                                                7
+
+Fig. 4. Comparison of detection accuracy. (a) X 2 detector with a static threshold  = 1. (b) X 2 detector with a static threshold  = 10 000. (c) d­X 2 detector
+                                                         (1-  )/m .                                                                               (1-            )/m .
+without SMPM but with a dynamic threshold (k)    C Qk C              (d)  d­X 2  detector  with  SMPM  and  a  dynamic  threshold  (k)    C Qk C  
+
+(e) d­X 2 detector with SMPM but without a dynamic threshold (k)  >          (1-  )/m .
+                                                                     C Qk C  
+
+A. Numerical Examples on Main Results                                        The results are as shown in Fig. 4, highlighting the advan-
+                                                                          tages of the proposed d­X 2 detector. Original X 2 detectors
+   Consider a demonstrative 2-D system with the following                 with static thresholds  face challenges: low  causes false
+parameters:                                                               detections of H1 due to noise 1), while high  relative to
+                                                                          sensor measurement yk results in false detections of H0 over
+            A  =  Ä0.5   1    ,    C= 1          0                        time 2). Selecting an appropriate  is difficult for different
+                    1   0.23                                              systems. The proposed d­X 2 detector addresses this by using
+                                                                          a dynamic threshold (k), with growth rate bounded in
+with process noisy, measurement noisy, the initial state, and             Theorem 1. When speed condition is met, detection accuracy
+detection rate, respectively,                                             improves with increasing k, approaching 100%, as seen in
+                                                                          4) after a short preparatory phase. In contrast, an arbitrar-
+vk    Gvk   ÂÄ0   ,     Ä0.3  0.5  Ã    wk  Gwk (0, 1)                    ily chosen dynamic threshold can cause continuous false
+               0         0.5  0.1    ,                                    detections of H0, as shown in 5), which is worse than 2).
+                                                                          Contrasting 3) and 4) isolates the role of SMPM: with the
+x0    G x0  ÂÄ1   ,     Ä0    -1  Ã      [0, 1] .                         same provably-bounded (k), SMPM removes interference
+               2         1    0     ,                                     on the detector's binary decision ^k originating from the
+                                                                          feedback channel, eliminating the residual error floor observed
+It is to check that the spectral radius of matrix (A) = 1.37,             without SMPM. This ablation confirms that the performance
+and then ^ = 0.47 can be calculated [34] for this system.                 gain in 4) arises from the combination of the dynamic X 2
+                                                                          bound and the message-passing design, not from ad hoc
+Unless otherwise stated, we simulate the unstable system with             tuning.
+
+the above setup and run a fixed horizon per trial.                           2) Determinable Feasible Region for Stability: With The-
+   1) Advantages of the d­X 2 Detector: To check the detec-               orems 1 and 2, we established the stability of the proposed
+                                                                          estimator, which accounts for both event-triggering and SPL.
+tion accuracy performance, five detector settings are compared.           Specifically, Fig. 5(a) shows the feasible region where the
+                                                                          estimator remains stable. According to Theorem 3, the sta-
+   1) A classic X 2 detector with a low static threshold ().              bility condition is E[k]  ^, where k depends on E(dk)
+   2) A classic X 2 detector with a high static ().                       (it is equivalent to k with d­X 2) and . By combining
+   3) The proposed d - X 2 with a provably bounded dynamic
+
+       threshold (k) (Theorem 1), but without the designed
+       SMPM on.
+   4) The full d - X 2 with the SMPM.
+   5) A naive dynamic schedule (arbitrarily chosen (k),
+       violating the growth-rate bound).
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+   This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+8                                                                  IEEE TRANSACTIONS ON CYBERNETICS
+
+Fig. 5. Stability determination for unstable system with respect to both detected PLR (E[dk] = ) and event-based scheduling threshold (). (a) Feasible
+region for keeping estimator stable. (b) Covariance of both stable and unstable sample points.
+
+Fig. 6. Overview of the aerial charging scenario based on the AAV relay communication network, along with the docking process details.
+
+Lemma 1 and Theorem 1, the feasible region is derived. To             Only Point 1 satisfies the stability condition ^ > 0.47.
+illustrate estimator stability, we consider three representative   Despite Point 2 having a lower PLR, its high  prevents sta-
+points in the (, E[dk]) parameter space: Point 1 (0.45, 0.82),     bility. Point 3 also fails to maintain stability, as its cumulative
+Point 2 (2.15, 0.08), and Point 3 (2.25, 0.97). Fig. 5(b) then     estimation error grows exponentially. In summary, the feasible
+picks three representative operating points in the (, E[dk])       region can be clearly determined for the proposed estimator,
+plane and plots the closed-loop behavior.                          ensuring the desired estimation performance.
+
+   1) Point 1 (0.45, 0.82) lies inside the feasible region. It     B. Case Study on Tracking AAVs Docking
+       satisfies E[k]  ^ (numerically ^ > 0.47 in this
+       setup), and the estimation error covariance and state-         1) Background: In a disaster relief scenario where ground
+       error norms remain bounded, evidencing mean-square          base stations are unavailable, AAV-based Ad Hoc networks
+       stability.                                                  are used to maintain communication links and perform rescue
+                                                                   mission. The AAV system includes communication rAAV, and
+   2) Point 2 (2.15, 0.08) has a low loss rate but an overly       pairs of cAAV and parent AAV (pAAV). The rAAV form
+       aggressive . The dynamic bound grows too fast for           an aerial network to provide essential communication links,
+       the available event rate, violating the inequality above;   despite challenges SPLM and limited bandwidth, as shown
+       the filter becomes under-informed and drifts, so the error  on the left part of Fig. 6. Aerial recharging requires docking
+       grows and stability is lost.                                between a cAAV and a pAAV. In this process, the cAAV hovers
+                                                                   while the pAAV approaches at a constant speed. The docking
+   3) Point 3 (2.25, 0.97) exhibits the opposite imbalance:        operation is divided into initial and precise docking stages,
+       is still too large; despite a favorable E[dk], the com-     both requiring accurate state estimation.
+       pounded effect makes E[k] < ^, leading to exponential
+       growth in cumulative estimation error.
+
+   Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+                    This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+LIANG et al.: EVENT-BASED ESTIMATION OVER AAV-BASED RELAY NETWORK                                                                                                     9
+
+Fig. 7. Event-based estimation for aerial recharging, involving simultaneous parent and cAAVs over channels suffering from SPL. (a) Parent-AAV in
+approaching plane. (b) Child-AAV in hovering plane.
+
+   2) Setup: The pAAV moves in the "Approaching Plane"             is achieved by randomly discarding 20% of the data obtained
+at a constant horizontal speed, while the cAAV hovers in           from sensors.
+the "Hovering Plane," waiting for docking, as shown in the
+right part of Fig. 6. They are usually done with different            4) Results Analysis: As shown in Fig. 7(a), both the blue
+communication demands: tracking the pAAV consumes most             and red lines represent the true trajectory, while the respective
+of the communication bandwidth, while the cAAV relies on           blue and red error bands depict the estimation errors for the
+predictive models due to bandwidth limitations, and cAAV is        same flight trajectory before and after enabling the event-based
+supposed to be Hovering around a fixe point. Environmental         scheduler. To visually compare their estimation performance,
+factors, such as wind and vibrations, cause the cAAV to drift.     we placed both error bands on a single figure and applied a
+Using a scheduler as (3), allows the pAAV to communicate           center-symmetric mirroring to the red trajectory and its error
+with the ground base station according to a communication          band. As a result the estimation performance before and after
+schedule, while the cAAV uses the channel when the pAAV            enabling the event-based scheduler exhibits a slight decrease
+is not transmitting.                                               (indicated by the blue line and error band), amounting to
+                                                                   4.51%. However, referring to Fig. 7(b), when the cAAV is
+   3) Tracking Model: For both the cAAV and pAAV, they             allowed to use the communication channel during periods
+share a similar tracking model                                     when the pAAV is not transmitting, there is a significant
+                                                                   reduction in the estimation error of the hovering location,
+2 xk 3 21 0 T 03 2 xk-1 3                                          leading to a substantial improvement in performance gain.
+                                                                   For the same trajectory under different packet loss sequences,
+6 yk 7      =  60   1  0  T 7 6 yk-1 7                             the performance gains are 38.92%, 53.66%, 42.85%, and
+               640  0  1                                           87.72%, respectively. It is noteworthy that there are some
+64V  xk  7                0  7  46Vxk-1  7                         significant fluctuations in the performance improvements, pri-
+         5                   5           5                         marily because the cAAV utilizes the channel infrequently. If
+                                                                   an SPL occurs during these times, it can significantly impact
+Vyk            0 0 0 1 Vyk-1                                       performance. Nevertheless, overall, employing this scheduler
+                                                                   [as given in (3)] and the estimator (proposed in Theorem 2) can
+                                2  (i) T 2             3           greatly enhance the overall estimation accuracy of the system.
+                                                                   Furthermore, with the appropriate selection of parameters, it
+                                   62          0                   is possible to achieve conditional stability (shown in Theorem
+                                   6                               3), even in the presence of SPL.
+                                                       7
+                                +6 0            (i) T 2 7                                     V. CONCLUSION
+                                   6                   7   wk-1
+                                               2       7              This article addresses event-based state estimation in unsta-
+                                   6                               ble systems affected by the SPL of measurements. We first
+                                   4  (i) T            7           propose a message-passing mechanism and then introduce
+                                                                   a dynamic chi-squared d­X 2 detector. With a well-designed
+                                               05                  dynamic bound, the probability of its detection accuracy for
+
+                                            0   (i) T
+
+but with the only difference being the parameter selection
+based on the specific tracking plane they are in.
+
+   1) In Approaching Plane: [x0 y0 Vx0 Vy0 ] = [0 0 10 10]
+       is the initial state; (1) = (1) = 1 indicates the noise
+       configuration for constant velocity motion.
+
+   2) In Hovering Plane: [x0 y0 Vx0 Vy0 ] = [0 0 0 0] is the
+       setting point waiting for docking. (2) = 0.3 and (2) =
+       0.5 indicates the noise configuration for hovering.
+
+   There is a 20% probability ( = 0.8) that both cAAV and
+pAAV suffering from SPL during flight. The detection rate 
+
+            Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+                  This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+10                                                                               IEEE TRANSACTIONS ON CYBERNETICS
+
+an unstable system approaches 100%. Subsequently, the d­X 2                      where the average communication rate  can be calculated
+detector-based MMSE estimator is proposed, of which stability                    from [24]. And E[kdk] = P(k = 1)E[dk] + P(k = 0) × 0,
+has been determined by giving a sufficient condition. The                        since when no event is triggered, no information needs to be
+results of both experiment and simulations validate the main                     transmitted, so packet loss does not occur. Subsequently
+theorems proposed in this article. They demonstrate that event-
+based estimation for an unstable system affected by the SPL                         E kdk = P (k = 1) E [dk] = °1 - 1 - 2Q  m«  (17)
+of measurements can be achieved while also maintaining
+conditional stability.                                                           where  is the average PLR. By combining (16) and (17), this
+                                                                                 proof of (a) in Lemma 1 is completed. For the part (b) of
+   In the future, we will extend the framework to cooperative                    Lemma 1, firstly, using the linearity of expectation
+state estimation for hydrogen-powered AAV swarms operating
+over ultra-long-range relay links, where tight energy budgets                    E k =   1 - E k + E kdk .                                                          (18)
+and intermittent connectivity amplify SPLM effects; explore
+precision docking for parent­cAAVs [35] under limited                            It is easy to check 0  E[k]  1 and E[kdk] can be bounded
+communications using safe deep reinforcement learning to co-                     as follows: 0  E[kdk]  E[k], where 0  kdk  k since
+design the event trigger, the detector's dynamic threshold, and                  0  k  1 and 0  dk  1.
+estimator gains with explicit stability and safety constraints;
+and develop an SPLM-centric multi-sensor fusion variant                             1) The Lower Bound: Due to ()  0 and E[kdk]  0,
+that handles asynchronous sampling and out-of-sequence data,                            then E[k]  ()(1 - E[k]) + 0  0.
+followed by hardware-in-the-loop and field trials to quantify
+energy, latency, and reliability.                                                   2) The Upper Bound: By noticing ()  1 is probability
+                                                                                        and using E[kdk]  E[k], then
+
+                                                                                 E k    1 - E k + E k
+                                                                                          1 - E k + E k = 1.
+
+                            APPENDIX                                             Combining the bounds completes this proof.
+
+A. Chi-Square Detector Fail to Achieve 100% Accuracy
+
+    For convenience, we also let a Chi-Square detector detect yk                                              REFERENCES
+
+can  be  written  as  (5),  that  is  gk  =  yk yk  H0  .  A  brief  yet  clear  [1] M. Li, J. She, Z.-T. Liu, M. Wu, and Y. Ohyama, "Suppression of
+                                                                                       packet losses and disturbances in networked control systems based on
+                                                                                       equivalent-input-disturbance approach," IEEE Trans. Cybern., vol. 53,
+                                                                                       no. 4, pp. 2051­2061, Apr. 2023.
+                                                    H1
+                                                                                 [2] L. Xiang, Y. Du, C. Jia, F. Chen, and G. Chen, "Energy-efficient
+explanation is as follows: There are always false detections                           distributed formation control of sampled-data multiagent systems with
+                                                                                       packet losses," IEEE Trans. Cybern., vol. 54, no. 4, pp. 2216­2223, Apr.
+for the chi-square 2 detector for system with the SPL. Take                            2024.
+
+k = 0 for example. When k = 0, yk = kC xk + vk = vk                              [3] M. Qian, L. Cui, X. Zhang, F. P. Tso, and Y. Deng, "DDrops: Detecting
+                                                                                       silent packet drops on programmable data plane," Comput. Netw.,
+(suppose k = 1 at this moment), and then gk = vkvk. vk is a                            vol. 214, Sep. 2022, Art. no. 109171.
+Gaussian noise. Thus, no matter how large  is, it is always
+                                                                                 [4] B. Sinopoli, L. Schenato, M. Franceschetti, K. Poolla, M. I. Jordan, and
+possible that gk = vkvk > ; if so, the 2 detector will make                            S. S. Sastry, "Kalman filtering with intermittent observations," IEEE
+a detection k = 1, which is false since the actual k is 0.                             Trans. Autom. Control, vol. 49, no. 9, pp. 1453­1464, Sep. 2004.
+
+B. Proofs of Lemma 1                                                             [5] H. Lin, J. Lam, M. Z. Q. Chen, Z. Shu, and Z.-G. Wu, "Interacting
+   For convenience, the standard Kalman filter is given firstly                        multiple model estimator for networked control systems: Stability,
+                                                                                       convergence, and performance," IEEE Trans. Autom. Control, vol. 64,
+                      x¯k = Ax^k-1                                        (15a)        no. 3, pp. 928­943, Mar. 2019.
+                      P¯ k = APk-1A + Q                                   (15b)
+                      Kk = P¯ kC CP¯ kC + R -1                            (15c)  [6] X. Miao, K. Liu, Y. He, D. Papadias, Q. Ma, and Y. Liu, "Agnostic
+                      x^k = x¯k + Kk (yk-C x¯k)                           (15d)        diagnosis: Discovering silent failures in wireless sensor networks," IEEE
+                      Pk = (I - KkC) P¯k.                                 (15e)        Trans. Wireless Commun., vol. 12, no. 12, pp. 6067­6075, Dec. 2013.
+
+Then, the proofs are given as follows.                                           [7] J. Zhang, K. You, and L. Xie, "Bayesian filtering with unknown sensor
+                                                                                       measurement losses," IEEE Trans. Control Netw. Syst., vol. 6, no. 1,
+    Proof of Lemma 1: Beginning with the definition                                    pp. 163­175, Mar. 2019.
+
+         k k, , dk = (1 - k)   + kdk.                                            [8] G. Zong, H. Xie, D. Yang, X. Zhao, and Y. Yi, "Adaptive fuzzy tracking
+                                                                                       control for switched nonlinear systems under FDI attacks and input
+By using k for simplicity, its expectation is                                          saturation: A flexible transient performance approach," IEEE Trans.
+                                                                                       Cybern., vol. 54, no. 12, pp. 7479­7488, Dec. 2024.
+         E k = E (1 - k)   + E kdk .
+                                                                                 [9] L. Schenato, B. Sinopoli, M. Franceschetti, K. Poolla, and S. S. Sastry,
+Note that, () is used only if k = 0, then the first item is                            "Foundations of control and estimation over lossy networks," Proc.
+that                                                                                   IEEE, vol. 95, no. 1, pp. 163­187, Jan. 2007.
+
+E (1 - k)   = 1 - 2Q  m                                                          [10] M. Epstein, L. Shi, and R. M. Murray, "Estimation schemes for
+                                                                                       networked control systems using UDP-like communication," in Proc.
+                            ×      2         e-  2  1 - 2Q           -1   (16)         46th IEEE Conf. Decis. Control, Dec. 2007, pp. 3945­3951.
+                                                 2
+                                                                                 [11] H. Lin, H. Su, Z. Shu, Z.-G. Wu, and Y. Xu, "Optimal estimation in
+                                    2                                                  UDP-like networked control systems with intermittent inputs: Stability
+                                                                                       analysis and suboptimal filter design," IEEE Trans. Autom. Control,
+                                                                                       vol. 61, no. 7, pp. 1794­1809, Jul. 2016.
+
+                                                                                 [12] M. Xue, Y. Tang, L. Wu, W. Zhong, and F. Qian, "Switching stabilization
+                                                                                       for type-2 fuzzy systems with network-induced packet losses," IEEE
+                                                                                       Trans. Cybern., vol. 49, no. 7, pp. 2591­2604, Jul. 2019.
+
+                                                                                 [13] Y.-C. Sun and G.-H. Yang, "Remote state estimation for nonlinear
+                                                                                       systems via a fading channel: A risk-sensitive approach," IEEE Trans.
+                                                                                       Cybern., vol. 52, no. 10, pp. 10253­10262, Oct. 2022.
+
+         Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+This article has been accepted for inclusion in a future issue of this journal. Content is final as presented, with the exception of pagination.
+
+LIANG et al.: EVENT-BASED ESTIMATION OVER AAV-BASED RELAY NETWORK                                                                                 11
+
+[14] H. Lin and J. Lam, "Stability of optimal estimator with unobservable                                        Shi Liang received the B.S. degree from Nanjing
+      measurement loss: The unstable system case," IEEE Trans. Autom.                                            University of Aeronautics and Astronautics, Nan-
+      Control, vol. 69, no. 11, pp. 7832­7838, Nov. 2024.                                                        jing, China, in 2013, and the Ph.D. degree from
+                                                                                                                 Zhejiang University, Hangzhou, China, in 2020.
+[15] S. Liang, H. Lin, S. Lu, and H. Su, "Single target tracking with unknown
+      detection status: Filter design and stability analysis," IEEE Trans. Ind.                                     He was a Research Associate at the Department
+      Electron., vol. 71, no. 9, pp. 11316­11325, Sep. 2024.                                                     of Mechanical Engineering, The University of Hong
+                                                                                                                 Kong, Hong Kong, from 2021 to 2022. He is
+[16] Y. Li, J. Lam, and H. Lin, "On stability and performance of the optimal                                     currently with Nanjing University of Information
+      linear filter over Gilbert­Elliott channels with unobservable packet                                       Science and Technology, Nanjing. His research inter-
+      losses," IEEE Trans. Control Netw. Syst., vol. 9, no. 2, pp. 1029­1039,                                    ests include state estimation, secure sensing, and
+      Jun. 2022.                                                                                                 intelligent analysis.
+
+[17] W. Zhang, Y. Tang, W. X. Zheng, and Y. Zou, "Stability of sampled-data                                      Hong Lin received the B.S. and M.S. degrees
+      systems with packet losses: A nonuniform sampling interval approach,"                                      from Fuzhou University, Fuzhou, China, in 2003
+      IEEE Trans. Cybern., vol. 53, no. 12, pp. 7648­7658, Dec. 2023.                                            and 2006, respectively, and the Ph.D. degree from
+                                                                                                                 Zhejiang University, Hangzhou, China, in 2016.
+[18] H. Li, L. Yan, and Y. Xia, "Distributed robust Kalman filtering for
+      Markov jump systems with measurement loss of unknown probabilities,"                                          He was a Lecturer with the Department of Infor-
+      IEEE Trans. Cybern., vol. 52, no. 10, pp. 10151­10162, Oct. 2022.                                          mation Technology, Concord College Fujian Normal
+                                                                                                                 University, Fuzhou, from 2007 to 2012, and was
+[19] X.-L. Zhu, X. Zhang, J. Wei, and H. Lin, "Output-based dynamic                                              a Post-Doctoral Researcher at the Department of
+      event-triggered control for networked control systems with delays and                                      Mechanical Engineering, The University of Hong
+      packet losses without acknowledgements," IEEE Trans. Autom. Control,                                       Kong, Hong Kong, China, from 2016 to 2019. He
+      vol. 68, no. 12, pp. 7120­7135, Dec. 2023.                                                                 is currently with the Institute of Intelligence Sci-
+                                                                                  ence and Engineering, Shenzhen Polytechnic, Shenzhen, China. His current
+[20] Z. Gu, Y. Fan, F. Yang, and E. Tian, "Event-triggered T-S fuzzy load fre-    research interests include networked control systems, estimator design, and
+      quency control with variable probabilistic release for renewable energy     optimal control.
+      integrated power systems," IEEE Trans. Autom. Sci. Eng., vol. 22,              Dr. Lin serves as an Associate Editor for IEEE TRANSACTIONS ON
+      pp. 8492­8501, 2025.                                                        CYBERNETICS, Journal of The Franklin Institute, Proceedings of the Insti-
+                                                                                  tution of Mechanical Engineers, Part I: Journal of Systems and Control
+[21] Z. Gu, X. Huang, X. Sun, X. Xie, and J. H. Park, "Memory-event-              Engineering, and IET Control Theory and Applications.
+      triggered tracking control for intelligent vehicle transportation systems:
+      A leader-following approach," IEEE Trans. Intell. Transp. Syst., vol. 25,                                  Min Xia (Member, IEEE) received the Ph.D. degree
+      no. 5, pp. 4021­4031, May 2024.                                                                            in cybernetics control engineering from Donghua
+                                                                                                                 University, Shanghai, China, in 2009.
+[22] L. Xu, Y. Mo, and L. Xie, "Remote state estimation with stochastic
+      event-triggered sensor schedule and packet drops," IEEE Trans. Autom.                                         He is currently a Professor with Nanjing Uni-
+      Control, vol. 65, no. 11, pp. 4981­4988, Nov. 2020.                                                        versity of Information Science and Technology,
+                                                                                                                 Nanjing, China, where he is also the Deputy Director
+[23] C. Zhao, H. Lin, Y. Li, S. Liang, and J. Lam, "Event-based state                                            of Jiangsu Key Laboratory of Big Data Analysis
+      estimation against deception attacks: A detection-based approach," IEEE                                    Technology. His research interests include machine
+      Sensors J., vol. 23, no. 19, pp. 23020­23029, Oct. 2023.                                                   learning theory and its application, graph structure
+                                                                                                                 data analysis.
+[24] J. Wu, Q.-S. Jia, K. H. Johansson, and L. Shi, "Event-based sensor
+      data scheduling: Trade-off between communication rate and estimation                                       Yukang Cui (Senior Member, IEEE) received the
+      quality," IEEE Trans. Autom. Control, vol. 58, no. 4, pp. 1041­1046,                                       B.Eng. degree in automation from Harbin Institute of
+      Apr. 2013.                                                                                                 Technology, Harbin, China, in 2012, and the Ph.D.
+                                                                                                                 degree from Department of Mechanical Engineering,
+[25] D. Han, Y. Mo, J. Wu, S. Weerakkody, B. Sinopoli, and L. Shi,                                               The University of Hong Kong, Hong Kong, in 2017.
+      "Stochastic event-triggered sensor schedule for remote state estimation,"
+      IEEE Trans. Autom. Control, vol. 60, no. 10, pp. 2661­2675, Oct. 2015.                                        In 2017, he was a Research Associate at Depart-
+                                                                                                                 ment of Mechanical Engineering, The University
+[26] J. Wang, D. Wang, H. Yan, and H. Shen, "Composite antidistur-                                               of Hong Kong. Since 2018, he has been with the
+      bance control for hidden Markov jump systems with multi-sensor                                             College of Mechatronics and Control Engineering,
+      against replay attacks," IEEE Trans. Autom. Control, vol. 69, no. 3,                                       Shenzhen University, Shenzhen, China, where he
+      pp. 1760­1766, Mar. 2024.                                                                                  is currently an Associate Professor. His research
+                                                                                  interests include multi-robot cooperative sensing, swarm-robot path planning,
+[27] G. Zong, Y. Wang, B. Niu, S.-F. Su, and K. Shi, "Event-triggered             multi-agent formation control, and nonlinear time-delay systems.
+      adaptive NN tracking control for nonlinear systems with asymmetric
+      time-varying output constraints and application to an AUVs," IEEE
+      Trans. Veh. Technol., vol. 74, no. 1, pp. 413­424, Jan. 2025.
+
+[28] Y. Wang and G. Zong, "Dynamic event-triggered adaptive fixed-time
+      practical tracking control for nonlinear systems through funnel function,"
+      IEEE Trans. Autom. Sci. Eng., vol. 22, pp. 7008­7017, 2025.
+
+[29] B. Zhang, C. Dou, D. Yue, Z. Zhang, and T. Zhang, "A packet loss-
+      dependent event-triggered cyber-physical cooperative control strategy for
+      islanded microgrid," IEEE Trans. Cybern., vol. 51, no. 1, pp. 267­282,
+      Jan. 2021.
+
+[30] A. Mohammadi and K. N. Plataniotis, "Event-based estimation with
+      information-based triggering and adaptive update," IEEE Trans. Signal
+      Process., vol. 65, no. 18, pp. 4924­4939, Sep. 2017.
+
+[31] X. Jiang, H. Yan, B. Li, S. Zheng, T. Huang, and P. Shi, "Optimal track-
+      ing of networked control systems over the fading channel with packet
+      loss," IEEE Trans. Autom. Control, vol. 69, no. 4, pp. 2652­2659, Apr.
+      2024.
+
+[32] Z. Guo, D. Shi, K. H. Johansson, and L. Shi, "Optimal linear cyber-
+      attack on remote state estimation," IEEE Trans. Control Netw. Syst.,
+      vol. 4, no. 1, pp. 4­13, Mar. 2017.
+
+[33] S. Liang, J. Lam, and H. Lin, "Secure estimation with privacy
+      protection," IEEE Trans. Cybern., vol. 53, no. 8, pp. 4947­4961, Aug.
+      2023.
+
+[34] Y. Mo and B. Sinopoli, "A characterization of the critical value for
+      Kalman filtering with intermittent observations," in Proc. 47th IEEE
+      Conf. Decis. Control, Dec. 2008, pp. 2692­2697.
+
+[35] H. Cao et al., "Proximal cooperative aerial manipulation with vertically
+      stacked drones," Nature, vol. 646, no. 8085, pp. 576­583, Sep. 2025,
+      doi: 10.1038/s41586-025-09575-x.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 05:27:46 UTC from IEEE Xplore. Restrictions apply.
+

@@ -1,0 +1,1287 @@
+3318                                                                         IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+Topology-Awareness Fault-Tolerant Migration for
+Node Cascading Failures in Data Center Networks
+
+      Weibei Fan , Member, IEEE, Fu Xiao , Senior Member, IEEE, Pinchang Zhang , Member, IEEE,
+                          Hui Cai , Member, IEEE, Lei Han , and Shui Yu , Fellow, IEEE
+
+   Abstract--With the rapid increase in user demand for business             increases operating costs [1], [2]. To address this issue,
+traffic, the deployment and migration of virtual service function            Network Function Virtualization (NFV) decouples hardware
+chains (VSFC) considering network load balancing has become                  devices from network functions, achieving flexible deployment
+a fascinating research topic. In this paper, we delve into the cas-          and separation of software and hardware [5], [7].
+cading failures in virtual network function (VNF) migration and
+design a topology-awareness fault-tolerant migration mechanism                  However, cascading failures have become a significant con-
+for VSFC. Firstly, we design a measurement model for the evo-                cern in NFV [9]. Cascading failures refer to the phenomenon
+lution of network nodes under cascading faults, which provides               where one fault triggers another fault, resulting in a chain
+an evaluation method for node importance. Secondly, we present               reaction [10]. In virtual network functions (VNFs), cascading
+a Topology and Resource Aware VNF fault-tolerant migration                   failures may cause interruptions to multiple VNF instances
+framework (TRA) under cascading faults. Finally, we investigate a            or the entire network service, seriously affecting the stability
+topology-awareness energy consumption optimization algorithm                 and reliability of the network. Additionally, when a node fails,
+based on the cascading failure. The proposed algorithm can                   it triggers a chain reaction that increases the traffic on other
+reduce network energy consumption and alleviate network link                 nodes and links. This additional traffic not only causes some
+congestion while reasonably migrating virtual machines to meet               links to become congested but also leads to higher energy
+system performance requirements. Through extensive simulation                consumption across the network [11], [12]. Congested links
+experiments and real testbed evaluations, TRA reduced migra-                 can further exacerbate the problem by causing packet delays
+tion time and average latency by 28.6% and 24.7% compared                    and retransmissions, which in turn consume more energy [27].
+with the average performance of VVi, TeaVisor, and MiOvnm,
+respectively. In addition, TRA has improved revenue to expense                  There have been many efforts in load balancing for NFV.
+ratio and load balancing index by 19.6% and 26.5%, respectively.             The Minimum Interference Routing Algorithm (MIRA) [24]
+                                                                             aims to select as few critical links as possible to allocate traffic
+   Index Terms--Data centers, network function virtualization,               request paths. However, this algorithm ignores the topology
+topology-awareness, load balancing, performance evaluation.                  and bandwidth requirements of traffic requests, resulting in
+                                                                             congestion issues on critical links. Other studies such as
+                          I. INTRODUCTION                                    Pei et al.'s [6] VNF placement based on deep reinforcement
+                                                                             learning, and Zhu et al.'s [4] DCN availability model with
+W ITH the rapid development of data center networks                          dynamic migration and multi traffic is used to evaluate the
+         (DCNs), the speed of network application updates                    availability of applications. The above methods have not
+is accelerating. In traditional networks, network functions                  focused on the core issue of how to use topology-awareness to
+are mostly based on proprietary hardware, and deployment                     achieve fault-tolerant migration under node cascading failures.
+and upgrading require changes to hardware facilities, which                  In addition, these efforts mainly focus on optimizing server
+                                                                             deployment through low-cost migration models, rather than
+   Received 27 April 2024; revised 13 February 2025, 13 April 2025,          addressing network load imbalance as the core.
+and 25 May 2025; accepted 25 June 2025; approved by IEEE TRANSACTIONS
+ON NETWORKING Editor J. P. Jue. Date of publication 2 July 2025; date           In this paper, we focus on developing a novel topology-
+of current version 18 December 2025. This work was supported in part         aware fault-tolerant VNF migration under cascading failures,
+by the Major Scientific Instruments and Equipments Development Project       aiming to maximize network load balancing. Three major
+of National Natural Science Foundation of China under Grant 62427809,        challenges must be addressed. The first challenge is to analyze
+in part by the National Key Research and Development Program of China        the evolution mechanism of network node importance. The key
+under Grant 2024YFB2906700, in part by the National Science Fund for         nodes that affect network cascading failures are not fixed and
+Distinguished Young Scholars under Grant 62125203, in part by the Key        unchanging [13], [14]. Due to the complex distribution and
+Program of Natural Science Foundation of Jiangsu under Grant BK20243053      allocation rules of network load, critical nodes may evolve
+and Grant 24KJA520006, and in part by the Natural Science Foundation of      from non-critical nodes [18]. So accurately identifying key
+China under Grant 62372248. (Corresponding author: Fu Xiao.)                 nodes is very difficult. The second challenge is the urgent need
+                                                                             to balance the deployment of virtual network functionality
+   Weibei Fan, Fu Xiao, Hui Cai, and Lei Han are with the College            with dynamic real-time resource allocation. Although previous
+of Computer, Nanjing University of Posts and Telecommunications,             self heuristic routing algorithms have proposed strategies to
+Nanjing 210003, China (e-mail: wbfan@njupt.edu.cn; carolinecai@              eliminate light load servers and network devices [20], [21],
+njupt.edu.cn; hanlei@njupt.edu.cn; xiaof@njupt.edu.cn).                      they have high time complexity and cannot be applied in
+
+   Pinchang Zhang is with the College of Computer, Nanjing University of
+Posts and Telecommunications, Nanjing 210003, China, and also with the
+State Key Laboratory of Integrated Services Networks, Xidian University,
+Xi'an, Shaanxi 710071, China (e-mail: zpc@njupt.edu.cn).
+
+   Shui Yu is with the School of Computer Science, University of Technology
+Sydney, Sydney, NSW 2007, Australia (e-mail: Shui.Yu@uts.edu.au).
+
+   Digital Object Identifier 10.1109/TON.2025.3583935
+
+           2998-4157 © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and
+                          similar technologies. Personal use is permitted, but republication/redistribution requires IEEE permission.
+                                            See https://www.ieee.org/publications/rights/index.html for more information.
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                       3319
+
+practical scenarios. When cascading failures occur in DCNs,        Fig. 1. SFC mapping set instance.
+congested links cause packet delays and retransmissions,
+further increasing system energy consumption. Therefore,           Fig. 2. VNF instance scheduling result.
+minimizing system energy consumption while reducing the
+number of congested links is crucial. The last but not least       virtualization (NFV). Fig. 1 illustrates an instance of a Ser-
+challenge is to prevent network congestion caused by sudden        vice Function Chain (SFC) mapping set featuring two SFCs:
+network traffic surges. Although previous studies [22], [23]       SFC1 and SFC2. Each SFC comprises four Virtual Network
+have attempted to reduce interference to future flow networks      Functions (VNFs), specifically VNF 101 through VNF 104 for
+by selecting a small number of critical links to establish         SFC1 and VNF 201 through VNF 204 for SFC2. The VNFs
+traffic request allocation paths. However, existing congestion     within each SFC are connected sequentially by arrows indi-
+control algorithms suffer from low resource utilization or poor    cating the direction of data flow. Each VNF is interconnected
+congestion control effectiveness [24]. How to allocate network     with six Virtual Machines (VM1 through VM6) via multiple
+traffic reasonably and avoid excessive congestion of individual    links, each labeled with numbers that represent weights or
+links or nodes has become an important research direction.         costs. These values correspond to network parameters such
+                                                                   as latency, bandwidth, or resource utilization. Additionally,
+   In response to the above challenges, we propose TRA,            the VMs themselves are connected by arrows labeled with
+a Topology and Resource Aware VNF migration method                 numbers, indicating the weights or costs of the connections
+under cascading failures. Firstly, TRA establishes a distributed   between them, which reflect communication frequency or data
+system network node importance model considering cascading         transfer volumes.
+failures. Secondly, an efficient topology and resource aware
+algorithm is designed based on the proposed network cas-              The main function of the SFC Dispatch Service is to
+cading fault model, achieving joint optimization of latency        optimize the VNF scheduling sequence while dynamically
+and energy consumption. Extensive experiments show that            mapping VNFs to VMs using some algorithms to minimize the
+TRA can significantly improve the load balancing, reduce the       overall virtual link transmission delay (the time taken for data
+average latency of the service function chain, and enhance the     to travel between virtual nodes over the virtual link) and VM
+network cost-benefit ratio.                                        execution delay. Based on the mapping collection of VNFs
+                                                                   and VMs in the mapping phase, the VNF is algorithmically
+   We highlight main contributions as follows:                     mapped to the virtual machine for scheduling services. As
+  · We design a new cascading fault model based on the evo-        shown in Fig. 2, VNF202 is assigned to VM5 for scheduling.
+                                                                   The blue square in the figure represents the link transmission
+      lution mechanism of network nodes, which can analyze         delay from VNF to the node, and 2-2 in the beige square
+      the evolution of node importance under overload mech-        represents the delay generated by VNF202 instantiation on the
+      anism. The proposed model reveals the characteristics        VM. For example, VNF202 performs scheduling on VM5, and
+      of network topology and accurately reflects the relative     the link transmission delay is 4ms, the instantiation delay is
+      importance of nodes.                                         6ms, and the overall delay is 10ms.
+  · We present a Topology and Resource Aware (TRA)
+      fault-tolerant migration algorithm based on the proposed        However, the existing system for candidate VM scheduling
+      cascading fault model. This algorithm fully considers the    in SFC has several issues. One of the main problems is the
+      resource richness and topological properties of nodes in     unbalanced resource allocation. Due to the complexity of the
+      the network, which can effectively balance the utilization
+      of physical network resources and the fault tolerance and
+      resilience of the network.
+  · We compare TRA with state-of-the-art algorithms through
+      simulation experiments and real testbeds. The evaluation
+      results indicate that TRA has better performance in terms
+      of migration time, average latency, and cost-benefit ratio.
+      Compared with VVi, TeaVisor, and MiOvnm, TRA can
+      reduce migration time and average latency by 28.6% and
+      24.7%, respectively and improve the revenue-to expense-
+      ratio and load balancing index by 19.6% and 26.5%,
+      respectively.
+
+   The remainder of this paper is organized as follows.
+Section II presents the motivation and observation. Sec-
+tion III presents the network model and problem formulation.
+Section IV details the topology-aware dynamic migration.
+Section V designs the dynamic migration algorithms based
+on topology-awareness. Performance evaluations are given in
+Section VI. The paper is concluded in Section VII.
+
+              II. MOTIVATION AND OBSERVATION
+
+A. A Motivation Example
+
+   This section gives an example to illustrate the pros and cons
+of both service function chain (SFC) and network function
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+3320                                                               IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+network environment and the dynamic nature of application          Fig. 3. Overall system overview.
+demands, it is difficult for the current scheduling algorithm
+to accurately predict the resource requirements of different       function is instantiated into the network, forming a service
+SFCs. As a result, some VMs may be overloaded with tasks,          function chain as shown in the dashed part. Motivated by this
+leading to high latency and poor performance. For example, if      example, we design a virtual network topology and resource-
+a scheduling algorithm does not properly consider the sudden       aware virtual network migration scheme, called TRA.
+increase in traffic for a particular SFC, it may assign too many
+tasks to a single VM, causing its CPU and memory utilization       C. System Overview
+to reach a critical level. Another issue is that the existing
+scheduling algorithms often cannot adapt well to the dynamic          As shown in Fig. 3, TRA mainly consists of three
+changes of application demands.                                    parts: topology-awareness (composed of computing nodes),
+                                                                   congestion control (composed of controllers), and resource
+   In our SFC scheduling system, we adopt a priority-based         servers. Specifically, topology-awareness consists of a group
+scheduler. The priority of each candidate VM is determined         of distributed microservices. One of its functions is to use
+by a combination of factors, including its available resources     Topology-awareness strategies to select disjoint paths for
+(such as CPU cores, memory size, and network bandwidth),           distributed traffic requests according to the Flow network
+the expected processing time for the specific VNFs in the          theorem. In order to establish the correspondence between
+SFC, and the historical performance of the VM in similar           topology and resources, a topology to resource mapping table
+scheduling tasks. For example, if a VM has a large amount          was maintained, rather than a topology to IP mapping table.
+of free memory and a high-speed CPU core, and it has               We will describe in detail how to determine correspondence in
+shown excellent performance in processing similar VNFs in          the third section. In Congestion control part, VMs belonging
+the past, it will be assigned a higher priority. When a new        to different virtual network information are distributed on
+SFC scheduling task arrives, the scheduler first calculates the    different computing nodes. In order to achieve more effective
+priority of each candidate VM. Then, it sorts the VMs based        implementation, a congestion control component was designed
+on their priorities and selects the one with the highest priority  on each node, responsible for selecting paths, optimizing traffic
+for scheduling. In cases where multiple VMs have the same          requests, and allocating traffic. The Resource DB manages
+priority, the scheduler will further consider factors like the     all VMs and knows which servers they belong to. As an
+network distance between the VM and other nodes in the SFC         important component, MQ server is responsible for Asyn-
+to break the tie.                                                  chronous communication between topology-awareness and
+                                                                   resource database.
+B. Our Intuition
+                                                                      III. NETWORK MODEL AND PROBLEM FORMULATION
+   We observed the latency issues of SFC mapping and VNF
+scheduling schemes. SFC mapping is carried out based on the           In this section, we design a cascading failure model and
+completion of SFC construction. One of the main functions          node importance metrics, and provide design objectives.
+of the SFC mapping phase is to search for the location of
+all nodes in the physical network that can be instantiated for     A. Network Model
+VNF services based on VNF constraints, in preparation for
+the scheduling service phase. Fig. 1 shows the one-to-one             In actual DCNs, application level requirements such as high
+correspondence between VNF and physical nodes during the           availability have a significant impact on the network model.
+mapping phase. The feasible range of this solution is limited,     To meet high availability requirements, redundant nodes need
+which is not conducive to finding the optimal solution of this     to be allocated between different hosts or data centers. This
+type of problem. To avoid the above issues, we will form a         means that in our network model, we not only need to consider
+set list of the results of VNF mapping nodes and relax the         the resources and connectivity relationships of nodes, but also
+position of VNF execution scheduling nodes. So that the SFC        introduce the concept of redundant nodes and their related
+scheduling phase VNF can dynamically map virtual network           properties.
+functions to suitable virtual machines for instantiation. It
+is expected to optimize the transmission delay of network             Underlying physical network. We use an undirected
+function scheduling and the delay of instantiation in the virtual  weighted graph GS = (N S, ES) to represent the underlying
+machine to obtain better results.
+
+   When a service request arrives, the network functional
+module that processes it should be instantiated in the network
+based on the requirements of the service (such as maximum
+latency, bandwidth, resource requirements, etc.). Each service
+request corresponds to a virtual service function chain, and a
+virtual SFC contains one or several VNFs. For all packets in
+the chain, the network functional modules and order they pass
+through are identical. In the VNF scheduling shown in Fig. 2,
+for each service request, the input/output network elements
+are given and known, and the network functions that need to
+be processed are also certain. On the premise of meeting the
+requirements of the request, the corresponding virtual network
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                       3321
+
+physical network, N S represents a set of physical nodes, ES           Assuming that the load increment distributed by the good
+represents the set of physical links. Let c(nS) represent the       node is proportional to the load of the failed node, the load
+CPU resource weight of each physical node nS  N S in the            increment Fj is
+set. wi,j(eS) represents the bandwidth weight of the physical
+link eS  ES connecting any node i and j. Let ki be the                                Fj = Fi · F (lij, , kj, ),                          (4)
+number of edges associated with a node i in graph GV , which
+is called the degree of i. Meanwhile, let w(nS) be the average      where lij is the distance between failed node i and node j.
+                                                                     and  are the parameters of the redistribution strategy that
+link bandwidth resources of the node.
+   Virtual network. Let an undirected weighted graph GV =           control the distribution range and uniformity of the load on the
+
+(N V , EV ) represent a virtual network, where N V is the set       crashing nodes. After node i fails, the weight of intact node
+of virtual nodes, EV is a virtual link set. Each virtual node
+                                                                    j when sharing its load ij is a function of lij and kj, ij =
+and virtual link between nodes have corresponding weights           cli-jkj. It can be seen that the proportion of load distribution
+(i.e. c(nV ) and wi,j(eV )) represents the resources it requires.   from failed node i to intact node j is
+Let w(nV ) be the average link bandwidth resources of virtual
+                                                                         F (lij, , kj, ) =            cli-j kj    km     ,
+network node n.                                                                                     mi cli-m
+
+B. Cascading Failure Model                                                                    =       li-j  kj    km  .                   (5)
+                                                                                                            li-m
+   When studying cascading failures in DCNs, in order to                                            mi
+describe the initial load situation of network nodes, we intro-
+duced the initial load formula. Let Fi be the initial load of       where i is the node set within the load distribution range
+nodes, and  and  are parameters that control the initial load       of node i,   [0, ),   [0, ). The determination of
+strength of nodes. In actual network environments, the load of
+nodes is often related to their connectivity, and here the node      requires comprehensive consideration of multiple factors.
+degree ki is used to reflect this relationship. The definition of
+initial load Fi is as follows:                                      Taking the fat-tree network as an example, core switches
+
+                                                                    connect multiple pods and handle large amounts of traffic,
+
+                                                                    while edge switches are closer to end-user devices. Therefore,
+
+                                                                    when determining , we not only need to consider the physical
+
+                      Fi = ki ,                                     link distance between nodes, but also the hierarchical distance.
+
+                                         (1)                        For key nodes connecting multiple subnets at different levels,
+
+where  and  are parameters that control the initial load            in order to ensure that the load can be reasonably distributed
+
+strength of the node. When it is difficult to determine the actual  throughout the network, the   0, and a more global
+
+physical load on the network, it is reasonable and effective        allocation strategy can be adopted. For node groups with tight
+
+to use "structural load" to study the invulnerability and node      connections and frequent interactions within a local area, the
+
+importance evaluation of DCNs.                                        .
+
+In many practical DCNs architectures, traffic distribution          When a node fails, its load is redistributed to other intact
+
+is often closely related to the connectivity of nodes. For          nodes according to the rule of Eq. (4). This redistribution
+
+example, in common tree or fat-tree topologies, nodes with          of load may cause the receiving nodes to exceed their load-
+
+high connectivity typically undertake more data forwarding          carrying capacity, triggering the failure of these nodes. The
+
+tasks. Because they are in a critical position in the network,      newly failed nodes will further redistribute their load to
+
+connecting more subnets or devices. This results in a certain       other nodes in the network, and so on, forming a cascading
+
+correlation between the initial load of the node and its degree.    effect. For example, assume that node A fails, and its load is
+
+Meanwhile, although load balancers try their best to achieve        distributed to nodes B, C, and D according to Eq. (4). If the
+
+load balancing when allocating traffic [8], it is impossible to     original load of node B plus the redistributed load exceeds
+
+achieve absolute balance due to the complexity of network           its load capacity (determined by Eq. (2)), then node B will
+
+structure and business requirements. In some cases, nodes with      also fail, and its load will be redistributed to other nodes,
+
+high connectivity will naturally receive more traffic, so there     such as nodes E, F, etc. This chain reaction is the specific
+
+is a practical basis for associating the initial load with node     manifestation of the cascading effect.
+
+connectivity.                                                       C. Node Importance Index
+
+In DCNs, the ability of each node to handle load is usually
+
+affected by technical and economic factors. When determining           According to the cascading failure process of the above net-
+                                                                    work, the importance of whether node i will trigger cascading
+the load capacity of a node, it is "capacity as needed", so it is   failures can be measured by the average load oscillation degree
+                                                                    caused by node i in its load distribution range after failure.
+considered that the load capacity Ci of a node is proportional      According to the redistribution rules and node capacity of
+                                                                    the crashed node load. In order to avoid the occurrence of
+to its initial load.                                                interlocking failure, the following conditions shall be met:
+
+                      Ci = (1 + )Fi,     (2)
+
+where  is the capacity coefficient of the network, indicating            Fj <                       li-jkj- ki    < ,                     (6)
+the capacity of the node to handle additional load.                       Fj                        mi li-mkm
+
+   Suppose that the load of the failed node is distributed to       let  li-j kj- ki  indicate the  load oscillation degree of node j
+some or all of the intact nodes in the network according to              mi li-m km 
+certain rules. These local events will cause an update of the
+load of nodes in the network, then
+
+                      Fj  Fj = Fj + Fj.  (3)                        after node i fails. If it is greater than 1, node j is overloaded; if
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+3322                                                                IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+it is less than 1, node j is not overloaded. Define the importance     Combined with the deterministic neighbor relationship of
+degree I(i) of node i as the average oscillation degree of all
+nodes in the distribution range,                                    fat-tree, we derive the specific expression in three layers.
+                                                                       For leaf nodes (i  Leaf, ki = m), the neighbor set is
+      I (i)  =     ji li-jkj- ki  ,  (7)
+                |i| mi li-mkm                                       i = {Aggregation nodes}, with a total of m neighbors, each
+                                                                    having degree kj = kA = m+k0. Then we get the summation
+                                                                    terms calculation.
+
+where |i| is the number of nodes in the set |i|. The size of            kj- = m · (m + k0)- ,                   km = m · (m + k0).
+the index value can clearly indicate the failure consequences
+of the node. When I(i)  1, the failure of node i will cause         ji                                  mi
+nodes to overload one after another. When I(i) < 1/|i|,
+successive overloads will not be triggered after node i fails.      The importance of leaf nodes is as follows:
+When 1/|i|  I(i) < 1, node i failure may or may not
+trigger successive overloads.                                       I (i)L   =  m-1 · m · (m + k0)-             =       m -1      .             (9)
+                                                                                     · m · (m + k0)                (m + k0)    ·
+
+   We add a new weight factor to measure the contribution of           For aggregation nodes (i  Aggregate, ki = m + k).
+nodes in high availability. The definition of I (i) is as follows:  The neighbor set is i = {mleaf nodes, kroot nodes}, with
+                                                                    neighbor degrees kj = kL = m (leaf nodes) and kj = kR = k
+             I (i) = I(i) × wha,     (8)                            (root nodes). Then we get the summation terms calculation.
+
+where wha is a weight factor related to high availability, and           kj- = m · m- + k · k- = m1+- + k1+- .
+its value is determined based on the node's position and role
+in redundant node allocation.                                       ji
+
+   1) Load Distribution in Fat-Tree Network: The fat-tree-                       km = m · m + k · k = m1+ + k1+.
+based architecture is a common structure in DCNs. It has
+characteristics such as hierarchical design, which enables                   mi
+efficient data transmission and load distribution. In this archi-
+tecture, the nodes at different levels have different functions     The importance of aggregation nodes is as follows:
+and connection degrees. For example, the core switches in
+the fat-tree connect multiple pods, handling a large amount                  I(i)A =  (m + k)-1(m1+- + k1+- )                  . (10)
+of traffic, while the edge switches are closer to the end-user
+devices.                                                                                     (m1+ + k1+ )
+
+   For our proposed node importance assessment method and              For root nodes (i  Root, ki = k). The neighbor set is
+load distribution strategy, when applied to the fat-tree archi-     i = {Aggregation nodes}, with k neighbors, each having
+tecture, some adjustments are needed. Since the fat-tree has        degree kj = kA = m + k. Then we have the summation terms
+a hierarchical structure, the load distribution may be affected     calculation.
+by the position of the nodes in the hierarchy. We can refer to
+relevant research [3] which proposed ways to adapt theoretical            kj- = k · (m + k)- ,                     km = k · (m + k)
+models to the fat-tree architecture. For instance, we can
+consider the hierarchical distance between nodes in addition to     ji                                  mi
+the physical link distance when calculating node importance.
+This can better reflect the actual load-bearing capacity and        The importance of root nodes is as follows:
+importance of nodes in the fat-tree DCNs.
+                                                                    I(i)R =     k-1 · k · (m + k)-      =             k -1       .              (11)
+   Fat-tree network is a kind of hierarchical interconnection                                                                  
+network. Its nodes are divided into three layers. The degree                           · k · (m + k)            (m  +   k)  ·
+and connection relationship of nodes in each layer are strictly
+deterministic. For leaf node (L) with bottom node, only             2) Parameter Sensitivity Analysis: The importance of leaf
+connected to m aggregation nodes, degree kL = m. For
+aggregate node (A) with an m-tier node, connecting m leaf           nodes is positively correlated with the number of underlying
+nodes and k root nodes, with degrees kA = m + k. For
+root node (R) with the top-level node, only connected to k          connections m, and negatively correlated with the degree of
+aggregation nodes, degree kR = k. The neighbor set i of all
+nodes is uniquely determined by the hierarchical structure (for     aggregation nodes m + k. When  < 1, leaf nodes with lower
+example, the neighbor of the leaf node must be the aggregation
+node, the neighbor of the aggregation node must be the leaf         degrees may become critical due to load concentration (e.g.,
+and root node, and the neighbor of the root node must be the                                            , 2 -1
+aggregation node), without random connection. The nearest           when  m  =  2, k  =  4:  I (i)L  =          with    =   0.5     yielding
+neighbor preferential allocation rule is defined as: when node                                          6 ·
+i fails, its load is only allocated to the direct neighbor node     higher importance than  = 1.
+  , i.e. the first-order neighbor), and the allocation weight
+is related to the degree of neighbor node kj (  0) and              As a cross layer hub, the importance of aggregation node
+is preferentially allocated to the neighbor with the largest
+degree).                                                            is determined by the degree of leaf and root node. If m k
+
+                                                                    (e.g., dense bottom-layer connections), loads tend to distribute
+
+                                                                    more to lower-degree root nodes, potentially causing root node
+
+                                                                    overload. Conversely, if k m, more load distributes to leaf
+
+                                                                    nodes, requiring attention to leaf node capacity limits.
+
+                                                                    The importance of the root node is positively correlated
+
+                                                                    ( > 1) with the root node degree k or negatively correlated
+
+                                                                    ( < 1). Failure of low-degree root nodes may cause sudden
+
+                                                                    load surges at aggregation nodes, triggering cascading failures.
+
+                                                                    For capacity coefficient , the smaller  indicates weaker
+
+                                                                    capacity for handling additional loads, leading to higher impor-
+
+                                                                    tance I(i)loc and greater likelihood of triggering cascading
+                                                                    failures. For load intensity parameter  with  > 1, aggre-
+
+                                                                    gation nodes with maximum degree (m + k) show highest
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                       3323
+
+importance, becoming core risk points for network cascading          i-th moment after time t can be marked as Smt+i. According
+failures. When  < 1, leaf nodes (m) and root nodes (k) with          to the (p, q) ARMA model, the VM Dm predicts the resource
+lower degrees may surpass aggregation nodes in importance,           demand at time t+1 based on the historical resource demand
+validating the conclusion that "low-degree nodes can trigger
+cascading failures".                                                 before time t:
+
+   For load distribution uniformity parameter  with  =                    Smt+1 = AR(S) + M A(e),
+0, load is uniformly distributed among neighbor nodes                AR(S) = 0, 1Smt + 2Smt-1 + . . . + pSmt-p,
+(degree-independent), simplifying the importance formula for         M A(e) = etm+1 + em t + 1em t-1 + . . . qem t-q, (13)
+aggregation nodes to:
+                                                                     where  and  are the constant estimated from the sequence,
+I(i)A =        (m + k)-1(m + k) (m + k)-1                            e is the error value satisfying the normal distribution. This is
+                                  =          . (12)                  the prediction model of VM demand resources.
+                  (m + k) ·          
+                                                                        According to the above principle, the VM resource demand
+   When  > 0, preferential allocation to higher-degree               at y times after the current time can be predicted according to
+neighbors (e.g., when aggregation nodes fail, more load is           x times before the current time t (including the current time).
+distributed to higher-degree root nodes; if k > m, root nodes        The prediction formula at the k-th moment after time t is:
+will bear greater load burden).
+
+                                                                     Smt+k = f (Smt+k-x, Smt+k-x+1, . . . , Smt+k-1),                     (14)
+
+        IV. TOPOLOGY-AWARE DYNAMIC MIGRATION                         where f is the prediction algorithm model. In order to avoid the
+                                                                     SLA violation caused by too small predicted value, multiply
+   In the previous section, we introduced the network model          the calculated predicted value by the coefficient  (usually
+and node importance evaluation method. Based on this, this           take a constant slightly greater than 1) as a supplement to the
+section will design a topology aware fault-tolerant migration        predicted value obtained by the above prediction algorithm.
+scheme based on a cascaded fault model.
+                                                                        Although the resource demands of containers in actual
+A. Preprocessing                                                     container management systems are often non-stationary due to
+                                                                     the influence of the number of requests arriving at microser-
+We adopt the strategy of combining the difference method             vices, we can preprocess the data to make it approximately
+                                                                     satisfy the stationarity assumption of the ARMA model. For
+with the moving average method. Let xt and xt-1 be the               example, we can use differencing operations on the original
+observed value of the original time series at time t and t - 1,      time-series data. By subtracting consecutive observations, we
+                                                                     can remove the trend and seasonal components. After such
+respectively. The value at time t after first-order differencing of  preprocessing, the data becomes more suitable for analysis
+                                                                     by the ARMA model. In this way, the ARMA model can
+the original time series xt, calculated as xt = xt -xt-1. Let        effectively extract features from the processed data, providing
+M At be the value at time t after applying a three-step moving       valuable References for VM resource demand prediction. Even
+                                                                     though the real world container demands are complex, the
+average. The random fluctuation is reduced by the three-step         preprocessed data allows the ARMA model to capture certain
+                                                                     patterns and trends, which is beneficial for making informed
+moving  average   method M At  =  , xt-1 +xt +xt+1  where            decisions in resource scheduling.
+
+                                                3
+xt-1 and xt+1 are the first-order differenced value at time
+
+t - 1 and t + 1, respectively. This method is based on the
+
+theory of time series analysis [28], and meets the requirements
+
+of ARMA for stability by eliminating trends and irregular
+
+fluctuations.
+
+B. VM Resource Demand Prediction Model                               C. Energy-Aware VM Resource Scheduling
+
+   Suppose the VM set is D = {D1, D2, . . . , DM }, where               The energy-aware VM resource scheduling process is
+M represents the number of VMs. The resource require-                divided into three stages: dynamic resource monitoring,
+ment of VM Dm is the d-dimension vector Sm =                         dynamic VM migration, and VM static deployment.
+{Sm,1, Sm,2, . . . , Sm,d}, where for each dimension Sm,i is
+the number of the i-th physical resource required by the                1) Dynamic Resource Monitoring: To overcome the lim-
+VM, such as CPU, memory, disk and bandwidth. The server              itations of the static resource utilization assumption in the
+set is P = {P1, P2, . . . , PN }, where N is the number of           original algorithm, we introduce a dynamic resource monitor-
+servers. The resources owned by the server Pn are also               ing module. This module periodically (e.g., every T time units)
+the d-dimension vector Rn = {Rn,1, Rn,2, . . . , Rn,d}, so the       collects resource usage data for each VM instance, including
+remaining resources of the server can be represented by the          CPU utilization Ucpu(i, t), memory utilization Umem(i, t), and
+vector Ln = {Ln,1, Ln,2, . . . , Ln,d}.                              bandwidth utilization Ubw(i, t), where i denotes the i-th VM
+                                                                     instance and t represents the current time. These data are stored
+   In order to grasp the complex structure of the time series        in a resource usage database for subsequent resource allocation
+and maintain the simplicity of the prediction model, we adopt        decisions.
+the Auto-Regressive and Moving Average model (ARMA) as
+the prediction model of VM demand resources [26]. Therefore,            Based on the data collected by the dynamic resource moni-
+the complexity of model calculations is reduced while ensuring       toring module, we design an adaptive adjustment mechanism.
+performance. Mark the current time as t, and the resources           For each VM instance i, we define the resource requirement
+required by the containter Dm at time t can be marked as Smt ,       change rate R(i, t) as follows:
+then the required resources of the VM at time i before time t
+are marked as Smt-i. The required resources of the VM at the                    R(i, t) =  Ucpu(i, t) - Ucpu(i, t - T )
+                                                                                                      Ucpu(i, t - T )
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+3324                                                                  IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+      +  Umem(i, t) - Umem(i, t - T )                                    In Algorithm 1, the complexity of the node importance
+                   Umem(i, t - T )                                    evaluation algorithm mainly depends on the load distribution
+                                                                      range of the network. If the load is distributed globally, the
+      +  Ubw(i, t) - Ubw(i, t - T ) ,        (15)                     complexity of the algorithm is O(n2). If it is between global
+                     Ubw(i, t - T )                                   allocation and nearest neighbor allocation, the complexity of
+                                                                      the algorithm mainly depends on the complexity of Floyd
+where , , and  are weight coefficients, and  +  +  = 1.               algorithm is O(n3). After introducing the above algorithm,
+When R(i, t) >  ( is a pre-set threshold), indicating an              we now turn to another key algorithm in our method.
+increase in the resource requirement of the VM instance,
+we allocate additional resources to it. When R(i, t) < -,             Algorithm 1 Network Node Importance
+indicating a decrease in the resource requirement, we release
+some resources from the VM instance.                                       Require: Network adjacency matrix A = (ij)n×n, initial
+                                                                           load strength parameters  , network capacity factor ,
+   2) Dynamic VM Migration: We use x historical data of                    load distribution policy parameters  and ;
+VM running to predict the resource requirements of each VM                 Ensure: Network node importance.
+at y moments after the current moment t. Let Smt+1, Smt+2,...,         1: Calculate F and C by Eq.s (1) and (2);
+Smt+y represent the resource requirements, and then get the            2: Determine the distribution range of the load based on the
+resource utilization of each server at y times. If the resource            value ;
+utilization of server Pn is greater than up or lower than              3: if   M1 then
+the lower utilization threshold down, the VMs in server Pn             4: Nearest neighbor distribution load;
+are dynamically adjusted at the next moment to meet the                5: end if
+requirements of system performance assurance and energy                6: if   M2 then
+optimization.                                                          7: Global load distribution;
+                                                                       8: end if
+   If the utilization rate of a resource in the server Pn is greater   9: if M2 <  < M1 then
+than the upper limit threshold, the VMs in the server will be         10: Mixed load, get the shortest distance matrix D by Floyd
+arranged in descending order according to the utilization size
+of overloaded resources to form the utilization list of such                   algorithm;
+resources. Select one or more VMs to migrate out and place            11: end if
+them in the queue of VMs waiting to be deployed, so as to             12: Calculate the node importance by Eq. (7);
+ensure that the resource utilization of the server recovers to the    13: return Network node importance;
+normal threshold range after the migration, and the difference
+with the threshold is minimal. And due to the problem of                 In Algorithm 2, topology-awareness migration method
+migration time cost, the VM that chooses to migrate out needs         refers to the VNF migrating to the physical node closest to
+to migrate out before the overload occurs to meet the user SLA        its neighboring VNF mapping node. Here, distance refers to
+requirements. The following formula is met:                           the length of the virtual link's reconstruction path, which is
+                                                                      the number of hops. Therefore, the topology-awareness VNF
+                                                                      transfer model can be defined as:
+(1 - Ln,i) - Sm,i  up, i = 1, 2, . . . , d,
+
+min up - 1 - Ln,i -  Sm,i  , tmove  toverload
+                                                 (16)
+
+where Sm,i is the i-th resource and one or more VMs                                        d(m, n), xm u = 1, xvn = 1,
+that were moved out so that server utilization is less than the       
+maximum threshold of .
+                                                                      M (u, m) = vneig(u)
+   If the utilization of resources in the server Pn is less than
+the lower threshold, all VMs will be migrated out and placed          m  {m|CmS > CuV &BS (p(m, n)) > BuVv},
+in the VM queue.
+                                                                                                                                                (17)
+   The dynamic migration of VMs also needs to meet the
+following restrictions: (1) The quality of service of VMs needs       where d(m, n) is the shortest-path distance (hops) between
+to be guaranteed, that is, to meet the requirements of user           m and n that meet bandwidth requirements. CmS refers to the
+SLA. (2) During VM migration, the CPU, memory, bandwidth              available resources of a node, and p(m, n) refers to the shortest
+and other resources of the server need to meet the migration          path from m to n. BS (p(m, n)) represents the available
+requirements. (3) The simultaneous migration of multiple VMs          bandwidth on the shortest path from m to n. Calculate the
+will lead to a sharp decline in server performance, so the            minimum system overhead for each VNF of the migrated
+proposed algorithm allows only one VM to migrate at the               VNFList in a loop of steps (10)­(12). The VNFi with the
+same time for each server.                                            smallest Ci is used as the final VNFm to be migrated and
+                                                                      transferred to physical node Sd.
+                      V. ALGORITHM DESIGN
+                                                                         The input of Algorithm 3 is the set of all overloaded phys-
+   In this section, we propose a topology-awareness energy            ical nodes and their VNF sets. For each overloaded physical
+consumption optimization algorithm based on the cascading             node, Algorithm 2 is executed to select the VNF with the
+fault model proposed in the previous section.                         lowest system overhead for migration. Until all nodes do not
+                                                                      exceed the resource threshold, finally output the corresponding
+   Firstly, we present an algorithm for evaluating node               solution.
+importance.
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                            3325
+
+Algorithm 2 Dynamic Local Migration Algorithm Based on           A. Evaluation Settings
+
+Topology-Awareness                                               We conduct experiments on the GreenCloud cloud simula-
+
+     Require: Overloaded physical node Ss and its VNF set        tion platform [32]. This platform is widely used in DCNs for
+     VNFList;
+                                                                 its ability to simulate network topologies, resource allocation,
+     Ensure: The VNFm that needs to be migrated and the
+     physical node Sdthat needs to be migrated.                  and traffic patterns. It provides a flexible and controllable
+     Calculate the importance index of physical nodes accord-
+                                                                 environment to evaluate the performance of different algo-
+
+     ing to Algorithm V;                                         rithms. In our study, we utilized its features to model the DCN
+
+2: Let Cmin[1, 2, . . . , |V N F |] be the the minimum system    environment and test the performance of our proposed TRA.
+   overhead of VNFs on each VM in the VNFList;
+                                                                 1) Dataset: For simulation-based evaluation, we use two
+
+                                                                 Hadoop workload datasets (A and B) [25], representing low
+
+     Let Di represent the physical node that brings the mini-    and high network loads, respectively. These datasets are fed
+
+     mum system overhead to VNFi;                                into the GreenCloud platform [32] to model traffic patterns
+
+4: Cmin  ;                                                       in DCNs. Facebook's 4-post cluster adopts a three-layer Clos
+
+     for each VNFi  VNFList do                                   topology design [25], with its core layer (Fat Cats), aggrega-
+
+6: for each Sj  S do                                             tion layer (CSWs), and edge layer (RSWs) fully corresponding
+
+     if Check constraints(VNFi,Sj) = False then                  to the pod hierarchical structure of fat-tree. The 4-post cluster
+
+8:           Continue;                                           is closely related to fat-tree. (1) Each Pod (Cluster in a 4-post
+
+     end if                                                      cluster) contains a fixed number of edge nodes and aggregation
+
+10:  Add Sj to SV NFi ;                                          nodes, mathematically isomorphic to the k-ary tree structure of
+
+     end for                                                     the fat-tree (when k=4, the 4-post cluster is a fat-tree with k=4).
+
+12: Let Di be the target physical node to be migrated,           (2) There are multiple equivalent shortest paths between nodes
+        and calculate the minimum system overhead Ci for
+        migration;                                               (such as ECMP routing), which support traffic load balancing
+
+                                                                 and are consistent with the path diversity of fat-tree. (3) The
+
+     if Ci < Cmin and Di = Ss then                               core layer and aggregation layer adopt a 1:1 non-blocking
+
+14:  Cmin  Ci;                                                   design, while the edge layer allows for moderate overload,
+
+     VNFm  VNFi;                                                 which conforms to the typical configuration of fat-tree. In this
+
+16:  Sd  Di;                                                     paper, TRA constructs a load distribution model based on node
+
+     end if                                                      degree (ki) and path distance (lij) (see Eq.s (1)­(4)). Due to
+
+18: end for                                                      the fact that the node degree and path distance calculation
+
+     return (V N Fm, Sd);                                        method of 4-post cluster is completely consistent with fat-tree
+
+                                                                 (such as edge node degree of m and aggregation node degree
+
+                                                                 of m + k), the node importance evaluation formula of TRA
+
+Algorithm 3 Dynamic Global Migration Algorithm Based on          (such as I(i)) can be directly applied to both topologies.
+Topology-Awareness
+                                                                 The sampling period is 5 minutes to verify the maximum
+     Require: All overloaded physical node sets SList and the
+     VNF set VNFList above them;                                 and average link loads of the algorithm under low and high
+     Ensure: The set of VNFs that need to be migrated and the
+     corresponding target migration physical nodes.              load conditions. The maximum link load lmax is the maximum
+     for each Si  SList do
+                                                                 load of the link after deploying routing algorithms to distribute
+         Execute Algorithm 2 to select the migrated VNF.
+ 3: while Si still overload do                                   traffic requests, and is an important indicator to measure the
+
+            Continue to execute Algorithm 2 and select the       degree of network load distribution balance. The average link
+            VNF with the second lowest system overhead for
+            migration;                                           load `live' represents the average value of all link loads in the
+         end while
+ 6: end for                                                      network, and is a measure of the degree to which routing
+
+                                                                 algorithms consume network resources. Assuming e  E,
+
+                                                                 the maximum link load is lmax = lmax(e), then the average
+                                                                                                            E
+                                                                 link load can be denoted as lave  =  1     e  l(e).  Usually,
+                                                                                                      N
+
+                                                                 the decrease in maximum link load comes at the cost of an
+
+                                                                 increase in average link load. Due to the unique topology
+
+                                                                 of systems, various algorithms route according to different
+
+                                                                 coordinate directions between nodes, so the average link load
+
+                VI. PERFORMANCE EVALUATION                       solved is basically the same.
+
+   This section evaluates the performance of TRA through         2) Settings:        The        GreenCloud     simulations
+a multi-layer experimental framework, combining simulation-
+based validation and testbed-driven verification. Specifically,  (Section VI-A­VI-C) focus on algorithmic performance
+simulation experiments (Sections VI-A­VI-C) use the Green-
+Cloud platform [32] and real-world Hadoop datasets [25]          metrics (e.g., migration time, load balancing index), while
+to validate TRA's scalability and load balancing capa-
+bilities under synthetic workloads. Testbed experiments          the testbed experiment (Section VI-D) emphasizes real-world
+(Section VI-D) deploy TRA on a fat-tree topology with
+physical nodes to measure its practical effectiveness in real-   constraints (e.g., hardware resource limits, latency sensitivity).
+time resource migration and congestion control.
+                                                                 The experiment will select TeaVisor [34], MiOvnm [33],
+
+                                                                 intelligent ACO, and TRA of VMs under four performance
+
+                                                                 indicators: the number of hardware devices used, the number
+
+                                                                 of network congestion links, the number of server overloads,
+
+                                                                 and time complexity. The initial distribution of VM is
+
+                                                                 achieved through the K-means algorithm. The standard
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+3326                                                                 IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+                 TABLE I                                                The instantaneous link load of a link L at time t is given
+      DIFFERENT TYPES OF VMS                                         by:
+
+                                                                     Instantaneous Link Load
+
+                                                                     = lim LL(L, [t, t + ]) = D(L, t),                                          (19)
+                                                                     0
+
+                                                                     where is the limit of LL(L, [t, t + ], D(L, t) is the instan-
+                                                                     taneous data rate on link L at time t. The instantaneous load
+                                                                     corresponds to the data rate D(L, t) at time t, equivalent to
+                                                                     the limit of LL(L, [t, t + ] as  0.
+
+                                                                        The average bandwidth utilization BU (L, [t1, t2]) of a link
+                                                                     L over the time interval [t1, t2] is defined as:
+
+                                                                                                 1       t2 D(L, t)
+                                                                     BU (L, [t1, t2]) = t2 - t1 t1                       dt,                    (20)
+deviation of VM quantity for each physical node is  = 1.8,                                                      B(L)
+ensuring that 95% of nodes carry 3-5 VMs (total number of
+nodes =50, total number of VMs =200). Based on empirical             where B(L) denotes the maximum bandwidth capacity of link
+values and relevant reference [19], the parameters are set as        L.
+follows: the simulation time for different VM deployment
+quantities is set to two hours, and the predicted value is              The instantaneous bandwidth utilization BUinst(L, t) of a
+supplemented by a coefficient  as 1.1. By using the ARMA             link L at time t is defined as:
+model to predict the future resource requirements of VM
+(such as CPU utilization), the predicted value is the weighted       BUinst(L, t) =                      r(L, t)
+output of 10 historical time window data. To avoid SLA                                                          ,                               (21)
+violations, the final resource allocation is the predicted value                                         B(L)
+multiplied by ( = 1.1). Set the resource dimension d to 4,
+and select CPU, memory, disk, and bandwidth resources as the         where r(L, t) denotes the instantaneous data rate on link L at
+reference dimensions for deployment. The values of resource          time t.
+utilization upper limit threshold up and lower threshold 
+are 0.85 and 0.15, respectively. The VM migration time tmove            2) Congestion Detection Criteria: Congestion is defined
+is determined by the empirical Eq. tmove = 0.0904r + 2.455,          using a dual-threshold mechanism (Eq. (24)), which combines
+where r is the memory of the migration VM. The proportion            link bandwidth utilization ( = 0.8, Eq. (22)) and end-to-end
+coefficient k is taken as 0.1. Weight coefficient , ,  are           latency (Tth=50 ms, Eq. (23)). This criterion is used to trigger
+taken as 2, 1.5, and 1, respectively.                                VM migration in both simulations and testbed experiments but
+                                                                     is not directly reported as a performance metric.
+   The comparison experiment adopts the multi baseline inde-
+pendent comparison method, that is, TRA, VVI, teavisor and              Let there be N links L1, L2, · · · , LN in the network. The
+miovnm are run for 30 times under the same experimental              network is considered congested according to the following
+conditions respectively, and the performance difference is           rule:
+calculated after recording the average value of each index. The
+performance metrics were calculated as follows: for each base-       Congestion B = 1,           N    I  (BUinst(Li)  >  )    >                 k,
+line algorithm Ai, the reduction rate is (Ai - T )/Ai × 100%,                                    i=1
+where Ai is the index value of the i-th comparison algorithm,
+and T is the index value of TRA. and the reported values are                            0, otherwise,
+the arithmetic mean of the three baselines (see Table II).
+                                                                                                                                                (22)
+
+                                                                     where   (0, 1] is a bandwidth utilization threshold. I(·) is
+
+                                                                     the indicator function, and when BUinst(Li) > , it takes 1
+                                                                     (because BUinst(Li)  1), so this condition never holds when
+                                                                      > 1, I(·) is always 0.
+
+                                                                     Let P be the set of all source-destination node pairs in the
+
+                                                                     network. The network congestion is considered as follows:
+
+                                                                                             1,  (s,d)P I(T (s, d) > Tth) > m,
+                                                                     Congestion L =
+                                                                                        0, otherwise,
+B. Evaluation Metrics
+                                                                                                                                                (23)
+
+   1) Performance Evaluation Metrics: The following metrics          where T (s, d) is the average transmission latency of packets
+are used to quantify TRA's performance in load balancing,
+resource utilization, and fault tolerance. These metrics are         from source node s to destination node d, and Tth denotes
+calculated from simulation/testbed data and compared across          the latency threshold for congestion detection. m is a nor-
+algorithms.
+                                                                     malization factor (dimensionless) that scales the sensitivity of
+   The average link load LL(L, [t1, t2]) of a link L in the time
+interval [t1, t2] is defined as:                                     congestion detection within the function.
+
+                                                                     Congestion Final=
+
+                       1         t2                                  1, Congestion B = 1  Congestion L = 1,
+                                                                                                                                    (24)
+      LL(L, [t1, t2]) = t2 - t1      D(L, [t1, t2]),  (18)
+                                                                     0, otherwise,
+                                 t1
+                                                                     where Congestion B means that at least k links meet
+where D(L, [t1, t2]) denotes the integrated data rate over the       BUinst(li) >  (Eq. (22)). Congestion L indicates that there
+time interval [t1, t2]. LL(L, [t1, t2]) quantifies the average load  are at least m nodes in the associated nodes of the trigger link
+on link L over the interval [t1, t2].                                that meet the requirements of I(i)  1 (Eq. (23).
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                       3327
+
+                                                                                           TABLE II
+                                                               COMPARISON WITH MIGRATION TIME AND LATENCY
+
+Fig. 4. Link load in low load.                                      Fig. 6. Comparison of total bandwidth.
+
+Fig. 5. Link load in high load.                                     Fig. 7. The evolution of network node importance.
+
+   Our congestion decision uses a double standard coordination      links in the network is relatively large, making it less likely
+mechanism. Firstly, the physical overload link is identified        to cause link congestion. Fig. 5 shows the maximum link load
+by the link bandwidth utilization (Eq. (22)), and then the          distribution of each routing algorithm in the network under
+cascading risk is verified by the node importance and delay         high load data sample B. Compared to Fig. 4, under high load
+(Eq. (23)). The network congestion is determined only if both       conditions, the remaining capacity of links in the network is
+are satisfied at the same time (Eq. (24)). This design avoids       relatively small, and the links are prone to congestion. TRA
+the defect of a single indicator. For example, the temporary        balances the network traffic by means of dynamic weight, and
+traffic burst may lead to the misjudgment of standard 1, but        has the best effect.
+standard 2 filters the overload of non critical nodes through
+the node importance to ensure that the judgment result reflects        2) Evaluate Bandwidth Utilization: In Fig. 6, TRA opti-
+the real congestion risk.                                           mizes multi-path traffic distribution to minimize average
+                                                                    bandwidth utilization (BU, Eq. (20)), achieving the lowest
+C. Evaluation Results                                               BU (18.2%) in high-load scenarios (Fig. 5), which is 24.7%
+                                                                    lower than MiOvnm. When the load is heavy, due to the
+   The following results are based on the metrics defined in        inability of the TeaVisor to adaptively allocate the number
+Section VI-B: LL (Eq. (18)) and BU (Eq. (20)) for performance       of paths for traffic requests, the MiOvnm cannot balance the
+evaluation, and the dual-threshold criteria (Eq. (22)­(24)) for     load conditions between links, resulting in a certain degree of
+congestion-triggered migration.                                     performance degradation for both.
+
+   1) Evaluation of Link Load: Fig. 4 and Fig. 5 show the              Fig. 7 shows the evolution law of the importance of network
+maximum LL (Eq. (18)) under low/high loads. LL is calcu-            nodes under different load distribution range parameters 
+lated as the average data rate over time intervals, and TRA         (  (0, 1]). When  approaches 0 (global allocation strat-
+reduces LL by 28.6% compared to baselines, demonstrating            egy), the importance of core nodes (such as nodes 1-5)
+its load balancing effectiveness. In Fig. 4, VVi is a single        is significantly higher than that of edge nodes (such as
+path algorithm, traffic requests can only be distributed on         nodes 11-14) due to their high connectivity and cross layer
+one path, so its maximum link load is the highest. The other        traffic. When  approaches 1 (nearest neighbor allocation strat-
+three algorithms all adopt a multi-path traffic request allocation  egy), the load is concentrated on local neighbor nodes. Edge
+scheme. Under low load conditions, the remaining capacity of        nodes are more prone to overload due to capacity constraints,
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+3328                                                              IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+Fig. 8. Network congested links.                                  Fig. 10. Revenue expense ratio.
+
+Fig. 9. Prediction accuracy of TRA.                               Fig. 11. The running time of node importance evaluation.
+
+and the importance index rises rapidly (for example, the I(i) of  time window Ntotal represents the total number of predictions.
+node 14 rises from 0.25 to 0.82). When  is in the middle range    We quantified the prediction accuracy of TRA under different
+(0.7-1.0), the evolution of node importance tends to be stable.   testing time windows.
+This verifies the prediction of I(i  ki ) (global allocation)
+and I(i  ki-1) (local allocation) in the theoretical model.          In Fig. 8, TRA quantifies the link communication cost
+                                                                  in the VM migration process of the algorithm and selects
+   3) Evaluation of Network Congestion: To independently          servers with lower communication costs for placement. TRA
+evaluate the ability of TRA to predict overload time, we          minimizes congested links (average 3 links under high load,
+designed and conducted a series of experiments. In the exper-     Fig. 8) by adhering to the congestion criterion in Eq. (20),
+iment, three network scenarios were simulated: light load,        which requires both BU > 0.8 and latency >50 ms.
+medium load, and heavy load. In each scenario, utilize TRA's
+resource prediction module to monitor the real-time CPU and          Fig. 9 shows the prediction accuracy of TRA under different
+memory resource usage of the server. TRA triggers migration       load scenarios and testing time windows. TRA can maintain
+when link bandwidth utilization exceeds  = 0.8 (Eq. (22))         high prediction accuracy under different conditions. In light
+or end-to-end latency surpasses Tth = 50ms (Eq. (23)). In         load scenarios, as the testing time window increases, the pre-
+light load scenarios, TRA predicted overload time with 92%        diction accuracy slightly improves. In moderate load scenarios,
+accuracy (Fig. 9). Meanwhile, record the actual time when the     the prediction accuracy is also relatively stable. In heavy load
+server experienced overload Tactual. Repeat the experiment        scenarios, although the prediction accuracy is relatively low,
+20 times for each load scenario to obtain reliable data.          it can still be maintained at a high level.
+
+   In our experiments, the bandwidth utilization threshold           From Fig. 10, compared to VVi and MiOvnm, TRA and
+in Eq. (22) is set to 0.8, which aligns with the industry         TeaVisor have a higher cost-effectiveness ratio. This is because
+practice for congestion warning in DCNs [27], [33]. This value    TRA and TeaVisor, which have undergone topology-awareness,
+balances the trade-off between early congestion detection and     selected nodes that are closely related to the original deploy-
+false positives. The latency threshold Tth in Eq. (23) is         ment path of SFC as the migration destination nodes when
+configured as 50 ms, following the ITU-T G.114 standard           evaluating the destination nodes. This results in a smaller
+for interactive services [10], [21]. These thresholds were        physical length of SFC after migration compared to VVi and
+validated through preliminary tests to ensure they correlate      MiOvnm, resulting in lower link overhead and higher cost-
+with observable network degradation, such as increased packet     benefit ratio.
+loss rate and SFC latency violations.
+                                                                     In Fig. 11, we compare the running time of different
+   In order to comprehensively evaluate the predictive perfor-    algorithms for node importance evaluation under   (0, 1].
+mance of TRA, we set three different testing time windows of      As the network scale expands from 50 nodes to 500 nodes,
+5 minutes, 10 minutes, and 15 minutes. Calculate the accuracy     the running time of all algorithms shows an upward trend,
+of TRA predicting overload time within each testing time          but the growth rate of TRA is significantly lower than that
+window. The formula for calculating accuracy is:                  of other algorithms. When the number of nodes is 500, the
+                                                                  running time of TRA is 28.5 seconds, while that of VVI,
+                  Accuracy = Ncorrect × 100%,                     teavisor and miovnm are 72.3 seconds, 65.1 seconds and
+                                    Ntotal                        58.9 seconds, respectively. This difference is due to the
+                                                                  dynamic load allocation strategy adopted by TRA (combin-
+where Ncorrect represents the number of times the predicted       ing global and local rules) which reduces the computational
+overload time differs from the actual overload time within an     complexity.
+acceptable error range (set to ±1 minute) within the testing
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                                 3329
+
+Fig. 12. (a) Comparison of VM allocation time, (b) Comparison of network delay rate, (c) Comparison of throughput rate, (d) Comparison of bandwidth
+utilization.
+
+From Fig. 12 (a), as the number of VM requests continues
+
+to increase, the allocation time continues to increase. When
+
+the number of VMs is small (10)-100), the allocation time of
+
+the four algorithms is similar. However, with the continuous
+
+increase of VM data (300-500), the allocation time of TRA
+
+is significantly better than that of TeaVisor and MiOvnm.
+
+Because TRA algorithm adopts a random allocation strategy,
+
+without considering other allocation indicators, it seeks local
+
+solutions, and the allocation time is fast.
+
+In Fig. 12 (c), as the number of VMs continues to increase,
+
+the latency rates of the four algorithms show an upward trend.   Fig. 13. (a) Comparison of depth of dissemination, (b) Comparison of breadth
+                                                                 of failures vs. recovery rate.
+MiOvnm has the highest delay rate, while the delay rates of
+                                                                 TRA can more quickly locate and migrate affected virtual
+VVi and TeaVisor are similar, and TRA has the best delay rate.   network functions, reducing fault propagation. The propaga-
+                                                                 tion depth of cascading faults in TRA increases slowly and
+When the number of VM requests is small, the latency rates       eventually stabilizes at a lower level, while the propagation
+                                                                 depth of VVi increases rapidly and has a higher value. The
+of all four algorithms are small and fluctuate frequently. In    performance of TeaVisor and MiOvnm falls between the two,
+                                                                 highlighting the advantage of TRA in controlling the depth of
+Fig. 12 (d), with the increasing number of VM requests, TRA      fault propagation.
+
+has the highest throughput rate and MiOvnm has the lowest
+
+throughput rate. Because TRA allocates VMs to relatively
+
+concentrated physical host areas, it reduces communication
+
+distance between VMs. Therefore, it reduces communication
+
+latency between VMs and increases throughput.
+
+In table II, TRA reduced migration time and average latency
+
+by 28.6% (average of VVi, TeaVisor, MiOvnm) and 24.7%            D. System Implementation
+
+(average of three baselines), respectively. The performance         To bridge the gap between simulation and practice, we
+                                                                 validate TRA on a physical testbed with fat-tree topology
+metrics were calculated as follows: for each baseline algorithm  (Section III-C1). This complements the GreenCloud simula-
+                                  3                              tions by evaluating TRA's adaptability to real-time resource
+Ai,  the  reduction  rate  is  1  i=1  Ai -T  × 100%.            fluctuations and topological dependencies, as observed in the
+                               3         Ai                      theoretical model (Section III). This topology has 3 layers,
+                                                                 with the core layer containing 4 core nodes, the aggregation
+4) Evaluation of Cascading Fault Pattern: Next, we eval-         layer containing 8 aggregation nodes, and the edge layer
+                                                                 containing 16 edge nodes. The CPU processing power of
+uate several algorithms in cascading failure mode. The           each node is 2.4 GHz, the memory capacity is 8 GB, and
+                                                                 the network interface bandwidth is 1 Gbps. The migration
+definition of "cascading fault propagation depth" is the number  trigger condition is set as follows: when the CPU utilization
+                                                                 rate of the node exceeds 80% or the memory utilization rate
+of nodes on the longest fault propagation path during the        exceeds 70%, the migration operation of the virtual network
+                                                                 function (VNF) is triggered. During the experiment, we tested
+cascading fault process, starting from the initial fault node.   the performance of the topology aware transfer algorithm by
+                                                                 simulating different network load scenarios.
+The "cascading fault breadth" refers to the proportion of the
+                                                                    1) Testbed Results: Performance evaluation indicators.
+total number of nodes affected by cascading faults to the        The load balancing index  is used to measure the effective-
+                                                                 ness of network load balancing, and its calculation formula is
+total number of nodes in the network. The "fault recovery        as follows:
+
+rate" refers to the proportion of nodes that recover from a
+
+faulty state to a normal state within a certain period of time,
+
+compared to the total number of faulty nodes.
+
+We set up a fat-tree network with 50 nodes and 100 links,
+
+the same business traffic pattern (Poisson distribution request
+
+flow generated based on actual business traffic data), and the
+
+same real node failure mode. In Fig. 13, in terms of cascading
+
+fault propagation depth, the average TRA is 3.5, VVi is 5.2,
+
+TeaVisor is 4.8, and MiOvnm is 4.5. In terms of cascading
+
+fault breadth, TRA affects an average of 15% of nodes, VVi
+
+affects 25%, TeaVisor affects 22%, and MiOvnm affects 20%.                                 1
+
+In terms of fault recovery rate, TRA reaches 80%, VVi is          = k nsN (k(ns) - ¯k)2 ,                                                           (25)
+
+60%, TeaVisor is 65%, and MiOvnm is 70%. In summary,
+
+          Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+3330                                                              IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+Fig. 14. (a) Comparison of CPU utilization, (b) Comparison of total system delay, (c) Comparison of network energy consumption, (d) Comparison of buffer
+Utilization.
+
+where ¯k is the average occupancy rate of k-class resources       as TRA's regionalization-based host allocation balances CPU
+for each physical node. The denominator of  is the sum of         usage in regions, enhancing overall network host CPU utiliza-
+the variances of various resource occupancy rates of physical     tion. From Figs. 14(b) and (c), VVi and TeaVisor prioritize
+nodes. The larger its value, the worse the load balancing effect  reducing SFC end-to-end latency during VNF migration but
+of the network. Therefore, the larger the , the better the load   overlook integrating low-load servers, resulting in higher
+balancing effect of the network.                                  energy consumption than TRA, while MiOvnm also integrates
+                                                                  server resources to minimize energy. Fig. 14(d) highlights
+   Revenue to expense ratio. The revenue expense ratio is a       physical network computing resource utilization: TeaVisor and
+key performance indicator that evaluates the cost-effectiveness   MiOvnm achieve joint optimization of energy consumption
+of TRA. The revenue is generated based on the success-            and SFC latency but rely on Critic (difficult to converge,
+ful completion of SFC requests and is proportional to the         especially with Actor updates), making them prone to local
+resources consumed by the VNFs. The total expense includes        optimal solutions.
+the cost of resource consumption, migration costs, and com-
+munication overhead. Revenue to expense ratio is defined as          Fig. 15(a) illustrates the iterative process, revealing
+follows:                                                          MiOvnm's poorest initial solution, VVi's high-
+                                                                  quality two-stage initialization (closer to optimal),
+=                fi F       vi,j Vi   k nki,j                     and TeaVisor/MiOvnm's inferior initial solutions. In
+            vi,j Vi                                           ,   Fig. 15(b), emTRA achieves the shortest completion
+      fi F             k nik,j +                                  time for mapping/scheduling 10 service function chains
+                                     li,j Li Ti,j hop(li,j )      (SFCs) in VM20 experiments (100 SFCs total), despite
+                                                                  minimal time differences among methods. Fig. 15(c)
+                                                            (26)  (VM10, 100 SFCs under resource constraints) shows
+                                                                  TRA's stable, shortest mapping/scheduling times, while
+where fi is the service function chain (SFC) requests, vi,j       VVi/TeaVisor/MiOvnm experience fluctuating, longer times
+                                                                  as SFCs increase. Fig. 15(d) highlights TRA and MiOvnm's
+represents the virtual network functions (VNFs) in the SFC.       superior cost-effectiveness (vs. VVi/TeaVisor), attributed
+Nik,j represents the revenue generated by the k-th resource of    to their topology-awareness in selecting migration nodes
+the VNF vi,j, Ti,j represents the cost of transmitting data over  near SFC deployment paths. Collectively, TRA demonstrates
+the link li,j. hop(li, j) represents the number of hops for the   consistent performance: optimal initial solutions (a), fastest
+link li,j .                                                       completion under low-complexity (b), stability under resource
+                                                                  scarcity (c), and cost-efficiency (d), while MiOvnm excels
+   The revenue model is based on the resources utilized by        in cost but lags in initial solutions, and VVi/TeaVisor show
+                                                                  weaker stability or efficiency.
+the VNFs and the successful completion of SFC requests.
+                                                                     In Fig. 16(a), emTRA performs topology-awareness when
+The revenue generated by each VNF is proportional to the          selecting the migration destination node, selecting a node
+                                                                  closer to the SFC to be migrated as the migration destination
+resources it consumes (e.g., CPU, memory, bandwidth). The         node, thereby reducing the time for a single migration. TRA
+                                                                  and VVi respectively use second level and first level thresholds
+total revenue is the sum of the revenues generated by all VNFs    for migration determination, and there are differences in
+                                                                  the number of migrations and migration destination nodes,
+in the network. The raw revenue is calculated as:                 resulting in different average migration times for the two
+                                                                  methods. Fig. 16(b) shows that the total migration time of
+                                                                  TRA is the smallest. This is because TRA has added the degree
+                                                                  of node proximity as an evaluation indicator in the process
+      Revenue =                      nik,j  .      (27)           of selecting destination nodes. The other three methods only
+                                                                  consider resource utilization, and although TRA reduces the
+              fiF vi,j Vi k                                       average time of a single migration, it also increases the number
+                                                                  of migrations to a certain extent.
+   The total expense includes the cost of resource consump-
+tion, migration costs, and communication overhead. The raw
+expense is calculated as:
+
+                                                   
+
+Expense =                  nki,j +            Ti,j hop(li,j ) .
+
+            fiF vi,j Vi k            li,j Li
+
+                                                   (28)
+
+   In Fig. 14(a), under varying virtual machine request num-
+bers, the average CPU utilization of physical hosts by four
+algorithms fluctuates, with TRA and MiOvnm showing rela-
+tively balanced fluctuations (better than TeaVisor and VVi),
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                       3331
+
+Fig. 15. (a) Comparison of convergence process, (b) VM20 Comparison of service completion time under different SFC request intensities, (c) VM10
+Comparison of service completion time under different SFC request intensities, (d) Revenue to expense ratio.
+
+Fig. 16. (a) Average time for single migration, (b) Total migration time, (c) Load balancing index, (d) Average delay of SFC.
+
+                                                                           algorithms tend to select neighboring nodes for migration,
+                                                                           reducing long-distance migration across nodes and lowering
+                                                                           the complexity and transmission costs of the network. In
+                                                                           terms of bandwidth occupancy difference B, the B value
+                                                                           of the topology aware transfer algorithm is relatively small,
+                                                                           indicating that the algorithm can make more reasonable use
+                                                                           of network bandwidth resources and avoid unnecessary band-
+                                                                           width consumption. For the delay difference D, topology
+                                                                           aware transfer algorithm also shows advantages. Its D value
+                                                                           is small, which means that the transfer process has less impact
+                                                                           on packet transmission delay and can better ensure the quality
+                                                                           of network services.
+
+Fig. 17. (a) Link hop difference, (b) Bandwidth use difference, (c) Delay                         VII. RELATED WORK
+difference.
+                                                                           A. Load Balancing in NFV
+   Fig. 16(c) shows that TRA has a higher cost-benefit ratio.
+This is because TRA performs topology-awareness and selects                   A growing number of pieces of related work have focused
+the node that is closely related to the original deployment path           on load balancing of NFV in recent years. The minimum inter-
+of SFC as the migration destination node when evaluating the               ference routing algorithm (MIRA) [24] selects as few critical
+destination node. This reduces the physical length of SFC after            links as possible between Origin Destination (OD) nodes to
+migration, resulting in lower link overhead and higher cost-               establish a path for traffic request distribution, minimizing
+benefit ratio. Fig. 16(d) shows a comparison of the average                interference to future network flows. Tran et al. [38] proposed
+latency of four SFC methods. The average latency of SFC is                 a framework for traffic-optimized virtual network function
+affected by the processing latency of the migration destination            (VNF) placement and migration in policy-reserved data cen-
+node and the transmission latency of the reconstructed link.               ters (PPDCs). Zhang et al. [39] performed virtual network
+                                                                           migration based on the RABA-CDDE algorithm of differ-
+   From Fig. 17, in all experimental scenarios, the difference in          ential evolution. By formalizing the resource-aware backup
+link hop count H of the topology aware transfer algorithm                  allocation problem, they aim to minimize backup resource
+is significantly smaller than that of the non topology aware               consumption while meeting overall availability requirements.
+transfer algorithm. This indicates that topology aware transfer
+                                                                              Multi-path oblivious routing algorithm (MORA) [29] is
+                                                                           designed on the basis of equal-cost multi-path routing (ECMP)
+                                                                           algorithm to adapt to changes in network load. It dis-
+                                                                           tributes traffic requests by weight based on the network
+                                                                           load of multiple paths between source and destination nodes.
+                                                                           Zhao et al. [17] proposed a joint online Reduce Placement and
+                                                                           Coflow (RPC) bandwidth scheduling framework to minimize
+                                                                           the average collaborative flow completion time in a cloud
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+3332                                                                             IEEE TRANSACTIONS ON NETWORKING, VOL. 33, NO. 6, DECEMBER 2025
+
+cluster. The congestion free routing strategy (CFRS) [31]                        [7] H. Hawilo, M. Jammal, and A. Shami, "Network function virtualization-
+achieves a global non blocking effect by setting up a global                           aware orchestrator for service function chaining placement in the cloud,"
+network controller to monitor network traffic, and formulating                         IEEE J. Sel. Areas Commun., vol. 37, no. 3, pp. 643­655, Mar. 2019.
+corresponding routing paths.
+                                                                                 [8] Z. Guo, J. Duan, and Y. Yang, "On-line multicast scheduling with
+   However, none of the above algorithms take into account the                         bounded congestion in fat-tree data center networks," IEEE J. Sel. Areas
+topology of distributed systems and the bandwidth require-                             Commun., vol. 32, no. 1, pp. 102­115, Jan. 2014.
+ments of traffic requests, which resulted in the congestion
+problem of critical links still existing in the distributed                      [9] A. Alleg, T. Ahmed, M. Mosbah, and R. Boutaba, "Joint diversity and
+systems.                                                                               redundancy for resilient service chain provisioning," IEEE J. Sel. Areas
+                                                                                       Commun., vol. 38, no. 7, pp. 1490­1504, Jul. 2020.
+B. VM Migration in Distributed Systems
+                                                                                 [10] J. Xie, R. Zhou, G. Sun, J. Sun, and H. Yu, "Fast recovery for online
+   Previous works have studied dynamic migration of VMs                                service function chaining interruption using adaptive migration," Cluster
+to optimize server deployment. Heller et al. [35] designed                             Comput., vol. 25, no. 2, pp. 1321­1339, Apr. 2022.
+the optimal topology subset while satisfying system per-
+formance and fault tolerance. It achieved good energy-                           [11] N. Siasi, M. Jasim, and N. Ghani, "Post-fault restoration of service
+saving results by establishing elastic tree routing algorithms.                        function chains in fog networks," Comput. Netw., vol. 251, Jun. 2024,
+Jiang et al. [30] proposed a heuristic algorithm based on FFD,                         Art. no. 110580.
+which is suitable for solving BPP problems in DCNs. Kamboj
+and Pal [36] established a self heuristic routing algorithm that                 [12] K. Attiah et al., "Load balancing in cellular networks: A reinforcement
+utilizes greedy strategies to eliminate servers and network                            learning approach," in Proc. IEEE 17th Annu. Consum. Commun. Netw.
+devices with lighter loads in the network. Liu et al. [40]                             Conf. (CCNC), Jan. 2020, pp. 1­6.
+presented a data transfer framework for VM systems, which
+seamlessly integrates hosts and overlay networks to reduce                       [13] Y. Meng, X. Tian, Z. Li, W. Zhou, Z. Zhou, and M. Zhong, "Exploring
+application request response latency. Different from Liu's                             node importance evolution of weighted complex networks in urban rail
+work, Fan et al. [15] designed a new virtual network mapping                           transit," Phys. A, Stat. Mech. Appl., vol. 558, Jul. 2020, Art. no. 124925.
+mechanism that achieves a balance between resource start time
+and mapping time while ensuring acceptable runtime.                              [14] H. Gao, C. Liu, Y. Yin, Y. Xu, and Y. Li, "A hybrid approach to
+                                                                                       trust node assessment and management for VANETs cooperative data
+                         VIII. CONCLUSION                                              communication: Historical interaction perspective," IEEE Trans. Intell.
+                                                                                       Transp. Syst., vol. 23, no. 9, pp. 16504­16513, Sep. 2022.
+   In this paper, we proposed a topology and resource aware
+migration framework TRA to address the issue of network load                     [15] W. Fan, F. Xiao, M. Lv, L. Han, J. Wang, and X. He, "Node essentiality
+imbalance in NFV. TRA formulates corresponding migration                               assessment and distributed collaborative virtual network embedding
+standards to calculate the target node set to be migrated,                             in datacenters," IEEE Trans. Parallel Distrib. Syst., vol. 34, no. 4,
+based on the utilization of computing, storage, and for-                               pp. 1265­1280, Apr. 2023.
+warding resources in the underlying network. In addition,
+for virtual network functions deployed on overloaded nodes,                      [16] L. Wojciechowski et al., "NetMARKS: Network metrics-AwaRe Kuber-
+resource aware algorithms are used to set their migration                              netes scheduler powered by service mesh," in Proc. IEEE INFOCOM
+weights. Experimental results indicate that TRA achieves a                             Conf. Comput. Commun., May 2021, pp. 1­9.
+satisfactory compromise between network revenue and load
+balancing within an acceptable operating time, while ensuring                    [17] Y. Zhao, C. Tian, J. Fan, T. Guan, X. Zhang, and C. Qiao, "Joint reducer
+all expected economic attributes.                                                      placement and coflow bandwidth scheduling for computing clusters,"
+                                                                                       IEEE/ACM Trans. Netw., vol. 29, no. 1, pp. 438­451, Feb. 2021.
+                             REFERENCES
+                                                                                 [18] A. Anshu, D. Leung, and D. Touchette, "Incompressibility of classical
+[1] L. Linguaglossa et al., "Survey of performance acceleration tech-                  distributions," IEEE Trans. Inf. Theory, vol. 68, no. 3, pp. 1758­1771,
+      niques for network function virtualization," Proc. IEEE, vol. 107, no. 4,        Mar. 2022.
+      pp. 746­764, Apr. 2019.
+                                                                                 [19] Y. Chen et al., "LOCUS: User-perceived delay-aware service placement
+[2] G. Zhao, J. Wang, H. Xu, Y. Zhao, X. Yang, and H. Huang, "Joint                    and user allocation in MEC environment," IEEE Trans. Parallel Distrib.
+      request updating and elastic resource provisioning with QoS guarantee            Syst., vol. 33, no. 7, pp. 1581­1592, Jul. 2022.
+      in clouds," IEEE/ACM Trans. Netw., vol. 32, no. 1, pp. 110­126, Jan.
+      2024.                                                                      [20] Y. Wu, W. Song, Z. Cao, J. Zhang, and A. Lim, "Learning improvement
+                                                                                       heuristics for solving routing problems," IEEE Trans. Neural Netw.
+[3] L. Gyarmati and T. A. Trinh, "Scafida: A scale-free network inspired               Learn. Syst., vol. 33, no. 9, pp. 5057­5069, Sep. 2022.
+      data center architecture," ACM SIGCOMM Comput. Commun. Rev.,
+      vol. 40, no. 5, pp. 4­12, Oct. 2010.                                       [21] E. Feder et al., "Lazy self-adjusting bounded-degree networks for the
+                                                                                       matching model," in Proc. IEEE Conf. Comput. Commun. (INFOCOM),
+[4] J. Zhu, N. Huang, J. Wang, and X. Qin, "Availability model for data                May 2022, pp. 1089­1098.
+      center networks with dynamic migration and multiple traffic flows,"
+      IEEE Trans. Netw. Service Manag., vol. 20, no. 3, pp. 2975­2989, Sep.      [22] A. Sacco, M. Flocco, F. Esposito, and G. Marchetto, "Owl: Congestion
+      2023.                                                                            control with partially invisible networks via reinforcement learning," in
+                                                                                       Proc. IEEE Conf. Comput. Commun., May 2021, pp. 1­10.
+[5] M. Karimzadeh-Farshbafan, V. Shah-Mansouri, and D. Niyato, "A
+      dynamic reliability-aware service placement for network function vir-      [23] R. Segal, C. Avin, and G. Scalosub, "Constrained in-network computing
+      tualization (NFV)," IEEE J. Sel. Areas Commun., vol. 38, no. 2,                  with low congestion in datacenter networks," in Proc. IEEE Conf.
+      pp. 318­333, Feb. 2020.                                                          Comput. Commun. (INFOCOM), May 2022, pp. 1639­1648.
+
+[6] J. Pei, P. Hong, M. Pan, J. Liu, and J. Zhou, "Optimal VNF placement         [24] Y. Kang, X. Wang, and Z. Lan, "Workload interference prevention
+      via deep reinforcement learning in SDN/NFV-enabled networks," IEEE               with intelligent routing and flexible job placement on dragonfly," in
+      J. Sel. Areas Commun., vol. 38, no. 2, pp. 263­278, Feb. 2019.                   Proc. ACM SIGSIM Conf. Princ. Adv. Discrete Simulation, Jun. 2023,
+                                                                                       pp. 23­33.
+
+                                                                                 [25] A. Roy, H. Zeng, J. Bagga, G. Porter, and A. C. Snoeren, "Inside the
+                                                                                       social network's (datacenter) network," in Proc. ACM SIGCOMM, Aug.
+                                                                                       2015, pp. 123­137.
+
+                                                                                 [26] X. Deng, P. Guan, C. Hei, F. Li, J. Liu, and N. Xiong, "An
+                                                                                       intelligent resource allocation scheme in energy harvesting cognitive
+                                                                                       wireless sensor networks," IEEE Trans. Netw. Sci. Eng., vol. 8, no. 2,
+                                                                                       pp. 1900­1912, Apr. 2021.
+
+                                                                                 [27] Y. Zhang and N. Ansari, "On architecture design, congestion notification,
+                                                                                       TCP incast and power consumption in data centers," IEEE Commun.
+                                                                                       Surveys Tuts., vol. 15, no. 1, pp. 39­64, 1st Quart., 2012.
+
+                                                                                 [28] J. Fan, K. Zhang, Y. Huang, Y. Zhu, and B. Chen, "Parallel spatio-
+                                                                                       temporal attention-based TCN for multivariate time series prediction,"
+                                                                                       Neural Comput. Appl., vol. 35, no. 18, pp. 13109­13118, Jun. 2023.
+
+                                                                                 [29] K. Chitavisutthivong, S. Supittayapornpong, P. Namyar, M. Zhang,
+                                                                                       M. Yu, and R. Govindan, "Optimal oblivious routing with concave
+                                                                                       objectives for structured networks," IEEE/ACM Trans. Netw., vol. 31,
+                                                                                       no. 6, pp. 2669­2681, Jun. 2023.
+
+                                                                                 [30] Y. Jiang, Z. Cao, and J. Zhang, "Learning to solve 3-D bin packing
+                                                                                       problem via deep reinforcement learning and constraint programming,"
+                                                                                       IEEE Trans. Cybern., vol. 53, no. 5, pp. 2864­2875, May 2023.
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+FAN et al.: TOPOLOGY-AWARENESS FAULT-TOLERANT MIGRATION FOR NODE CASCADING FAILURES                                                       3333
+
+[31] J. Ma, J. Ma, and H.-J. Li, "An improved optimal routing strategy on                                            Pinchang Zhang (Member, IEEE) received the B.S.
+      scale-free networks," IEEE Trans. Circuits Syst. II, Exp. Briefs, vol. 69,                                     degree in electronic information engineering from
+      no. 11, pp. 4578­4582, Nov. 2022.                                                                              Wuyi University, China, in 2009, the M.S. degree
+                                                                                                                     in electronic and communication engineering from
+[32] D. Kliazovich, P. Bouvry, and S. U. Khan, "GreenCloud: A packet-level                                           Kunming University of Science and Technology,
+      simulator of energy-aware cloud computing data centers," J. Supercom-                                          China, in 2012, and the Ph.D. degree in systems
+      put., vol. 62, no. 3, pp. 1263­1283, Nov. 2010.                                                                information science from Future University Hako-
+                                                                                                                     date, Japan, in 2020. He is currently with the
+[33] D. Wang, W. Zhang, X. Han, J. Lin, and Y.-C. Tian, "A multi-objective                                           School of Computer Science, Nanjing University of
+      virtual network migration algorithm based on reinforcement learning,"                                          Posts and Telecommunications, Nanjing, China. His
+      IEEE Trans. Cloud Comput., vol. 11, no. 2, pp. 2039­2056, Feb. 2023.                                           research interests include wireless security, physical
+                                                                                      layer authentication, and covert communications.
+[34] Y. Yoo, G. Yang, J. Lee, C. Shin, H. Kim, AND C. Yoo, "TeaVisor:
+      Network hypervisor for bandwidth isolation in SDN-NV," IEEE Trans.                                             Hui Cai (Member, IEEE) received the B.Eng. degree
+      Cloud Comput., vol. 11, no. 3, pp. 2739­2755, Mar. 2023.                                                       in computer science and technology from Sichuan
+                                                                                                                     University in 2015 and the Ph.D. degree in computer
+[35] B. Heller et al., "Elastictree: Saving energy in data center networks," in                                      science and technology from Shanghai Jiao Tong
+      Proc. 7th USENIX Conf. Netw. Syst. Design Implement., vol. 10, 2010,                                           University in 2020. She is currently an Assistant
+      pp. 249­264.                                                                                                   Professor at the College of Computer, Nanjing Uni-
+                                                                                                                     versity of Posts and Telecommunications, Nanjing,
+[36] P. Kamboj and S. Pal, "Energy-aware routing in SDN enabled data center                                          Jiangsu, China. Her research interests include data
+      network," in Proc. IEEE 21st Int. Symp. Netw. Comput. Appl. (NCA),                                             trading, incentive mechanism design, mobile crowd
+      vol. 21, Dec. 2022, pp. 123­130.                                                                               sensing, and game theory.
+
+[37] H. Yao, M. Xiong, H. Li, L. Gu, and D. Zeng, "Joint optimization
+      of function mapping and preemptive scheduling for service chains in
+      network function virtualization," Future Gener. Comput. Syst., vol. 108,
+      pp. 1112­1118, Jul. 2020.
+
+[38] V. Tran, J. Sun, B. Tang, and D. Pan, "Traffic-optimal virtual network
+      function placement and migration in dynamic cloud data centers," in
+      Proc. IEEE Int. Parallel Distrib. Process. Symp. (IPDPS), Lyon, France,
+      May 2022, pp. 919­929.
+
+[39] J. Zhang, Z. Wang, C. Peng, L. Zhang, T. Huang, and Y. Liu, "RABA:
+      Resource-aware backup allocation for a chain of virtual network
+      functions," in Proc. IEEE Conf. Comput. Commun. (INFOCOM), Apr.
+      2019, pp. 1918­1926.
+
+[40] H. Liu et al., "Accelerating data delivery of latency-sensitive applications
+      in container overlay network," IEEE Trans. Parallel Distrib. Syst.,
+      vol. 34, no. 12, pp. 3046­3058, Dec. 2023.
+
+                               Weibei Fan (Member, IEEE) received the Ph.D.           Lei Han is currently a Professor at the School
+                               degree in computer science from Soochow Uni-           of Computer, Nanjing University of Posts and
+                               versity in 2019. He is currently an Associate          Telecommunications. He has created patents which
+                               Professor at the School of Computer, Nanjing Uni-      are authorized by China, USA, U.K., Japan, South
+                               versity of Posts and Telecommunications. He has        Korea, and Germany. He has authored papers
+                               authored papers in research related international      in research related international conferences and
+                               journals and conferences, such as IEEE TRANSAC-        journals, such as IEEE TRANSACTIONS ON PARAL-
+                               TIONS ON COMPUTERS, IEEE TRANSACTIONS ON               LEL AND DISTRIBUTED SYSTEMS, GLOBECOM,
+                               DEPENDABLE AND SECURE COMPUTING, IEEE                  MOBISYS, and ICCN. His research interests include
+                               TRANSACTIONS ON PARALLEL AND DISTRIBUTED               computer networks and datacenter systems.
+                               SYSTEMS, IEEE TRANSACTIONS ON INFORMA-
+TION THEORY, IEEE TRANSACTIONS ON RELIABILITY, IEEE TRANSAC-
+TIONS ON NETWORK SCIENCE AND ENGINEERING, IEEE TRANSACTIONS
+ON NETWORK AND SERVICE MANAGEMENT, IEEE TRANSACTIONS
+ON EMERGING TOPICS IN COMPUTATIONAL INTELLIGENCE, and IEEE
+TRANSACTIONS ON VEHICULAR TECHNOLOGY, and IEEE ISPA, NPC,
+ICPADS, and PDCAT. His research interests include data center networks,
+parallel and distributed systems, and interconnection architectures. He is a
+member of the IEEE Computer Society and the Association for Computing
+Machinery.
+
+                               Fu Xiao (Senior Member, IEEE) received the                                            Shui Yu (Fellow, IEEE) received the Ph.D. degree
+                               Ph.D. degree in computer science and technology                                       from Deakin University, Geelong, VIC, Australia,
+                               from Nanjing University of Science and Technol-                                       in 2004. He is currently a Full Professor with
+                               ogy, Nanjing, China, in 2007. He is currently a                                       the School of Computer Science, University of
+                               Professor and a Ph.D. supervisor with the School                                      Technology Sydney, Australia. He has published
+                               of Computer, Nanjing University of Posts and                                          two monographs and edited two books, more
+                               Telecommunications. He has authored papers in                                         than 350 technical papers, including top journals
+                               research related international conferences, including                                 and top conferences, such as IEEE TRANSAC-
+                               UbiCOMP, INFOCOM, ICNP, ICC, and IPCCC.                                               TIONS ON PARALLEL AND DISTRIBUTED SYS-
+                               He has authored IEEE/ACM TRANSACTIONS ON                                              TEMS, IEEE TRANSACTIONS ON COMPUTERS,
+                               NETWORKING, IEEE JOURNAL ON SELECTED                                                  IEEE TRANSACTIONS ON INFORMATION FOREN-
+AREAS IN COMMUNICATIONS, IEEE TRANSACTIONS ON COMPUTERS,                              SICS AND SECURITY, IEEE TRANSACTIONS ON MOBILE COMPUTING,
+IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, IEEE                           IEEE TRANSACTIONS ON KNOWLEDGE AND DATA ENGINEERING, IEEE
+TRANSACTIONS ON DEPENDABLE AND SECURE COMPUTING, IEEE                                 TRANSACTIONS ON EMERGING TOPICS IN COMPUTING, IEEE/ACM
+TRANSACTIONS ON MOBILE COMPUTING, ACM TECS, and IEEE TRANS-                           TRANSACTIONS ON NETWORKING, and INFOCOM. His research inter-
+ACTIONS ON VEHICULAR TECHNOLOGY. His research interests include                       ests include security and privacy, networking, big data, and mathematical
+computer networks, data centers, and the Internet of Things. He is a member           modeling.
+of the IEEE Computer Society and the Association for Computing Machinery.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 15,2026 at 13:09:37 UTC from IEEE Xplore. Restrictions apply.
+

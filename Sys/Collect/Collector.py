@@ -1,3 +1,4 @@
+from fileinput import filename
 import json
 import os
 
@@ -27,13 +28,15 @@ class Collector:
             print(f"读取文件失败 {file_path}: {e}")
             return None, None,None,None
 
+        filename=file_path.split("/")[-1]
+        csn = filename.split('-')[1]
         full_link = raw_data.get("full_link", {})
-        alarm_content=raw_data.get("alarm_content",{})
-        csn=alarm_content.get('csn',0)
+        # alarm_content=raw_data.get("alarm_content",{})
+        # csn=alarm_content.get('csn',0)
         alarm_content=full_link.get("task_info",{})
         alarm_content["csn"]=csn
-        alarm_content["label"]=full_link.get("rootcause_analysis",{})
-        
+        #alarm_content["label"]=full_link.get("rootcause_analysis",{})
+        alarm_content["label"]=full_link.get("groud_truth",full_link.get("ground_truth",full_link.get("grond_truth",{})))
         # 2. 初始化以 device_name 为键的字典
         name_map = {}
         ip_to_name = {}
@@ -92,7 +95,8 @@ class Collector:
                 pass
 
         # 关联 rootcause_analysis
-        rcs = full_link.get("rootcause_analysis", [])
+        #rcs = full_link.get("rootcause_analysis", [])
+        rcs = full_link.get("groud_truth", [])
         for rc in rcs:
             nd = rc.get("abnormal_node", [])
             try:
@@ -207,8 +211,8 @@ class Collector:
 
 # # --- 执行脚本 ---
 if __name__ == "__main__":
-    INPUT_DIR = "/home/sbp/lixinyang/pingmesh/data/pingmesh_original"
-    OUTPUT_DIR = "/home/sbp/lixinyang/pingmesh/data/nodes"
+    INPUT_DIR = "/home/sbp/lixinyang/pingmesh/data/pingmesh_labeled"
+    OUTPUT_DIR = "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
     
     # 实例化并运行
     collector = Collector(input_path=INPUT_DIR, output_path=OUTPUT_DIR)

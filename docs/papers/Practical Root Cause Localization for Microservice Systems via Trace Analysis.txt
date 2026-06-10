@@ -1,0 +1,856 @@
+                                                                                                                                                          2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS) | 978-1-6654-1494-4/21/$31.00 ©2021 IEEE | DOI: 10.1109/IWQOS52092.2021.9521340           Practical Root Cause Localization
+
+                                                                                                                                                            for Microservice Systems via Trace Analysis
+
+                                                                                                                                                                                        Zeyan Li¶, Junjie Chen, Rui Jiao¶, Nengwen Zhao¶,
+                                                                                                                                                                               Zhijun Wang, Shuwei Zhang, Yanjun Wu, Long Jiang, Leiqin Yan,
+                                                                                                                                                                    Zikai Wang§, Zhekang Chen§, Wenchi Zhang §, Xiaohui Nie¶, Kaixin Sui§, Dan Pei¶,
+                                                                                                                                                          Tsinghua University, College of Intelligence and Computing, Tianjin University, China Minsheng Bank, §BizSeer
+                                                                                                                                                                             ¶Beijing National Research Center for Information Science and Technology (BNRist)
+
+                                                                                                                                                             Abstract--Microservice architecture is applied by an increasing   to the complex dependencies and fault propagation among
+                                                                                                                                                          number of systems because of its benefits on delivery, scalability,  microservices, the anomaly invocations between adjacent mi-
+                                                                                                                                                          and autonomy. It is essential but challenging to localize root-      croservices are not sufficient to reflect the locations of root
+                                                                                                                                                          cause microservices promptly when a fault occurs. Traces are         causes (see Section V). The trace-based approaches over-
+                                                                                                                                                          helpful for root-cause microservice localization, and thus many      come the above limitation by correlating all the microser-
+                                                                                                                                                          recent approaches utilize them. However, these approaches are        vices involved in a trace instead of just the adjacent ones.
+                                                                                                                                                          less practical due to relying on supervision or other unrealistic    Here, all the invocations realizing the same user request
+                                                                                                                                                          assumptions. To overcome their limitations, we propose a more        form a trace. However, the existing trace-based approaches
+                                                                                                                                                          practical root-cause microservice localization approach named        (i.e., MicroScope [7], TraceAnomaly [13], and MEPFL [11])
+                                                                                                                                                          TraceRCA. The key insight of TraceRCA is that a microservice         still suffer from some practical issues. More specifically,
+                                                                                                                                                          with more abnormal and less normal traces passing through it         MicroScope uses directed acyclic graphs to represent the
+                                                                                                                                                          is more likely to be the root cause. Based on it, TraceRCA is        dependency among microservices, but in practice, there often
+                                                                                                                                                          composed of trace anomaly detection, suspicious microservice         exist dependency cycles. For example, we confirmed many in
+                                                                                                                                                          set mining and microservice ranking. We conducted experiments        the production system studied in Section V, and Train-Ticket
+                                                                                                                                                          on hundreds of injected faults in a widely-used open-source          studied in Section IV. TraceAnomaly focuses on detecting
+                                                                                                                                                          microservice benchmark and a production system. The results          structural or latency anomalies of traces but ignores other
+                                                                                                                                                          show that TraceRCA is effective in various situations. The           metrics. Both TraceAnomaly and MicroScope localize root-
+                                                                                                                                                          top-1 accuracy of TraceRCA outperforms the state-of-the-art          cause microservices by assuming a fixed anomaly propagation
+                                                                                                                                                          unsupervised approaches by 44.8%. Besides, TraceRCA is applied       pattern. MEPFL trains a supervised machine learning model
+                                                                                                                                                          in a large commercial bank, and it helps operators localize root     to predict the root-cause microservices with a training corpus
+                                                                                                                                                          causes for real-world faults accurately and efficiently. We also     built by fault injection. Its effectiveness heavily depends on the
+                                                                                                                                                          share some lessons learned from our real-world deployment.           high coverage of all fault types, achieving which is impractical.
+                                                                                                                                                                                                                               Therefore, it is still required for a more practical and better
+                                                                                                                                                                                    I. INTRODUCTION                            root-cause microservice localization approach.
+
+                                                                                                                                                             Microservice architecture is the latest trend in software            In this paper, we propose a practical trace-based root-
+                                                                                                                                                          service and is used by an increasing number of systems due to        cause microservice localization approach called TraceRCA.
+                                                                                                                                                          its faster delivery, better scalability, and greater autonomy [1].   The insight of TraceRCA is that a microservice with more
+                                                                                                                                                          A modern microservice system consists of dozens to thou-             abnormal traces and less normal traces passing through it
+                                                                                                                                                          sands of microservices deployed on hundreds to thousands             is more likely to be the root-cause microservice. Similar
+                                                                                                                                                          of servers [2], [3]. Although extensive efforts have been de-        insights are widely and successfully used in other domains
+                                                                                                                                                          voted to quality assurance, microservice systems are typically       such as spectrum-based program debugging [14]­[19] and
+                                                                                                                                                          fragile due to their large scale and complexity [1]. Moreover,       multi-dimensional root cause localization [20], [21]. We also
+                                                                                                                                                          microservice system faults could cause enormous economic             directly validated it in microservice systems (see Fig. 4). To
+                                                                                                                                                          loss and damage user satisfaction. For example, the loss of          apply the insight into root-cause microservice localization,
+                                                                                                                                                          one-hour downtime for Amazon.com on Prime Day in 2018                we firstly detect abnormal traces. Here, TraceRCA infers
+                                                                                                                                                          (its biggest sale event of the year) is up to $100 million [4].      trace's normality based on its member invocations' normality,
+                                                                                                                                                          Therefore, once a fault happens for microservice systems, the        which is detected by our designed unsupervised multi-metric
+                                                                                                                                                          urgent demand is to localize and mitigate it as soon as possible.    anomaly detection method. Since not all metrics are related to
+                                                                                                                                                                                                                               the concerned fault and irrelevant anomalies could exist in any
+                                                                                                                                                             Over the years, many approaches have been proposed in             metrics, we adaptively select useful metrics by testing whether
+                                                                                                                                                          the field [5]­[12], including invocation-based and trace-based       each metric's underlying distribution changes after the fault.
+                                                                                                                                                          approaches. The invocation-based approaches assume that the          The second stage in TraceRCA is to mine suspicious root-cause
+                                                                                                                                                          adjacent microservices with abnormal invocations are more            microservice sets satisfying the insight. Mining suspicious
+                                                                                                                                                          likely to be the root causes [5], [8]­[10], [12]. However, due
+
+                                                                                                                                                             Junjie Chen is the corresponding author.
+
+                                                                                                                                                          978-0-7381-3207-5/21/$31.00 ©2021 IEEE
+
+                                                                                                                                                          978-1-6654A-u1th4o9ri4ze-4d /li2ce1n/s$e3d1u.s0e0lim©it2ed0t2o1: NIAENEKEAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+                             2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+Microservice System          User Request       UHDOL]HV  Trace     Each node can host many containers and microservices. Each
+                                                                    microservice can also be hosted on different nodes.
+FRQVLVWVRI                                          FRQVLVWVRI
+                                                                       When a microservice system realizes a user request, mi-
+Microservice  FDOOHUFDOOHH  Microservice Pair  EHORQJV Invocation  croservices invoke each other with some specific application
+                                                                    programming interfaces (API). A microservice could contain
+FRQVLVWVRI                                      WR        (Span)    tens to hundreds of APIs. An invocation (a.k.a. span) belongs
+                                                                    to a specific microservice callercallee pair (referred to
+Instance (Container) KRVWV   Node                                   as microservice pair). All invocations realizing the same
+                                                                    user request form a trace. An industrial microservice sys-
+Fig. 1: Relationship of some basic concepts                         tem is commonly equipped with distributed tracing systems,
+                                                                    which tracks the execution of a request across services, i.e.,
+microservice sets rather than microservices makes TraceRCA          traces [24]. For example, when the button Buy is clicked in
+more practical because some faults only affect traces that pass     Train-Ticket, a user request is sent to buy a ticket. First, mi-
+through a specific set of microservices. Finally, TraceRCA          croservice UI makes an API call to microservice verification.
+calculates a suspicious score for each microservice in the          This API call is an invocation belonging to the microservice
+mined suspicious microservice sets. Based on the number of          pair UIverification. Each click on the button Buy will trigger
+traces containing incoming and outcoming abnormal invoca-           an invocation belonging to UIverification, i.e., there may
+tions, we dynamically infer the anomaly propagation pattern         exist many invocations belonging to a microservice pair. After
+for calculating the suspicious scores rather than assume a fixed    that, UI would call other microservices (e.g., payment) and
+one. Based on the suspicious scores, TraceRCA ranks all the         trigger many other invocations. All the invocations triggered
+microservices so that operators can mitigate faults earlier.        by a click on the button Buy, which realize the same user
+                                                                    request, form a trace.
+   We conducted an extensive study to evaluate TraceRCA
+based on a popular open-source microservice benchmark                                           III. APPROACH
+(Train-Ticket [22]) and an Internet service provider's pro-
+duction microservice system. Train-Ticket is one of the most           In this section, we present the detail of TraceRCA. By ana-
+extensive open-source microservice benchmarks. We used 222          lyzing many real faults and summarizing the manual diagnosis
+faults of 10 different categories in total. To our best knowl-      process, we obtain the key insight of TraceRCA: a microser-
+edge, this is the most large-scale study in the field w.r.t. the    vice with more abnormal traces and less normal traces passing
+number of faults, the number of fault types, and the scale          through it is more likely to be the root cause. It is simple and
+of benchmarks. The experimental results show that TraceRCA          effective, and it holds in various situations. In particular, our
+ranks the root-cause microservices at top-1 in 83% of all faults    insight holds for partly faulty microservices (e.g., only one
+and significantly outperforms the state-of-the-art unsupervised     container of the root cause occurs faults) and multi-root-cause
+approach by 44.8%. We applied TraceRCA to a large service-          faults, which are validated by our experiments (see Table III
+oriented production system in a large commercial bank and           and Table IV). Though we focus on microservice systems, our
+share the lessons learned from our deployment in Section V.         insight can also successfully applied in similar architectures
+                                                                    like service-oriented architectures (see Section V).
+   The main contributions are summarized as follows:
+                                                                       As shown in Fig. 2, TraceRCA contains three stages. When
+· Based on a straightforward and simple insight, we design a        a fault happens, TraceRCA is triggered to localize the root-
+   novel unsupervised and lightweight root-cause microservice       cause microservices. First, TraceRCA detects abnormal traces
+   localization approach via trace analysis.                        (Section III-A) with our unsupervised multi-metric anomaly
+                                                                    detection method. Then, we propose using a unified metric
+· We design an unsupervised multi-metric trace anomaly              to measure how much a microservice set satisfied the insight
+   detection method, which adaptively selects useful features       (Section III-B). TraceRCA utilizes frequent pattern mining
+   for each fault and conducts invocation anomaly detection         techniques to reduce the search space. Finally, TraceRCA
+   and trace anomaly inference based on the selected features.      ranks all microservices based on the mined suspicious sets
+                                                                    (Section III-C). In this way, operators can check microservices
+· We conduct the most large-scale experimental study based          one by one according to our ranking so that the root cause can
+   on 2 benchmarks with 222 faults in 10 different categories.      be identified more rapidly.
+   The experimental results demonstrate the effectiveness and
+   efficiency of TraceRCA. We share lessons learned from the        A. Trace Anomaly Detection
+   deployment of TraceRCA in a large production system.
+                                                                       We first design a multi-metric invocation anomaly detection
+                        II. BASIC CONCEPTS                          method to obtain the normality of each invocation and then
+                                                                    infers trace's normality according to its member invocations'
+   This section introduces some basic concepts, the relation-       normality. Here, TraceRCA detects abnormal traces through
+ship of which is shown in Fig. 1.                                   inference from abnormal invocations rather than directly detect
+                                                                    abnormal traces because traces are variable-length, leading to
+   A microservice system is a system structured with mi-
+croservice architecture. Microservice architecture is an ar-
+chitecture style that organizes a system as many lightweight,
+loosely-coupled, and independently-deployed services, called
+microservices [23]. For example, Train-Ticket [22] is orga-
+nized as many microservices, such as UI, seat, train, sta-
+tion, order, and price. Each microservice has one or more
+instances hosted on nodes (physical or virtual machines).
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+                                  2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+    Fault WULJJHU TraceRCA                  Trace                       Suspicious Microservice     Microservice Ranking   Ranked List of Suspicious
+                                                                                 Set Mining                                Root Cause Microservices
+Happens                                 Anomaly Detection
+
+                              SA        SF  SD     SA               SD  Set P(X|Y) P(Y|X) JI        {SA ,SB} In  Out Diff
+                                                         SB                                                       33
+                                            SE                          {SA ,SB} 1     1         1  {SA}          30       SA
+                                                                    SE                                                     SB
+                                            SC SF        SB SE          {SA}  1        3/4 3/4            0
+                                                         SB SC
+                              SA        SB  SE SA                       {SB}  1        3/4 3/4      {SB}  3
+
+Fig. 2: Overview of TraceRCA. There are five traces, and the red dotted arcs represent abnormal invocations. The microservice
+
+set {SA, SB} is mined as the most suspicious set. Then the microservices are ranked based on our suspicious scores.
+
+low efficiency or low accuracy if transforming them to fixed-                          of µf and f robust and efficient. First, the historical data
+length vectors. In particular, our anomaly detection method is                         used to calculate µf and f is twofold: all the historical
+unsupervised to avoid the limitation of supervised approaches                          invocations of the same microservice pair 1) in the last slot
+and make TraceRCA more practical.                                                      and 2) in the same slot of the last period (e.g., last day or
+                                                                                       week). Last-slot historical data capture the normal state of the
+   1) Multi-Metric Invocation Anomaly Detection: In a mi-                              feature in just a few minutes before the fault happens, and last-
+croservice system, there are various metrics (a.k.a features).                         period historical data captures that in previous days or weeks.
+For example, in Train-Ticket (see Section IV-A), we use                                Small dip or spike could deviate from their last-period normal
+latency and HTTP status of each invocation, and CPU usage,                             states insignificantly due to the variation among periods [30].
+memory usage, network receive/send throughput, and disk                                However, the deviation should be obvious compared with
+read/write throughput of each microservice as the features for                         last-slot data; otherwise, they are not dips or spikes. If the
+trace anomaly detection. However, when a fault occurs, not                             abnormal metric changes gradually, the last-slot normal state
+all of the features are affected by the concerned fault. Due to                        can be biased since the metrics already change in the last
+wrong user inputs or just random fluctuation, some anoma-                              slot. However, the last-period normal states, which are too far
+lies of irrelevant features could exist and become noise for                           from the fault and thus not affected, should not be biased.
+anomaly detection, which harms the detection accuracy. There-                          Thus utilizing both last-slot and last-period invocations makes
+fore, our method is designed with two steps: 1) adaptively                             TraceRCA more robust and practical. In our implementation,
+selecting useful features for each fault; 2) detecting abnormal                        the slot length is always the same as that of the current
+invocations based on the selected features. An overview of our                         analyzing fault, and the period is chosen to be a day since
+invocation anomaly detection method is shown in Fig. 3.                                daily periodicity is very common due to the periodicity of user
+                                                                                       behaviors. Second, to eliminate bias introduced by historical
+                 last period         Calculate mean      Detect Abnormal               anomalies, we exclude invocations in all known previous faulty
+                                                                                       durations. Third, for the sake of efficiency, µf and f are
+                                        and std              Invocations               maintained in an online manner rather than calculated after
+                                                                                       a fault happens. More specifically, we update µf and f
+    Invocations last slot                                 useful features              periodically (typically per minute) with the latest coming data.
+
+                 after fault            Calculate            Select Useful                As mentioned before, if a feature is useful, there should
+                                                                Features               be more abnormal invocations with respect to this feature,
+                                  Anomaly Severity                                     which should have large anomaly severities. Thus the average
+                                                                                       anomaly severity of all invocations with respect to this feature
+Fig. 3: Overview of our invocation anomaly detection method                            should be large. Therefore, the average anomaly severity of
+                                                                                       all invocations after the fault happens with respect to a useful
+    Intuitively, if a feature is related to the concerned fault, there                 feature, which is denoted as after, should be larger than that of
+                                                                                       the historical invocations, which is denoted as before. As a re-
+should be more abnormal invocations with respect to it after                           sult, a feature is considered useful if after-before>fs·before,
+                                                                                       where fs is a given threshold. The default value of fs is 10%,
+the fault occurs. Therefore, we determine whether a feature                            and its impact is discussed in Section IV-D.
+
+is useful by testing whether the distribution of normal and                               Finally, based on the selected useful features, we detect
+                                                                                       abnormal invocations. An invocation is abnormal if it is
+abnormal invocations with respect to it changes after the fault                        abnormal with respect to any useful feature. For this purpose,
+                                                                                       we need to determine the normality of all invocations with
+occurs. For this purpose, we need to determine the normality of                        respect to each useful feature. Utilizing the anomaly severity
+                                                                                       mentioned above, TraceRCA considers an invocation abnormal
+each invocation with respect to each feature. Note that we only                        with respect to a feature if the anomaly severity is greater than
+                                                                                       a given threshold, i.e., >ad. The default value of ad is 1,
+consider the historical invocations of the same microservice                           and its impact is discussed in Section IV-D.
+
+pair (see Fig. 1) to which this invocation belongs because the
+
+underlying distributions with respect to the same feature can
+
+vary vastly for different microservice pairs.
+
+    For a feature of a specific microservice pair (denoted as
+
+f ), we use the mean and standard deviation of the historical
+
+invocations to model its normal state, which has been proved
+
+to be effective and is widely used in previous works [20], [25]­
+
+[29]. The mean (denoted as µf ) defines the expected normal
+value of f , and the standard deviation (denoted as f ) is used
+
+to determine the probability that actual values deviate from
+
+the mean. With µf and f , how much the feature value of an
+
+invocation (denoted as vf ) deviates from its normal state can
+
+be  denoted  as  =  |vf -µf       |  ,  which    is  called  anomaly        severity.
+                        f
+Hence the larger  is, the more likely it is abnormal.
+
+    We use the following techniques to ensure the calculation
+
+    Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+   2) Trace anomaly inference: Based on the detected abnor-        1.0                                      1.0
+mal invocations, we infer the normality of traces. If at least
+one member invocation of a trace is determined abnormal in         P(Y|X)                                   0.5            other
+the last stage, this trace is determined abnormal. In this way,                                  P(Y|X)                    root cause
+we can take as many abnormal traces into consideration for         0.5                   other
+root cause localization as possible, which makes TraceRCA          0.0                   root cause         0.0
+robust while keeping efficient enough (see Section IV-E).                                                       0.0 0.5 1.0
+                                                                       0.0            0.5 1.0                          P(X|Y)
+B. Suspicious Root-Cause Microservice Set Mining                                     P(X|Y)
+
+   After trace anomaly detection, we mine suspicious microser-     (a) Google Online Boutique           (b) Production System B
+vice sets satisfying our insight rather than microservices. It
+is because in practice, sometimes only those traces that pass      Fig. 4: The distribution of P (X|Y ) and P (Y |X)
+through a specific microservice set are affected by a fault.
+For example, a buggy API in microservice S1 is triggered           FP-Tree. A frequent pattern is a pattern that appears in a
+only by invocations from S2, but many other microservices
+also invoke S1. In such a case, the fractions of abnormal          dataset frequently [32]. In other words, every microservice
+traces passing through S1 or S2 would be small, but that of
+abnormal traces passing through both would be large. We did        set (i.e., pattern) whose support (P (X|Y )) is greater than a
+not emulate such cases in Section IV due to the limitation
+of fault injection. Besides, we do not mine microservice           given threshold (i.e., appearing frequently), denoted as spt,
+sequences or subgraphs since TraceRCA focuses on localizing
+root cause microservices, and mining sequences or subgraphs        is frequent. For example, in Fig. 2, the abnormal traces are
+is redundant for this purpose and harms the efficiency.
+                                                                   {SA, SB, SD, SE}, {SA, SB, SC , SD} and {SA, SB, SC , SE},
+   Specifically speaking, we propose two key metrics to evalu-     and thus the most frequent microservice set is {SA, SB}, the
+ate how a microservice set satisfies the insight: 1) the support   support of which is 1. We set spt to be 10%, which is rela-
+of a microservice set in abnormal traces (denoted as P (X|Y )
+where X and Y denote the sets of those traces passing through      tively low to ensure localization accuracy. If any microservice
+all microservice in the set and all abnormal traces respectively,
+and P (·) denotes probability), which represents the percentage    set has a support less than 10%, it can hardly contain root
+of those traces passing through all microservices in the set
+among all abnormal traces; 2) the confidence of a microservice     causes because most abnormal traces are unrelated to it. The
+set (denoted as P (Y |X)), which represents the percentage of
+abnormal traces among all traces passing through all microser-     impact of spt is discussed in Section IV-D.
+vices in the set. Note that "support" always refers to P (X|Y )
+in this paper unless otherwise specified. Based on these two       Then, in the reduced search space, we mine microservice
+metrics, we propose that a microservice is a root-cause mi-
+croservice if it has both high P (X|Y ) and high P (Y |X). We      sets satisfying our insight by a unified metric, Jaccard Index
+validate the relationship between these two metrics and root-
+cause microservice sets based on two benchmarks: 1) 25 faults      (JI) [33]. We choose JI rather than any other SBFL (spectrum-
+based on Google Online Boutique [31] (not used to evaluate
+TraceRCA in Section IV to avoid circle in proving) 2) 22 faults    based fault localization, see Section VI) technique because
+from a production system (B in Section IV-A). We estimated
+the distribution of P (X|Y ) and P (Y |X) of root-cause and        1) JI combines support and confidence (as discussed below),
+non-root-cause microservice sets by kernel density estimation.
+As shown in Fig. 4, the two metrics of root-cause microservice     which two perfectly match our insight 2) JI is one of the
+sets concentrated on the right-top corner, which means both
+metrics are larger than non-root-cause microservice sets. The      best SBFL techniques [14]. The intuition of JI is measuring
+good performance in Section IV-B also supports our insight.
+                                                                   the similarity between X (the traces containing the set)) and
+   The number of potential root-cause microservice sets is
+exponential to that of potential microservices, and thus evalu-    Y (the abnormal traces). JI is defined as the fraction of the
+ating the two metrics on all microservice sets is impractical.
+To reduce the search space, we first identify those microser-      intersection of X and Y to the union of them. A high JI
+vice sets with high supports by an efficient frequent pattern
+mining algorithm, FP-growth [32]. FP-Growth skips the time-        means X and Y are almost overlapped. JI is a monotoni-
+consuming candidate generation process entirely and uses a
+divide-and-conquer strategy plus a special data structure called   cally increasing function of the harmonic mean (denoted as
+
+                                                                                                            P  (X Y  )       H(P (X|Y ),P (Y |X))
+                                                                                                            P  (X Y  )     2-H(P (X|Y ),P (Y |X))
+                                                                   H) of P (X|Y ) and P (X|Y ): . J                     =
+                                                                                                     I  :=
+
+                                                                   Therefore, we can mine those microservice sets satisfying our
+
+                                                                   insight, i.e., microservice sets with high P (Y |X) and high
+
+                                                                   P (X|Y ), by sorting with JI in descending order and taking
+
+                                                                   top-k sets. We set k to 100 by default, which is large enough
+
+                                                                   to include enough microservice sets for the next step while
+
+                                                                   keeping TraceRCA fast enough. The impact of k is discussed
+
+                                                                   in Section IV-D.
+
+                                                                   C. Microservice Ranking
+
+                                                                      Although we have suspicious microservice sets that are
+                                                                   highly likely to contain root causes, operators need to in-
+                                                                   vestigate microservices one by one. Therefore, we calculate
+                                                                   a suspicious score for each microservice to rank them. The
+                                                                   suspicious score is the combination of each suspicious set's JI
+                                                                   score and an in-set suspicious score for each suspicious set.
+
+                                                                      First, we give an in-set suspicious score for each microser-
+                                                                   vice within each suspicious set containing it. It is calculated
+                                                                   by the difference between the numbers of traces that contain
+                                                                   incoming/outcoming abnormal invocations on the microservice
+                                                                   among all those traces containing the suspicious set. For
+                                                                   example, in Fig. 2, in the set {A, B}, the in-set score of
+                                                                   B is IS(B)=0=|3-3|, and that of A is IS(A)=3=|3-0|.
+                                                                   Considering a trace containing the suspicious set, if it contains
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+both incoming and outcoming abnormal invocations of a                  Following the existing work [7], [11], [13], we constructed
+microservice, then this microservice is highly likely to be just    faults for Train-Ticket by fault injection. We adopted three fault
+affected by other microservices, i.e., it is not a causal anomaly,  types following the existing work [7], [11], [13], i.e., appli-
+and the anomaly is just propagated through this microser-           cation bugs, CPU exhausted, and network jam. Furthermore,
+vice. Otherwise, if a trace contains only incoming/outcoming        to evaluate performance in various situations, we considered
+abnormal invocations on a microservice, the microservice is         faults on three different levels of components, i.e., microser-
+highly likely to be the root cause of this trace. The latter        vice, container, and API. In total, we have 5 fault injection
+would contribute more to the difference than the former,            strategies, as summarized in Table I. To inject a fault of a
+and thus the difference indicates how likely a microservice         specific type into the target of a specific level, we first chose a
+is a causal anomaly within a suspicious set. Previous trace-        container/microservice/API randomly and then applied the cor-
+based unsupervised approaches [7], [13] assume that the most        responding injection strategy on it. Regarding multi-root-cause
+upstream abnormal service (in call dependency or causal             faults, we selected multiple containers/microservices/APIs of
+dependency graph) is most likely to be the root cause. For          a specific level and injected faults of the corresponding type
+example, in Fig. 2, they would assume SC , SD, SE are the           simultaneously. Each fault lasted for about 5 minutes. In total,
+root-cause microservices for the abnormal traces. However, in       we constructed 200 faults of 5 categories, along with 242,259
+practice, the propagation of anomaly can be either upwards          traces, 22,675 (9.36%) of which are affected by the faults. In
+(e.g., upstream services receive wrong parameters from a            particular, to sufficiently investigate whether TraceRCA can
+downstream service) or downwards (e.g., downstream services         work for both single-root-cause faults and multi-root-cause
+wait too long for an upstream service). Our method overcomes        faults (although the latter is rare in practice [22], [38]), we
+the limitation by inferring the anomaly propagation pattern         constructed 11 faults that have more than one root-cause
+of each fault rather than assume a fixed one. Though our            microservices among the 200 faults. For ease of presentation,
+method is limited when the anomaly propagates both upstream         we call the Train-Ticket dataset A.
+and downstream, such cases are so rare in our scenarios (we
+mainly focus on infrastructure faults) that our method can meet        2) Production Microservice System: This system is a real-
+operators' requirements.                                            world microservice system with 13 microservices in a large
+                                                                    ISP with more than 50 million users (part of its whole system).
+   For every suspicious set containing a microservice, we com-      In particular, developers provided us 22 faults of 5 categories
+bine the set's JI score and the in-set score of the microservice    (i.e., CPU exhaustion, memory exhaustion, host network error,
+by multiplication. Both multiplication and sum are simple and       container network error, and database failures), along with
+efficient combination methods, but these two scores are of          1,136,825 traces, 17,041 (1.50%) of which are affected by
+different scales, and thus, sum is inappropriate. Based on the      the faults. We call the dataset from this production system B.
+combination, the final suspicious score of a microservice
+is the maximal combination among all suspicious sets. Al-              In total, there are 222 faults, 1,379,084 traces, 39,728
+though more than one suspicious set can contain a root-cause        (2.88%) of which are affected by the faults. The datasets
+microservice, a root-cause microservice only affects traces         have been published anonymously to promote future re-
+through one suspicious set, and thus we use the maximal             search1. Since our compared approaches contain supervised
+combination among all suspicious sets. For example, in Fig. 2,      approaches, for each fault, we randomly selected 20% traces
+both {SA, SB} and {SA} contain the root cause SA, but               as the training set and the remaining traces as the test set.
+SA only affects traces containing {SA, SB} rather than those        Note that there are the same fault types in the training and
+containing either {SA, SB} or {SA}.                                 test sets and the same ratio of abnormal traces to guarantee the
+                                                                    effectiveness of supervised approaches. All the unsupervised
+                          IV. EXPERIMENT                            approaches only use the test set for each fault.
+
+A. Study Data                                                       B. Overall Performance on Root Cause Localization
+
+   We use two microservice systems as subjects, i.e., a widely-        We used the following metrics to evaluate its effectiveness
+used open-source microservice benchmark system (Train-              following the existing work [7], [11]:
+Ticket) and a large Internet service provider's production
+microservice system.                                                · Top-k accuracy (A@k) refers to the probability that the root
+                                                                       causes are included in the top-k results. We chose k=1, 2, 3.
+   1) Open-source Microservice System: Train-Ticket [22] is
+one of the largest open-source microservice systems, which          · Mean average rank (MAR) refers to the mean of the average
+has been widely used in the existing work [11], [22], [35],            of all root-cause microservice ranks in each fault.
+[36]. It contains 41 microservices. We deployed it with Kuber-
+netes [37] on 7 physical machines, each of which has a 12-core      · Mean first rank (MFR) refers to the mean of the first root-
+2.4GHz CPU, 12 GB RAM. Each service is deployed with                   cause microservice rank in each fault.
+multiple instances. We continuously ran a workload generator,
+which simulated the real-world user access pattern observed            We compared TraceRCA with the state-of-the-art (SOTA)
+from our cooperating bank (see Section V).                          trace-based unsupervised approach MicroScope (MS) [7]
+                                                                    and TraceAnomaly (TA) [13], and the SOTA trace-based
+                                                                    supervised approach MEPFL [11]. Besides, we compared
+
+                                                                       1https://github.com/NetManAIOps/TraceRCA
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+                      2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+Fault Type                           TABLE I: Summary of fault injection strategies on Train-Ticket                     Level                #Cases
+Application                                                                                                             Microservice         58
+                Description
+    Bug         If there is an application bug, the responses from the faulty microservices can be incorrect. We use    Microservice         59
+    CPU         Istio [34] to randomly substitute some responses with wrong responses.
+Exhausted       Due to configuration errors or bursting requests, CPU can be exhausted, which causes long latency, low  Microservice,        59,
+ Network        throughput or no response.,We use stress-ng, a popular stress test tool, to exhaust CPU.                Container, API       10, 14
+   Delay        When there is network jam, packet transmission requires more time, so latency of responses becomes
+                longer. We use Istio to randomly delay requests.
+
+                      TABLE II: Overall effectiveness comparison of root cause localization
+
+             Subject Algorithm  A@1 A@1 A@2 A@2 A@3 A@3 MAR MAR MFR                                                             MFR
+
+                TraceRCA        0.82  -- 0.91                    -- 0.95        -- 1.54               -- 1.50                        --
+                                                                                                                               57.92%
+                MicroScope 0.55 51.02% 0.61 49.28% 0.70 34.88% 3.70 58.49% 3.55                                                 -9.35%
+                                                                                                                               33.87%
+             A  MEPFL (RF) 0.92 -10.72% 0.97            -5.48% 0.98          -2.79% 1.40            -9.72% 1.37                15.48%
+                Random Walk 0.51 61.93% 0.84            8.42% 0.90           5.34% 2.32            33.66% 2.26                 67.28%
+
+                RCSF            0.50 63.91% 0.83 10.31% 0.90 5.79% 1.83 16.27% 1.77                                                  --
+                                                                                                                               47.17%
+                TraceAnomaly 0.45 81.22% 0.56 63.23% 0.61 56.38% 4.65 66.90% 4.58                                               -5.66%
+                                                                                                                                9.68%
+                TraceRCA        0.88  --1                        --1            -- 1.12               -- 1.12                  26.80%
+                                                                                                                               35.29%
+                MicroScope 0.82 7.32% 0.88 13.64% 0.88 13.64% 2.12 47.17% 2.12
+
+             B  MEPFL (RF) 0.94       -6.38% 1          0.00% 1              0.00% 1.06               -5.66% 1.06
+                Random Walk 0.82      7.32% 0.94        6.38% 1              0.00% 1.24               9.68% 1.24
+
+                RCSF            0.47 87.23% 1           0.00% 1              0.00% 1.53 26.80% 1.53
+
+                TraceAnomaly 0.68 20.27% 0.68 33.47% 0.77 22.94% 2.32 33.57% 2.32
+
+             * A@k means top-k accuracy, and  means the improvement rate (%) of TraceRCA over compared approaches.
+
+                TABLE III: Comparison of root cause localization on faults of different levels on A
+
+Subject         Algorithm       A@1     A@1       A@2     A@2         A@3      A@3           MAR        MAR             MFR       MFR
+Microservice    TraceRCA        0.83              0.93                0.97                   1.39                       1.34
+Container       MicroScope      0.56          --  0.62          --    0.70           --      3.64             --        3.47           --
+API             MEPFL (RF)      0.94   46.67%     0.97   49.49%       0.97    37.33%         1.42       61.77%          1.38     61.26%
+                Random Walk     0.51   -12.00%    0.86    -4.82%      0.94     -0.64%        1.97                       1.91
+                RCSF            0.52   61.96%     0.86                0.93                   1.68        1.98%          1.60      2.71%
+                TraceAnomaly    0.49   60.00%     0.59     7.25%      0.63      3.00%        4.42       29.37%          4.34     29.51%
+                TraceRCA        0.80   70.85%     0.80     7.64%      0.80      3.69%        3.80       16.98%          3.80     16.02%
+                MicroScope      0.20              0.40   58.14%       0.40    53.11%         7.20       68.54%          7.20     69.13%
+                MEPFL (RF)      0.80          --  0.80                1.00                   1.40                       1.40
+                Random Walk     0.40  300.00%     0.60          --    0.60           --      8.40            0%         8.40           --
+                RCSF            0.40              0.60  100.00%       0.60   100.00%         3.60       47.22%          3.60     47.22%
+                TraceAnomaly    0.20     0.00%    0.30                0.30    -20.00%        7.10     -171.43%          7.10   -171.43%
+                TraceRCA        0.83  100.00%     0.83     0.00%      0.83                   1.75       54.76%          1.75     54.76%
+                MicroScope      0.58  100.00%     0.67   33.33%       0.92    33.33%         2.00        -5.56%         2.00      -5.56%
+                MEPFL (RF)      0.83  300.00%     1.00   33.33%       1.00    33.33%         1.17       46.48%          1.17     46.48%
+                Random Walk     0.58              0.75  166.67%       0.64   166.67%         2.33                       2.33
+                RCSF            0.42          --  0.58                0.67                   2.58             --        2.58           --
+                TraceAnomaly    0.21   42.86%     0.36          --    0.50           --      5.86       12.50%          5.86     12.50%
+                                                         64.29%                -9.09%                  -50.00%                  -50.00%
+                                         0.00%           -16.67%              -16.67%                   25.00%                   25.00%
+                                       42.86%            11.11%               29.63%                    32.26%                   32.26%
+                                      100.00%            42.86%               25.00%                    70.12%                   70.12%
+                                      287.33%           132.40%               66.00%
+
+                TABLE IV: Comparison of root cause localization on multi-root-cause faults of A
+
+Subject         Algorithm       A@1     A@1       A@2     A@2         A@3      A@3           MAR      MAR               MFR     MFR
+                TraceRCA        0.45              0.82                0.95                   1.77                       1.09
+multi-          MicroScope      0.27          --  0.27          --    0.41           --      5.18           --          2.73         --
+root-cause      MEPFL (RF)      0.45   66.67%     0.95  200.00%       0.95   133.33%         1.64     65.79%            1.09   60.00%
+cases on A      Random Walk     0.41              0.64   -14.29%      0.82                   2.27      -8.33%           1.36
+                RCSF            0.23     0.00%    0.50   28.57%       0.73      0.00%        2.82     22.00%            1.73     0.00%
+                TraceAnomaly    0.50   11.11%     0.73   63.64%       0.82    16.67%         2.50     37.10%            1.00   20.00%
+                                      100.00%            12.75%               31.25%                  29.20%                   36.84%
+                                      -10.00%                                 16.11%                                           -9.00%
+
+TraceRCA with two SOTA invocation-based unsupervised             single metric ( [5], [8], [10]) or relies on user participation (
+approaches, RCSF [6] and Random Walk (RW) [5], [8]­
+[10], [12]. As MS, TA, and MEPFL localize root causes            [9], [12]), which makes it unrealistic to use correlations with
+trace-by-trace, the final results are voted by all abnormal
+traces. We ran MS based on our anomaly detection approach        the alerting metric as weights. Original TraceAnomaly [13]
+because they did not describe theirs. We adapted MEPFL on
+our collected features and selected RF (random forest) since     utilizes only one metric (latency), which poorly performs since
+RF performs well, runs fast compared with KNN (k nearest
+neighbor), and easy to train compared with MLP (multi-layer      we inject faults in multiple metrics, and thus we applied
+perceptron) [11]. We used RW with self and backward edges
+following the previous work [5], [8]­[10], [12] while using the  TraceAnomaly on all metrics as TraceRCA.
+anomaly severity of each microservice pair as weights because
+these previous approaches based on RW either only handles             TraceRCA           MS           RW                RCSF             RF          TA
+
+                                                                 A@1  0.5
+                                                                                                      A@1
+                                                                      0.0 0
+                                                                                1                  2                    0 100           101
+                                                                             Missed Fault Type                          Missed Service
+
+                                                                 Fig. 5: Influence of the coverage of faults types and microser-
+
+                                                                 vices in training data on A (shared y-axis).
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+                           2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+1.00  Precision            Recall      F1-score            0.75    TraceRCA-AD     NoSelection  0.83
+                                                                                     45
+0.75                                             F1 Score  0.50                                 0.82
+                                                           0.25 1                               0.81 10 2 10 1
+0.50                                                               2            3                               100                             101
+
+0.25                                                                                 ad                                  fs
+
+0.00 TraceRCA-AD RF-Trace          IF  TA-AD     Fig. 7: Influence of feature selection         Fig. 8: Influence of fs on A
+
+Fig. 6: Trace anomaly detection comparison       and ad on less significant anomalies
+
+   Table II compares the overall effectiveness. From this ta-         cases that in training data, there are missing fault types (e.g.,
+ble, TraceRCA outperforms all the compared unsupervised               new fault types) or microservices (e.g., microservices in which
+approaches on both A and B. The top-1 accuracy of Trac-               it is hard to inject faults). From Fig. 5, the effectiveness of RF
+eRCA outperforms the compared unsupervised approaches by              indeed degrades quickly as the number of missed fault types
+51.02%81.22% on A. Most approaches perform well on B                  and microservices increasing, while unsupervised approaches
+due to its smaller number of microservices and less com-              perform stably and outperform RF eventually. In practice, it
+plicated dependency among microservices. Nevertheless, the            is hard to guarantee high-quality training data, and thus our
+top-1 accuracy of TraceRCA still outperforms the compared             unsupervised approach TraceRCA is more practical and stable.
+unsupervised approaches by 7.32%87.23% on B. On average
+across all the faults, the top-1 accuracy of TraceRCA achieves        Conclusion 2 TraceRCA performs almost as well as the
+83%, and the MAR achieves 1.50. TraceRCA outperforms the              SOTA supervised approach, but the latter relies on training
+compared unsupervised approaches by 44.8%66.1% in top-1               data with high coverage of all fault types and microservices.
+accuracy, and 17.2%78.7% in MAR by further calculation.
+The unsupervised trace-based approaches, MicroScope and               C. Effectiveness of Our Trace Anomaly Detection Method
+TraceAnomaly, assume a fixed pattern of anomalies propa-
+gation while TraceRCA dynamically infers it, and thus they               Following the existing work [11], we used three widely-
+are less robust. Besides, TraceAnomaly performs poorly on             used metrics, i.e., precision, recall, and F1-score, to evaluate
+anomaly detection since it is initially designed for latency only     the effectiveness of the trace anomaly detection method in
+(see Section IV-C), which harms its performance a lot.                TraceRCA (denoted as TraceRCA-AD). We compared Trac-
+                                                                      eRCA-AD with the SOTA supervised approach MEPFL (the
+   Table III and Table IV present the results of root cause           same model as that for root cause localization can also be
+localization on different levels of faults and multi-root-cause       used for trace anomaly detection and achieves the SOTA
+faults in A, respectively. From Table III, TraceRCA performs          performance [11]), and the SOTA unsupervised trace-based
+better than all unsupervised baselines in most cases across all       approach TraceAnomaly (the part of anomaly detection, de-
+the three levels. For example, the top-1 accuracy of TraceRCA         noted as TA-AD), and a widely-used unsupervised invocation-
+achieves 0.800.83 and outperforms other unsupervised ap-              based method IF (isolation forest [39]). For MEPFL, we also
+proaches by 42.86%300% across all levels, and the MAR                 used RF (denoted as RF-trace) as the representative due to the
+outperforms by 12.50%70.12%. From Table IV, TraceRCA                  same reason in Section IV-B. For IF, we treated all feature
+largely outperforms all the compared unsupervised approaches          values of an invocation as a multi-dimensional sample and
+w.r.t most metrics on multi-root-cause faults. For example, the       applied IF on all the samples of each microservice pair to
+top-2 accuracy of TraceRCA achieves 0.82 and outperforms              detect abnormal invocations, based on which we detected
+other unsupervised approaches by 12.75%200%, and the                  abnormal traces following Section III-A2.
+MAR outperforms by 22.00%65.79%.
+                                                                         As shown in Fig. 6, both TraceRCA-AD and RF-Trace
+Conclusion 1 TraceRCA significantly outperforms the SOTA              achieve over 0.8 in F1-score. Note that our unsupervised
+unsupervised approaches in all the three studied levels of            method, TraceRCA-AD, is competitive with the supervised
+faults and both single-root-cause and multi-root-cause faults.        method, RF-Trace, while IF and TraceAnomaly performs
+                                                                      poorly. It is because our datasets contain multiple features,
+   Compared with the SOTA supervised approach (RF), Trac-             and some are noisy and misleading. Thus the unsupervised
+eRCA is inferior but not too much. On average across all              approaches are hard to perform well without feature selection.
+the faults on A and B, TraceRCA underperforms RF by
+10.3% in top-1 accuracy and 9.4% in MAR. The inferiority of              Although the supervised method, i.e., RF-Trace, achieves
+TraceRCA is expected since supervised approaches have much            the best effectiveness, it relies on high coverage of fault types
+more knowledge than unsupervised ones in general. Besides,            and microservices in training data. In Fig. 9, we investigated
+by analyzing failed cases, we find that the intermediate step         the effectiveness of RF-Trace with different numbers of missed
+of anomaly detection may incur noise, which also affects              fault types and microservices in training data (following the
+the overall effectiveness (see Fig. 10). However, supervised          experiment process of Fig. 5). The F1-score of RF-Trace
+approaches heavily rely on high coverage of fault types and           degrades very quickly as the number of missed fault types
+microservices in training data. To demonstrate it, we con-            or microservices increases, while the F1-score of unsupervised
+structed modified training sets by removing faults of a specific      methods tends to be stable and stay competitive in this process.
+type or microservice from original datasets. It simulated the         It is hard to guarantee high-quality training data in practice,
+                                                                      and thus TraceRCA-AD is more practical and stable.
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+                    2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+       TraceRCA-AD         IF     RF-Trace  TA-AD                               TraceRCA       MS       RW                                  RCSF       RF    TA
+
+0.5F1-score                                                                                                                             15
+                                                                           0.5                                                          10
+                                                                                          Top-1 Accuracy                                5
+                                                                                                                                   MAR    0.0 0.2 0.4 0.6
+0.0 0  Missed F1ault Type  2   0  100       101                            0.0 0.0 0.2 0.4 0.6                                                      Noise Ratio
+                                  Missed Service                                         Noise Ratio
+
+Fig. 9: Influence of coverage of fault types and microservices             Fig. 10: Influence of ineffective anomaly detection
+
+in training data on anomaly detection (shared y-axis).                    Top-1 Accuracy           MAR                                      Top-1 Accuracy  MAR
+                                                                 0.8                                  3200..8905                                                21..05
+   As adaptive feature selection is an important step in Trac-   0.6
+eRCA-AD, we then investigated its contribution by comparing                    0.2 0.4 0.6 0.8
+TraceRCA-AD and TraceRCA-AD without feature selection                                                                                       0.2 0.4 0.6 0.8
+(denoted as N oSelection). As shown in Fig. 7, when ad
+(the threshold of anomaly severities) is high, both have low                              spt                                                     spt
+F1-scores since they have many false negatives. But when
+ad is low, feature selection helps reduce false positives, and             Fig. 11: Influence of spt on A (left) and B (right)
+thus, TraceRCA-AD has a higher F1-score. Therefore, adaptive
+feature selection is helpful to make TraceRCA more practical.    microservice ranking in Section III-B) change in a large range.
+                                                                 As shown in Fig. 7, even if ad (invocations with anomaly
+Conclusion 3 The anomaly detection method in TraceRCA            severities greater than it are abnormal, see Section III-A)
+performs almost as well as the SOTA supervised method but is     is lower than the best threshold (i.e., 2 in Fig. 7), with
+more practical. Also, adaptive feature selection in TraceRCA     the help of our adaptive feature selection, the F1-score of
+is helpful to ensure good performance.                           TraceRCA-AD does not degrade. In Fig. 8, the F1-score of
+                                                                 TraceRCA-AD keeps good performance even if fs (features
+   As mentioned in Section IV-B, the intermediate step of        whose distributions change greater than it are useful, see
+trace anomaly detection affects the effectiveness of TraceRCA.   Section III-A) varies.
+Here, we investigated its influence by randomly reversing
+the anomaly detection results with probability noise ratio,      Conclusion 5 For each of the main parameters, TraceRCA
+which simulates ineffective anomaly detection. The results       is insensitive to it in a large range.
+are shown in Fig. 10. The supervised approach, i.e., RF-
+Trace, does not rely on anomaly detection, and thus their                E. Scalability
+results are not affected. When the noise ratio is less than 4%,
+the performance of TraceRCA does not degrade obviously.                  Here, we investigated the efficiency of TraceRCA. Our
+When the noise ratio goes larger than 8%, as well as all
+other unsupervised approaches, the performance of TraceRCA               experiments were conducted on a server with 12 cores and
+degrades but keeps outperforming others. That further demon-
+strates the contribution of our trace anomaly detection method.          64G RAM. TraceRCA and all baselines are implemented with
+However, a more advanced anomaly detection approach is
+still required for further improving TraceRCA, which is not              Python. Fig. 13 shows how many traces each approach can
+the target of this paper but can be regarded as our future
+work. Besides, TraceRCA is not able to detect structurally               handle per second per core. TraceRCA is not the fastest one,
+abnormal traces, which refers to traces that have invocations
+corresponding to unexpected microservice pairs while these               but it is efficient enough. For a system with 100,000 traces per
+invocations' monitoring metrics are expected. According to
+our interviews with several domain engineers, such structural            minute (a typical number from the large production system
+anomalies are much less prevalent but may be related to severe
+issues like attacks. We keep this as part of our future work.            studied in Section V), TraceRCA takes only about 60 seconds
+
+Conclusion 4 The effectiveness of all unsupervised ap-                   to localize the root cause for a 5-minute fault. Although
+proaches, including TraceRCA, relies on the effectiveness of
+anomaly detection, but TraceRCA is more insensitive and                  TraceRCA performs feature selection and trace anomaly de-
+consistently outperforms the SOTA unsupervised approaches.
+                                                                         tection on different microservice pairs separately, the overall
+
+                                                                         time complexity is only related to the number of traces. In
+
+                                                                         Fig. 14a, we present the relative running time (compared
+
+                                                                         with the median running time without trace sampling) with
+
+                                                                         different trace sampling proportions, by which we found that
+
+                                                                         the running time is almost linear to the number of traces.
+
+                                                                         In large production systems, trace sampling is widely used
+
+                                                                         to reduce system load since the number of traces can be
+
+                                                                                Top-1 Accuracy     MAR                                      Top-1 Accuracy   MAR752...505
+                                                                 000...257055     25 50 75              52..05000...257505                    25 5k0 75     100
+                                                                      0                  k
+                                                                                                   100                                  0
+
+                                                                               Fig. 12: Influence of k on A (left) and B (right)
+
+D. Impact of Main Parameters                                     # Traces   104                         105
+                                                                                                        104
+   We investigated the impact of main parameters (i.e.,                     103                         1T0ra3ceRCA MS RF RW RCSF TA
+spt, k, ad and fs). In Fig. 11 and Fig. 12, the top-1 accuracy           TraceRCA-ADRF-Trace IF TA-AD
+and MAR of TraceRCA keep high while spt (microservice                                                      (b) Root cause localization
+sets with supports greater than it are frequent, see Sec-                  (a) Trace anomaly detection
+tion III-B) and k (the number of microservice sets taken for
+                                                                                         Fig. 13: Comparison of efficiency
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+                             2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+time   100                                     0.0                A@1                  A@3         Second, abnormal metrics vary on different microservices
+      10 1                                     0.2                                              even for one fault. For example, if a microservice encounters
+                                                             s41ampling12 proportion 1          resource exhaustion, its response rate goes down. For its
+             116 sam81 pling 41propor12tion 1        116 18                                     upstream microservices, the response latency will increase if
+                      (a)                                         (b)                           they have to wait until timeout. The response latency may also
+                                                                                                keep steady or decrease if the faulty service refuses connection
+Fig. 14: Efficiency improvement and performance degradation                                     immediately, and in such cases, the success rate will decrease.
+                                                                                                Thus, a multi-metric anomaly detection approach is necessary.
+of TraceRCA with trace sampling.
+                                                                                                   Third, the interpretability of a root cause localization ap-
+extremely large. TraceRCA is able to achieve relatively good                                    proach is important for operators to accept its results and
+                                                                                                take action. On the one hand, following a wrong localization
+performance with trace sampling. In Fig. 14b, we plot the                                       result makes mitigation take a longer time. On the other
+                                                                                                hand, different microservices are usually in the charge of
+performance degradation with different sampling proportions,                                    different operators or different departments, so the result of
+                                                                                                an approach affects the distribution of responsibility among
+where the band refers to the standard deviation (we repeated                                    operators or departments. In most cases, TraceRCA's results
+                                                                                                can be understood well by displaying abnormal traces with
+the   experiment  three  times).               With  only         1      of  all       traces,  invocations' normality and highlighting their intersection.
+                                                                  16
+                                                                                                                        VI. RELATED WORK
+TraceRCA can achieve about 8090% of the best performance.
+                                                                                                   Recently, a great deal of effort has been devoted to localiz-
+Conclusion 6 TraceRCA has good scalability for practice.                                        ing root-cause microservices. There are also many approaches
+                                                                                                on root cause localization for service-oriented system, compo-
+          V. DEPLOYMENT AND LEARNED LESSONS                                                     nent based system, and cloud native system. The underlying
+                                                                                                intuitions of them are similar to that of microservice systems,
+   TraceRCA has been successfully deployed in a production                                      and thus, most such approaches can also be applied to root-
+service-oriented system containing over 80 services of a large                                  cause microservice localization. Many approaches [5], [8]­
+commercial bank. Since it is not a microservice system, the                                     [10], [12] are based on random walk. The intuition is that
+number of services seems small. However, it is large-scale                                      if microservices are visited in a sequence by picking up the
+w.r.t. the number of traces (over 100,000 traces per minute).                                   next one with the highest probability of causal anomaly among
+We used the parameters of TraceRCA described in Section III.                                    all neighbors, the more visits of a microservice, the more it
+Based on the operators' feedback, TraceRCA helps them                                           explains the anomalies of all microservices [5]. To address the
+accurately and efficiently localize root-cause microservices in                                 problem of naive random walk, second-order random walk [8],
+practice many times and saves much effort. In this section, we                                  self and backward edges [5], [9], [10], and combination of
+share some learned lessons from the deployment.                                                 multi metrics [9], [12] are proposed. RCSF [6] mines frequent
+                                                                                                sequential patterns [32] as root causes directly among all call
+      SA    PLS           ECT                                A           D                      paths (thus, it is not trace-based) from abnormal services to the
+                                                                                                alerting service. Some approaches [11], [40] utilize historical
+                                                  120/120       355/355     1267/1267           faults or injected faults to build a supervised algorithm. The
+                                                                                                intuition is that similar faults have the same root causes.
+                                               B             SSP         NPS 12/12 F            However, historical faults are inadequate, and fault injection
+                                                                                                in production systems is impractical due to 1) the cost of
+      SB  SD                                      100/100 600/600           546/546             maintaining a benchmark with similar architecture and scale
+                                                                                                2) and the limited types of fault injection. Unsupervised trace-
+                         SC                                  C           E                      based approaches [7], [13] utilize traces to improve fault
+                                                                                                diagnosis. They detect abnormal traces in an unsupervised
+            (a)                                                   (b)                           manner and infer the root-cause microservice based on a mined
+                                                                                                causal graph or dependency graph.
+Fig. 15: Two real-world faults. Irrelevant services are omitted.
+                                                                                                   Spectrum-based fault localization (SBFL) is popular and
+The numbers on each microservice pair represent the numbers                                     useful in program debugging [14]­[19]. A typical SBFL
+                                                                                                collects coverage information for program elements (e.g.,
+of abnormal/total traces passing through it.                                                    statements and methods) while running test cases and then
+                                                                                                employs a predefined scoring function to compute the sus-
+   First, traces are really necessary for root cause localization.                              picious scores for program elements. The intuition is that
+Invocation indicates the relationship between only adjacent                                     a program element covered by less passed tests and more
+microservices, while trace provides the relationship among all                                  failed tests is more likely to be the root cause, which is
+microservices on the same trace. For example, in Fig. 15a,
+PLS either calls SC or SD directly, or calls ECT before
+calling them. A fault happened in ECT, and it affected the
+invocations of PLSECT and the following ones of PLSSC
+or PLSSD. Without traces, the relationship among ECT,
+SC and SD is uncertain, and thus we can hardly infer which
+downstream microservice of PLS is the root cause. But with
+traces, TraceRCA can easily observe that all abnormal traces
+intersect at ECT. In Fig. 15b, all microservice pairs are
+abnormal, and root-cause microservices are SSP and NPS.
+Without traces, the anomaly in NPS is highly likely to be
+considered as caused by SSP, since NPS relies on SSP and
+the invocations of NPSSSP are all abnormal. With traces,
+TraceRCA can easily confirm that SSP and NPS are two
+independent root causes because most traces containing NPS
+do not contain SSP.
+
+          Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+                        2021 IEEE/ACM 29th International Symposium on Quality of Service (IWQOS)
+
+similar to our insight (see Section III). But SBFL uses user-                [14] M. Zhang, Y. Li, X. Li, L. Chen, Y. Zhang, L. Zhang, and S. Khurshid,
+defined test cases and need not anomaly detection, and SBFL                        "An Empirical Study of Boosting Spectrum-based Fault Localization via
+directly mines suspicious program elements while TraceRCA                          PageRank," IEEE Transactions on Software Engineering, pp. 1­1, 2019.
+mines suspicious microservice sets for robustness and ranks
+microservices at the further step.                                           [15] J. Jiang, R. Wang, Y. Xiong, X. Chen, and L. Zhang, "Combining
+                                                                                   Spectrum-Based Fault Localization and Statistical Debugging: An Em-
+                         VII. CONCLUSION                                           pirical Study," in ASE 2019.
+
+   In this paper, we propose TraceRCA, a practical root-cause                [16] J. Xuan, M. Martinez, F. DeMarco, M. Cle´ment, S. L. Marcote,
+microservice localization approach via trace analysis, which is                    T. Durieux, D. L. Berre, and M. Monperrus, "Nopol: Automatic Repair
+composed of trace anomaly detection, suspicious microservice                       of Conditional Statement Bugs in Java Programs," TSE, vol. 43, no. 1,
+set mining, and microservice ranking. The key insight of                           pp. 34­55, Jan. 2017.
+TraceRCA is that a microservice with more abnormal traces
+and less normal traces passing though it is more likely to be the            [17] Y. Xiong, J. Wang, R. Yan, J. Zhang, S. Han, G. Huang, and L. Zhang,
+root cause. Based on a widely-used open-source microservice                        "Precise condition synthesis for program repair," in ICSE 2017.
+benchmark and a production system, we conduct the largest
+experimental studies in the field, and the results show Trac-                [18] Q. Xin and S. P. Reiss, "Leveraging syntax-related code for automated
+eRCA can localize the root cause accurately and efficiently.                       program repair," in ASE 2017.
+We also share learned lessons from our deployment in a large
+commercial bank.                                                             [19] X. B. D. Le, D. Lo, and C. L. Goues, "History Driven Program Repair,"
+                                                                                   in SANER 2016.
+                    VIII. ACKNOWLEDGEMENT
+                                                                             [20] F. Ahmed, J. Erman, Z. Ge, A. X. Liu, J. Wang, and H. Yan, "Detecting
+   This work was partially supported by the National Key R&D                       and localizing end-to-end performance degradation for cellular data
+Program of China under Grant No.2019YFE0105500, the State                          services based on tcp loss ratio and round trip time," TON, vol. 25,
+Key Program of National Natural Science of China under                             no. 6, pp. 3709­3722, 2017.
+Grant 62072264, and the Beijing National Research Center for
+Information Science and Technology (BNRist) key projects.                    [21] F. Lin, K. Muzumdar, N. P. Laptev, M.-V. Curelea, S. Lee, and S. Sankar,
+                                                                                   "Fast Dimensional Analysis for Root Cause Investigation in a Large-
+                        REFERENCES                                                 Scale Service Environment," SIGMETRICS 2020.
+
+[1] P. Jamshidi, C. Pahl, N. C. Mendonc¸a, J. Lewis, and S. Tilkov, "Mi-     [22] X. Zhou, X. Peng, T. Xie, J. Sun, C. Ji, W. Li, and D. Ding, "Fault
+                                                                                   analysis and debugging of microservice systems: Industrial survey,
+croservices: The journey so far and challenges ahead," IEEE Software,              benchmark system, and empirical study," TSE, 2018.
+
+vol. 35, no. 3, pp. 24­35, 2018.                                             [23] S. Newman, Building microservices: designing fine-grained systems. "
+                                                                                   O'Reilly Media, Inc.", 2015.
+[2] "Why You Can't Talk About Microservices Without
+                                                                             [24] X. Guo, X. Peng, H. Wang, W. Li, H. Jiang, D. Ding, T. Xie, and L. Su,
+Mentioning  Netflix,"             https://smartbear.com/blog/develop/              "Graph-based trace analysis for microservice architecture understanding
+                                                                                   and problem diagnosis," in ESEC/FSE 2020.
+why-you-cant-talk-about-microservices-without-ment/, 2019, [Online;
+                                                                             [25] S.-B. Lee, D. Pei, M. Hajiaghayi, I. Pefkianakis, S. Lu, H. Yan, Z. Ge,
+accessed 14-Octorber-2019].                                                        J. Yates, and M. Kosseifi, "Threshold compression for 3G scalable
+                                                                                   monitoring," in INFOCOM 2012, pp. 1350­1358.
+[3] M. Ranney, "What i wish i had known before scaling uber to 1000
+                                                                             [26] J. Xu, Y. Wang, P. Chen, and P. Wang, "Lightweight and Adaptive
+services," in GOTO Chicago 2016, 2016.                                             Service API Performance Monitoring in Highly Dynamic Cloud En-
+                                                                                   vironment," in SCC 2017, pp. 35­43.
+[4] "Amazon's one hour of downtime on Prime Day may have cost it
+                                                                             [27] H. Jayathilaka, C. Krintz, and R. Wolski, "Performance Monitoring and
+up to $100 million in lost sales," https://www.businessinsider.com/                Root Cause Analysis for Cloud-hosted Web Applications," in WWW
+                                                                                   2017.
+amazon-prime-day-website-issues-cost-it-millions-in-lost-sales-2018-7,
+                                                                             [28] P. Bahl, R. Chandra, A. Greenberg, S. Kandula, D. A. Maltz, and
+2019, [Online; accessed 04-November-2019].                                         M. Zhang, "Towards highly reliable enterprise network services via
+                                                                                   inference of multi-level dependencies," ACM SIGCOMM Computer
+[5] M. Kim, R. Sumbaly, and S. Shah, "Root cause detection in a service-           Communication Review, vol. 37, no. 4, pp. 13­24, Aug. 2007.
+
+oriented architecture," ACM SIGMETRICS Performance Evaluation Re-            [29] Y. Chen, R. Mahajan, B. Sridharan, and Z.-L. Zhang, "A provider-side
+                                                                                   view of web search response time," vol. 43, no. 4, pp. 243­254.
+view, vol. 41, no. 1, pp. 93­104, 2013.
+                                                                             [30] H. Xu, W. Chen, N. Zhao, Z. Li, J. Bu, Z. Li, Y. Liu, Y. Zhao, D. Pei,
+[6] K. Wang, C. Fung, C. Ding, P. Pei, S. Huang, Z. Luan, and D. Qian,             Y. Feng et al., "Unsupervised anomaly detection via variational auto-
+                                                                                   encoder for seasonal kpis in web applications," in WWW 2018.
+"A methodology for root-cause analysis in component based systems,"
+                                                                             [31] "GoogleCloudPlatform/microservices-demo," Google Cloud Plat-
+in IWQoS 2015. IEEE, 2015, pp. 243­248.                                            form, Feb. 2021. [Online]. Available: https://github.com/
+                                                                                   GoogleCloudPlatform/microservices-demo
+[7] J. Lin, P. Chen, and Z. Zheng, "Microscope: Pinpoint performance issues
+                                                                             [32] J. Han, J. Pei, and M. Kamber, Data mining: concepts and techniques.
+with causal graphs in microservice environments," in ICSOC 2018, 2018.             Elsevier, 2011.
+
+[8] P. Wang, J. Xu, M. Ma, W. Lin, D. Pan, Y. Wang, and P. Chen,             [33] L. Geng and H. J. Hamilton, "Interestingness measures for data mining:
+                                                                                   A survey," ACM Computing Surveys, vol. 38, no. 3, pp. 9­es, Sep. 2006.
+"Cloudranger: root cause identification for cloud native systems," in
+                                                                             [34] "Istio," https://istio.io/, 2019, [Online; accessed 03-Octorber-2019].
+CCGRID 2018. IEEE Press, 2018, pp. 492­502.
+                                                                             [35] X. Hou, J. Liu, C. Li, and M. Guo, "Unleashing the scalability potential
+[9] M. Ma, W. Lin, D. Pan, and P. Wang, "Ms-rank: Multi-metric and self-           of power-constrained data center in the microservice era," in ICPP 2019.
+
+adaptive root cause diagnosis for microservice applications," in ICWS        [36] X. Zhou, X. Peng, T. Xie, J. Sun, W. Li, C. Ji, and D. Ding, "Delta
+                                                                                   debugging microservice systems," in ASE 2018.
+2019. IEEE, 2019, pp. 60­67.
+                                                                             [37] "Kubernetes," https://kubernetes.io/, 2019, [Online; accessed 03-
+[10] J. Weng, J. H. Wang, J. Yang, and Y. Yang, "Root cause analysis of            Octorber-2019].
+
+anomalies of multitier services in public clouds," IEEE/ACM Transac-         [38] Q. Lin, J.-G. Lou, H. Zhang, and D. Zhang, "idice: problem identifica-
+                                                                                   tion for emerging issues," in ICSE 2016. IEEE, 2016, pp. 214­224.
+tions on Networking, vol. 26, no. 4, pp. 1646­1659, 2018.
+                                                                             [39] F. T. Liu, K. M. Ting, and Z.-H. Zhou, "Isolation forest," in ICDM 2008.
+[11] X. Zhou, X. Peng, T. Xie, J. Sun, C. Ji, D. Liu, Q. Xiang, and                IEEE, 2008, pp. 413­422.
+
+C. He, "Latent error prediction and fault localization for microservice      [40] C. Pham, L. Wang, B. C. Tak, S. Baset, C. Tang, Z. Kalbarczyk, and
+                                                                                   R. K. Iyer, "Failure diagnosis for distributed systems using targeted fault
+applications by learning from system trace logs," in ESEC/FSE 2019.                injection," TPDS, vol. 28, no. 2, pp. 503­516, 2016.
+
+[13] P. Liu, H. Xu, Q. Ouyang, R. Jiao, Z. Chen, S. Zhang, J. Yang, L. Mo,
+
+J. Zeng, W. Xue, and D. Pei, "Unsupervised Detection of Microservice
+
+Trace Anomalies through Service-Level Deep Bayesian Networks," in
+
+ISSRE 2020, pp. 48­58.
+
+[12] M. Ma, J. Xu, Y. Wang, P. Chen, Z. Zhang, and P. Wang, "AutoMAP:
+
+Diagnose Your Microservice-based Web Applications Automatically," in
+
+WWW 2020.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 08,2026 at 06:59:54 UTC from IEEE Xplore. Restrictions apply.
+

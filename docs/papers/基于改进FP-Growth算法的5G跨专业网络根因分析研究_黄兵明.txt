@@ -1,0 +1,511 @@
+                                                                                                      
+
+FP-Growth5G
+
+
+1 2 3 1 1
+1   100048
+2   100045
+3   100012
+
+ 5G
+
+
+5G
+
+ 5G
+
+                 1 
+                 
+      5G
+                       
+                 Twitter
+                 
+                 
+                 
+
+                       1
+                 Apriori[3-5]FP-growth[6-8]
+      [1-2]      
+FP-Growth5G      
+                 AB
+                 A=>B
+                 
+                 
+(62032013)
+
+             65
+
+
+                           Y)
+                           
+
+                                 FP-GrowthApriori
+                           
+                           FP-Growth
+                           AprioriFP-Growth
+                           
+                           
+
+                           2 FP-Growth
+                           
+XYX
+                           2.1
+Y{XY}                      2.1.1 
+
+XYXY                             
+                           {XY}
+P(XY)                      
+                           P(X
+        (1)                Y)
+                           P(XY)
+{XY}
+                                 
+                           
+                           
+AprioriFP-growth           
+[9]                        2
+
+                                 
+                           
+                           
+                           
+                           
+  1                        2.1.2 
+
+                                 YP(Y)
+                           P(XY)
+                           Y
+
+AB{XY}                           YYP(Y)
+
+XY
+
+AB
+
+P(Y|X)P(Y|X) = P(XY)/
+
+P(X)
+
+        (2)
+
+        
+
+AB
+
+
+
+
+
+
+
+
+
+{XY}P(X
+
+                       66
+                                                                                                             
+
+P(XY)                                                                                        
+
+YP(Y)                                                                                
+                                                                                     
+YX
+                                                                                SuPPort(XY) = P(X,Y) / P(l)
+P(Y)
+                                                                                           P(Y|X) / P(Y)
+[10]  
+                                                                                    
+
+
+
+                                                               (3)                      
+[11-12]                                                                         Confidence(XY) = P(Y|X)
+
+                                                                                
+
+                                                                                        
+                                                                                2
+
+
+2.1.3 
+
+                                                                             
+
+                                                                             
+
+                                                                             
+[13-14]
+                                                                             
+
+                                                                             
+
+                                                                             
+[15][16-17]
+                                                                             
+
+                                                                             A
+
+                                                                             Support=P(XY)
+
+                                                                             
+
+                                                                             (>)
+
+X                                                                            
+
+YXY                                                                          
+
+                                                                             
+
+X Y                                                                          
+
+                                                                    (4)                                      
+      XY
+                                                                                                             
+
+                                                                                
+
+                                                                             
+
+                                                                             
+
+2.2                                                                                                          (5)
+                                                                                                             (6)
+
+
+                                                                         67
+
+
+                                       
+                                X      3.2
+                                       3.2.1 
+YABA
+                                             2
+                                       
+      (7)                              64 327 2603
+                                       
+                                       
+                                       1 236 840
+XY1                                    
+                                       4
+                                       
+
+1
+
+
+
+
+
+  1 
+
+                                       2 
+
+ :min_confidencemin_                   /            /
+ supportmin_lift                        64 327 260   1 236 840
+ :csv
+:                                      3.2.2 
+1)                                           5
+2)A
+3)AD                                   
+4)D                                    
+{D1,D2...Dm}(m)                        
+5)
+{F1,F2...Fm}(m)                              676
+6)5R                                   >0.027
+7)6                                    
+RS                                     (<0.005)
+                                       
+3                                      3.2.3 
+
+3.1                                          8
+                                       
+                                       
+                                       
+AB                                     
+                                       
+()
+                                             9
+                                       
+
+                                   68
+                                                                
+
+                         3                                            910
+                                                                
+EVENTTIME ALARMTITLE DOMAIN ROOMNAME OBJECTID LOCATEOBJECTTYPE  
+                                                                
+2022-03-01  LINK_                                               
+                                                                
+00:02:55    LOSS[ 3       8.206016e+18       ONU                
+                                                                
+            OLT]                                                
+                                                                
+2022-03-01 [          3   2.298694e+18       MSAP               
+                                                                
+00:00:47 MSAP]                                                  
+                                                                
+            [                                                   
+                                                                
+2022-03-01  ]ECC/     3   5.112676e+18       SDH                
+            DCN                                                 3.3
+00:05:46
+                                                                      112022
+                                                                
+                                                                
+                                                                
+            
+                                                                      3/
+2022-03-01 OLT        3   5.696210e+18       EOCPORT            
+                                                                114
+00:00:50                                                        /
+                                                                
+            (LOS)                                               
+
+2022-03-01            3   1.257176e+17       EOCPORT            4 
+  00:02:25
+
+2022-03-01 PON_LINK_  3   -8.891471e+18      EOCPORT
+
+00:02:55    LOSS
+
+            4 
+
+EVENTTIME ALARMTITLE DOMAIN ROOMNAME OBJECTID LOCATEOBJECTTYPE
+
+            
+
+2022-03-01 OLT        3   5.696210e+18       EOCPORT
+
+00:00:50 
+
+            (LOS)
+
+2022-03-01            3   1.257176e+17       EOCPORT
+  00:02:25
+
+2022-03-01 PON_LINK_  3   -8.891471e+18      EOCPORT
+
+00:02:55    LOSS
+
+            5 
+
+/                            /
+               844                       1 431
+
+            6 
+0.02910                                              
+0.05238
+0.06984             (LTE_EUTRANCELL, _ENODEB)
+                 (_EUTRANCELL, NR_Gcell)
+               (_ENODEB, S1_ENODEB)
+
+                               10                                     
+                         9                                      
+                                                                
+                                                                
+
+                                         69
+
+
+          7                                                   
+                                                              
+                                                              
+                                                              
+0.02910   (LTE_EUTRANCELL, _ENODEB)                4.305433   FP-growthApriori
+                                                              
+0.05238   (_EUTRANCELL, NR_Gcell)                  1.555712
+                                                              
+0.06984 (_ENODEB, S1_ENODEB) 4.019995
+                                                              [1] Zhang C, Zhao Y, Zhou Y, et al.
+0.003104 (_EUTRANCELL, S1_ENODEB) 57.815709                         A real-time abnormal operation
+                                                                    pattern detection method for
+0.001940  (S1_ENODEB, _GNodeB)                     86.023791        building energy systems based on
+                                                                    association rule bases[C]//Building
+0.001164 (_BTS, OML_BTS, _BTS) 75.317996                            Simulation. Tsinghua University
+                                                                    Press, 2022, 15(1): 69-81
+          8 
+                                                              [2] Bui-Thi D,Meysman P,Laukens
+/ /                                                                 K. MoMAC:Multi-objective
+                                                                    optimization to combine multiple
+          41 227 669      304                                       association rules into an
+                                                                    interpretable classification[J].
+          2 471 278       62                                        Applied intelligence,2022,
+                                                                    52(3):3090-3102
+                      9 
+                                                              [3] A G R A W A L R , I M I E L IN S K I T ,
+          _            _                                            SWAMI A. Mining association
+                                                                    rules between sets of items in
+  XX_                   XX_        0.9286  0.9852  1.2              large databases[J].ACM Sigmod
+                                                                    Record, 1993, 22 (2): 207-216
+
+  XX_                   XX_        0.9118 0.8743 1.3          [4] AL-DHARHANI G S, OTHMAN Z
+                                                                    A, BAKAR A A. A graph-based ant
+                                                                    colony optimization for association
+                                                                    rule mining[J]. Arabian Jour-nal for
+ _                      XX         0.8696 0.9036 1.08               Science and Engineering, 2014,
+                                                                    39 (6):4651-4665
+                        _
+                                                              [5] Maryani I, Revianti O, Nur H M,
+  XX_                   XX_        0.9286 0.9852 1.03               et al. Implementasi Data Mining
+                                                                    Pada Penjualan Di Toko GOC
+                                                                    Kosmetik Dengan Menggunakan
+                                                                    Metode Algoritma Apriori[J].
+  XX_                   XX_        0.9118 0.8743 1.15               Indonesian Journal on Software
+                                                                    Engineering (IJSE), 2022,
+                        
+
+  XX_                  _ 0.8696 0.9036 1.9
+
+          
+
+                      10 
+
+          _            _   
+
+  XX_                   XX_        0.9286 0.9852 1.2
+
+                        
+
+  XX_                   XX_        0.9118 0.8743 1.3
+
+                        
+
+ _                      XX         0.8696 0.9036 1.08
+
+                        _
+
+                        
+                        
+                        
+                        
+                        
+
+
+                                   70
+                                                                                                                                                                      
+
+       11                                                                                                                                                                   patterns in sensitive data[C]//
+                                                                                                                                                                            Proceedings of the 16th ACM
+                  /                               //%                                                                                                                       SIGKDD international conference
+                                                                                                                                                                            on Knowledge discovery and data
+       /                                                  /%                                                                                                                mining.2010:503-512
+                                                                                                                                                                      [12] L i Y , Z h a n g S , G u o L , e t a l .
+ XX 4 500         502                        219  8.9567742 20.54794521 129.338                                                                                             NetNMSP:Nonoverlapping
+                                                                                                                                                                            maximal sequential pattern
+                                                                                                                                                                            mining[J]. Applied Intelligence,
+ XX 32 726        1 583                      820  20.674216 39.9097561 93.04121                                                                                             2022:1-24
+                                                                                                                                                                      [13] Qin L X,Shi Z Z.Efficiently mining
+                                                                                                                                                                            association rules from time
+ XX 9 229         2 629                      702 3.51081081 13.14672365 274.46403                                                                                           series[J].International Journal
+                                                                                                                                                                            of Information Technology,
+                                                                                                                                                                            2006,12(4):30-38
+  9 265           1 697                      881 5.46067416 10.51645857 92.585352                                                                                     [14] Jin X B,Gong W T,Kong J L,et
+                                                                                                                                                                            al. PFVAE:a planar flow-based
+                                                                                                                                                                            variational auto-encoder prediction
+  4 634           146                        25   31.807623 185.36 482.75212                                                                                                model for time series data[J].
+                                                                                                                                                                            Mathematics,2022,10(4):610
+       /                                                                                                                                                              [15] Hou S,Zhang X.Alarms association
+                                                                                                                                                                            rules based on sequential pattern
+200                                                       600                                                                                                               mining algorithm[C]//2008 Fifth
+                                                                                                                                                                            International Conference on
+180                                                                                                                                                                         Fuzzy Systems and Knowledge
+                                                                                                                                                                            Discovery.IEEE,2008(2):556-560
+                                                                                                                                                                 500  [16] Kim D S,Shinbo H,Yokota H.An
+160                                                                                                                                                                         alarm correlation algorithm for
+                                                                                                                                                                            network management based
+// %                                                                                                                                                                        on root cause analysis[C]//13th
+                         XX                                                                                                                                                 International Conference on
+                                                       XX                                                                                                                   Advanced Communication
+                                                                                      XX                                                                                    Technology (ICACT2011).
+                                                                                                                                                                            IEEE,2011:1233-1238
+                                                                                                                                                                      [17] S o l d a n i J , B r o g i A . A n o m a l y
+                                                                                                                                                                            detection and failure root cause
+                                                                                                                                                               /%           analysis in (micro) service-based
+140                                                                                                                                                                         cloud applications: A survey[J].
+                                                                                                                                                                 400        ACM Computing Surveys
+                                                                                                                                                                            (CSUR),2022,55(3):1-39
+120
+
+100                                                       300
+
+80
+
+                                                                                                                                                               200
+60
+
+40
+                                                                                                                                                               100
+
+20
+
+0                                                         0
+
+                                                        
+
+                         
+
+                                                  
+
+       3/
+
+      8(1):92-98                                       FP-growth algorithm for discovery
+[6] AL-DHARHANI G S, OTHMAN Z                          of association rules[J]. The
+                                                       Journal of Supercomputing,
+      A, BAKAR A A. A graph-based ant                  2022,78(4):5479-5506
+      colony optimization for association        [9] K o t s i a n t i s S , K a n e l l o p o u l o s
+      rule mining[J]. Arabian Jour-nal for             D.Association rules mining:
+      Science and Engineering, 2014,                   A recent overview[J].GESTS
+      39(6):4651-4665                                  International Transactions
+[7] JIAO M H, YAN P, JIANG H Y.                        on Computer Science and
+      Research and application on Web                  Engineering, 2006,32(1):71-82
+      information retrieval based on             [10] H á j e k A . W h a t c o n d i t i o n a l
+      improved FP-growth algorithm[J].                 probability could not be[J].
+      Wuhan University Journal of Natural              Synthese, 2003,137(3):273-323
+      Sciences, 2006,11(5):1065-1068             [11] B h a s k a r R , L a x m a n S , S m i t h
+[8] S h a w k a t M , B a d a w i M , E l -            A,et al.Discovering frequent
+      ghamrawy S, et al. An optimized
+
+                                                    71
+
+
+
+
+                     
+
+                           
+                     
+                     
+
+                     
+
+        AI                 
+  AIAI               
+                     
+                     
+  
+
+        
+  
+  
+
+Root Cause Analysis of 5G Cross-Domain Network Based on Improved FP-Growth
+Algorithm
+
+Huang Bingming1  1 China Unicom Research Institute, Beijing 100048, China
+Qiao Zhi2        2 China United Network Communications Group Corporation Limited, Beijing 100045, China
+Huang Chaoming3  3 Ultrapower, Beijing 100012, China
+Ma Ruitao1
+Han Yingying1
+
+Abstract Analyzing the challenges of applying association analysis based algorithms to the multiple domains, such as wireless
+network, transmission network and dynamic environments, of Telecommunication operation and maintenance, considering the
+characteristics of the data set, it proposes a set of optimization on association analysis based algorithms. Through filtering noise
+alarm, escalating the attention metric to fault related alarm data set, whose probability might be too low, and applying casual
+inference algorithm to time series events, it improves the algorithm accuracy and computing efficiency. Through the result
+posted at the end of this article, it shows  that the method can help to accelerate the root cause analysis, improve the efficiency
+of locating the fault position in 5G network through-cross-domain alarms.
+Keywords 5G; Association Analysis; Root Cause Analysis; Casual Inference Algorithm
+
+                 72
+

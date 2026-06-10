@@ -1,0 +1,344 @@
+                                            
+
+                                 Operation & Maintenance
+
+   
+
+        
+
+   Research and Application of Intelligent Alarm Analysis
+
+                   Technology in Bearer Network
+
+  1  1 2  21.  1000482.   210019
+
+Zhao Liang1, Zhang He1, Xue Jinming2, Pan Hao21. China Unicom Research InstituteBeijing 100048China2. China Unicom Jiangsu
+BranchNanjing 210019China
+
+                                
+
+                                
+                                doi10.12045/j.issn.1007-3043.2022.07.015
+                                1007-3043202207-0077-06
+                                TN915
+                                A
+                                OSID
+
+Abstract
+
+It conducts research on a series of problems such as the large amount of alarmsthe complex alarm correlationthe difficulty in
+fault locationand the high labor cost in the bearer network.By collecting the operating data of the existing bearer network such
+as alarmstopologynetwork elementsserviceswork order dataetc.AI technology is introduced for alarm root cause correla-
+tion and fault intelligent diagnosisa series of intelligent alarm analysis algorithms are proposedand a set of intelligent alarm
+analysis system for bearer network is developed. A unified knowledge database of alarm association rules has been established
+for mainstream transmission bearer vendors to achieve accurate fault dispatch and rapid diagnosis of fault causeswhich pro-
+motes the self-maintenanceintelligent operation capability and operation and maintenance efficiency of the bearing network.
+
+Keywords
+
+Artificial intelligenceAlarmAssociation rulesFailureNetwork
+
+ . J. 2022777-82.
+
+0                               
+                                
+        5G      ICT       SDN/  
+NFV                             
+                                
+                                
+                                                    
+                                
+
+                                1 
+      
+--------------------                   SDN/NFV 
+                                
+2022-05-10
+
+                                  /2022/07 77
+                  
+
+Operation & Maintenance 
+
+                                                 
+                                                 
+
+                                                 2 
+
+                                                 2.1 
+                                                       
+
+       IT                                        
+Gartner  2016  AIOpsArtificial Intelligence for  
+IT Operations                                    
+AIOps                                            
+DevOps                                           
+                                                 
+ AT&TMicrosoft
+Facebook                                                1 
+                                                 
+                                                 
+                                                 
+                                                  2 
+                                                 
+ AIOps                                           
+                                                 
+                                                 
+                                                 2.2 
+
+                                                       
+
+     FTP                  
+     FTP
+     FTP                                         
+     FTP
+     FTP                                                            
+   Socket                                                           
+                                                            
+                   Redis                             MySQL
+                                                 
+                 
+                                                 
+                 
+                 
+
+
+
+
+
+                                                            
+                                                            
+
+                           1 
+
+78 2022/07/DTPT
+                                 
+
+                      Operation & Maintenance
+
+                            PrefixSpan 
+2.2.1                
+                     
+                     
+                     
+                     
+                     
+                     
+                     2.2.2 
+ 2 
+
+                                     
+                     
+                                 
+                      
+                                 
+                                 
+
+   
+ 
+
+                                 
+                     
+
+                      
+
+                             
+
+                                 
+                      
+                     
+ 
+
+    2 
+
+                     4
+-                    2 
+                      ID 
+
+                           b                  
+                     
+       3 
+ 2                         c b
+                     
+                     
+                     
+2.2.2.1              
+
+                           d c
+      a              
+                     
+
+                           e
+                     
+                     2.2.2.2 
+
+                               /2022/07 79
+                  
+
+Operation & Maintenance 
+
+                   
+                   
+                                         
+                                         
+                                         
+                               
+                                                         
+                                                       
+                                                    
+                                                     
+                                                     
+
+                     
+
+                                                                 
+                                                         
+                                                                 
+                             
+                           
+
+                                                              
+                                                           
+
+                       
+
+                           
+
+                        3 
+
+                                                           
+                                                           
+
+                                    
+                                    
+
+   n...                      
+                             
+
+                      4 
+
+                                                 
+                             
+                             
+                             
+ 2                           2.2.2.3 
+
+                                    5 
+                             
+                              1
+                              1  2 
+
+80 2022/07/DTPT
+                                                                          
+
+                                                               Operation & Maintenance
+
+                                                              
+                                                              3.1 
+ 2            ...
+                                                                     6 
+ 1            ...                                             
+                                                              ESB 
+                                                         ...  
+                                                              3.2 
+
+                   5                                                
+                                                              
+ 2                                                            
+                                                               7
+ 2 
+                                                                    
+3                                                             
+
+                                                                    
+                                                              
+                                                              
+                                                              
+
+                                                                    
+                                                               99% 
+                                                              
+                                                              
+                                                              
+
+           1   2    3   ...
+                                  n
+
+                        AI 
+
+    ESB                                                                           
+                                                                  A
+               ESB
+                                                                                           
+                                                                               
+                                                                 ...
+IPRAN  A           IPRAN  B         IPRAN  C
+  EMS                EMS              EMS                        /2022/07 81
+
+              DCN                    A
+                                 
+
+IPRAN  A IPRAN  B IPRAN  A IPRAN  B                           B
+
+     1     1   2              2
+
+                        6 
+                  
+
+Operation & Maintenance 
+
+                          
+
+                          
+                          
+
+                          
+                          Tunnel 
+
+                    
+
+                     7 
+
+4                         4  .  5G 
+                                 J. 20185131-136142.
+       
+                          5  . 
+                                  J. 2018532-35.
+
+                          6  . J. 
+                                  2021177-8488.
+
+                          7  . 
+                                  J. 2018S2287-291.
+
+                          8  . 
+ 99%  95%                         J. 2018S2535-538563.
+
+                          9  . 
+OPEX                              J. 2018102875-2880.
+
+                          10    .             J.       
+                                  201925252-56.
+
+                          11  . 
+1  . J. 201914                    J. 2018121-6.
+        114-115.
+                          12  . AI  5GC SA 
+2  . J.                           J. 20201047-50.
+        2019729-33.
+                          13  . J. 
+3  . J.                           20181127-128133.
+        2019196-97.
+                          14  . 
+                                  J. 2017S2117-122.
+
+                          15  .  LSTM 
+                                  J. 20184772-784.
+
+                             
+                               AI 
+                              
+                              
+
+82 2022/07/DTPT
+

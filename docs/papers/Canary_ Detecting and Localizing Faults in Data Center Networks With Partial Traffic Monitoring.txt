@@ -1,0 +1,1041 @@
+262                                                                      IEEE TRANSACTIONS ON NETWORKING, VOL. 34, 2026
+
+     Canary: Detecting and Localizing Faults in Data
+     Center Networks With Partial Traffic Monitoring
+
+     Wei Chen , Ye Tian , Member, IEEE, Zhaohui Wang , Cenman Wang ,
+                       and Xinming Zhang , Senior Member, IEEE
+
+   Abstract--Silent packet drops and packet corruptions, which           several congestion control algorithms have been developed in
+are caused by faulty network elements and hurt performances of           recent years [3], [4], [5]. Nevertheless, many packet losses are
+cloud applications, are common in data centers but hard to detect        caused by faulty network elements. For example, gray failures
+and localize. Existing solutions based on active probes introduce        [6] such as software bugs or malfunctional hardware cause
+additional probe traffic and are constrained by probe rate,              switches to drop packet probabilistically without reporting
+while solutions based on passive traffic monitoring measure the          (i.e., silent packet drops) [1], and link-related issues such
+entire network traffic, and are generally unable to pinpoint the         as connector contamination, damaged or bent fiber, decaying
+locations where packet losses happen. In this paper, we present          transmitters, and bad transceivers cause packet corruptions [7].
+Canary, a system for detecting and localizing network faults             Silent packet drops and packet corruptions are common in
+with partial traffic monitoring. Canary employs a lightweight            data centers but time-consuming to localize, as the upstream
+and adaptive mechanism to detect packet losses by monitoring a           switch usually cannot detect the loss, while the downstream
+small set of large-sized network flows, and it ensures that on each      switch can not recover any information from lost or cor-
+network path, a sufficient number of packets are monitored by            rupted packets. For example, Microsoft reports that 12.67%
+upstream and downstream switches. In addition, Canary encodes            links with loss rates above 0.001 are caused by corruptions
+information of the path that a packet travels along within its           [7]; and according to Alibaba, 18% network performance
+header, and by leveraging path information of the lost packets,          anomalies within their data centers are caused by silent
+Canary is capable to localize network faults with high accuracy.         packet drops and packet corruptions, which constitute 50%
+We theoretically prove the effectiveness of our proposed method,         of the network faults that take over 180 minutes to localize
+and prototype Canary with P4 on commodity hardware pro-                  [8].
+grammable switches. Results from extensive experiments driven
+by real-world traffic show that Canary is lightweight regarding             One approach for detecting and localizing network faults
+measurement overhead, robust under traffic dynamics, and is              are based on active probe [9], [10], [11], [12], [13], [14],
+accurate in detecting and localizing faulty network links. In            [15]. In such a system, a number of end-hosts are selected
+particular, comparing with the state-of-the-art solutions, Canary        for sending and receiving probe packets. To ensure that a
+reduces the memory overhead by over 97% under 10-2 link                  probe packet travels along a pre-planned path, IP-in-IP source
+loss rate, and increases the F1-score in localizing the faulty links     routing is adopted [12], [14]. Based on the probe results,
+by over 20% on a k = 8 fat-tree data center network.                     an inference algorithm is generally employed to localize the
+                                                                         network faults [9], [12], [13], [14], [16]. One drawback of the
+   Index Terms--Loss detection, fault localization, partial traffic      active probe based approaches is the additional traffic imposed
+monitoring, data center network, programmable switch.                    on the network, and to reduce this overhead, end-hosts are
+                                                                         only allowed to send probes at a low rate. For instance, in
+                          I. INTRODUCTION                                NetBouncer [14], an end-host is configured to send only 100
+                                                                         packets per 5 minutes. Clearly, with fewer probe packets, it
+C LOUD providers have built large data centers for a                     is more difficult to detect packet losses that happen at small
+      wide range of applications including giant AI models,              probabilities.
+massive online gaming and social networking, high-volume
+e-commerce transactions, etc. However, packet losses hurt                   Another representative approach is based on passive traffic
+performances of these applications. For example, even with               monitoring [17], [18], [19]. In such a system, flow or packet-
+a 10-4 loss rate, the throughput of a RDMA flow would drop               level information is collected by switches, and packet losses
+over 75% [1], and a loss rate of 10-4 can cause a TCP CUBIC              are detected by comparing the measurement data collected
+flow to drop its throughput by 50% [2].                                  at different positions. To reduce the memory and bandwidth
+                                                                         overhead, sketch data structures such as Invertible Bloom
+   Congestions and network faults are two major sources of               filter Lookup Table (IBLT) [17] and FermatSketch [19] are
+packet losses. To avoid packet drops due to congestions,                 employed. Although by monitoring the entire network traffic,
+                                                                         all the lost packets can be detected, however, unless deployed
+   Received 3 May 2024; revised 6 January 2025; accepted 5 August 2025;  hop-by-hop, these methods are unable to pinpoint the locations
+approved by IEEE TRANSACTIONS ON NETWORKING Editor D. Bharadia.          where packet losses happen.
+Date of publication 14 August 2025; date of current version 26 December
+2025. This work was supported in part by the National Natural Science       In this paper, we present Canary, a system for detecting
+Foundation of China (NSFC) under Grant 61672486 and Grant 62072425.      and localizing network faults with partial traffic monitoring.
+(Corresponding author: Ye Tian.)
+
+   The authors are with Anhui Key Laboratory of High Performance
+Computing, School of Computer Science and Technology, University of
+Science and Technology of China, Hefei, Anhui 230026, China (e-mail:
+szcw33@mail.ustc.edu.cn; yetian@ustc.edu.cn; wang zh@mail.ustc.edu.cn;
+wangcenman@mail.ustc.edu.cn; xinming@ustc.edu.cn).
+
+   Digital Object Identifier 10.1109/TON.2025.3597359
+
+          2998-4157 © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and
+                         similar technologies. Personal use is permitted, but republication/redistribution requires IEEE permission.
+                                           See https://www.ieee.org/publications/rights/index.html for more information.
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+CHEN et al.: CANARY: DETECTING AND LOCALIZING FAULTS IN DATA CENTER NETWORKS                                                              263
+
+Comparing with the solutions based on active probe and                    Intel Tofino based hardware programmable switch [22].
+passive traffic monitoring, Canary has the following merits.              We make the prototype publicly available.1
+
+   First, Canary is effective. Unlike the traffic monitoring based     We have evaluated Canary on both simulated networks and
+solutions that are unable to localize network faults. Canary        a real-world testbed. With packet-level simulation, we show
+encodes information of the path that a packet travels along         that Canary is inexpensive regarding the memery overhead,
+within its header, therefore is capable to localize the positions   and provides flexibility in allocating memory resources. For
+where packet losses happen.                                         example, given a link loss rate of 10-2, Canary reduces the
+                                                                    in-switch memory usage by 97.7%, comparing with FermatS-
+   Second, Canary is lightweight. Unlike the active probe based     ketch [19], and its memory usage can be further reduced as
+approaches, Canary is based on passive traffic monitoring,          the loss rate increases. We also show that with the assistance
+thus does not introduce additional traffic. In addition, rather     of the heavy-hitter detection, Canary is robust against traffic
+than monitoring the entire network traffic, Canary is based         dynamics, and can reduce the controller overhead by counting
+on partial traffic monitoring, and traces only a small number       enough packets without monitoring too many network flows.
+of selected network flows, as long as a sufficient number of        The experiment on a large-scale data center network indicates
+packets are counted on each path segment for loss detecting.        that Canary is capable to infer faulty network links with few
+                                                                    false positive and false negative errors, and outperforms the
+   Third, Canary is adaptive. Canary guarantees to count            state-of-the-art algorithms. For example, on a k = 8 fat-tree
+enough packets on each path segment, and when packets               network, Canary increases the F1 score in localizing faulty net-
+monitored on a path segment are insufficient due to traffic         work links by 36.7% and 22.2%, comparing with NetBouncer
+dynamics, Canary adaptively selects more large-size network         [14] and Flock [16] respectively. Finally, evaluation on the
+flows on that path segment for traffic monitoring.                  real-world testbed shows that Canary is practical for real-world
+                                                                    deployment without impacting a switch's packet forwarding
+   Fourth, Canary is accurate. Comparing with the solutions         speed.
+that send a limited number of probe packets, Canary uses
+much more packets collected from on-going network flows,               The remainder part of this paper is organized as follows.
+thus reduces the errors in detecting packet losses caused by        Sec. II discusses the related work; We present the system
+imperfect measurement. In addition, by improving a state-of-        design in Sec. III; Sec. IV analyzes the experiment results,
+the-art inference algorithm [14], Canary can localize the faulty    and we conclude this paper in Sec. V.
+links that used to be overlooked by the original algorithm.
+                                                                                             II. RELATED WORK
+   By designing and implementing the Canary system, we
+make the following contributions in this paper.                     A. Approaches Based on Active Probe
+
+  · An effective way to encode path information in packet              Modern data centers nowadays deploy "always-on" active
+      header. We propose a novel method based on Bloom filter       probe services such as Pingmesh [10], NetNORAD [11],
+      to encode the path segment that a packet travels along in     and RD-Probe [15] in their networks. In such a service,
+      its header, and exploit characteristic of Clos-structured     active probe packets are sent from end-hosts for detecting
+      data center network to ensure that each path segment can      and localizing network faults. One critical issue of the active
+      be uniquely decoded at the controller. We prove in theory     probe based methods is the uncertainty of the paths traveled
+      that path segments are decodable.                             by probe packets, as multi-path routing (e.g., ECMP [23]) is
+                                                                    widely adopted in data centers. To overcome this problem, 007
+  · A lightweight and adaptive mechanism to detect packet           [13] employs a traceroute-like scheme to discover the paths
+      losses. We design a compact pipeline that allows              on which packet drops happen. deTector [12] and NetBouncer
+      upstream and downstream switches to count packets and         [14] leverage the fact that only one path exists from a server
+      collect path information for a number of selected network     to a top-layer switch in a Clos-structured network, and control
+      flows, and detect packet losses on each path segment          the path that probe packets travel along with source routing
+      by comparing the measurement data. In addition, we            based on IP-in-IP encapsulation.
+      incorporate a heavy-hitter detecting algorithm [20] to
+      select large-sized network flows, and make sure that a           To detect and localize network faults from the probe results,
+      sufficient number of packets are counted on each path         tomography-based techniques [24], [25], [26], [27] for ISP
+      segment under traffic dynamics.                               networks are consulted. However, as data centers require
+                                                                    continuous and near real-time diagnosis, efforts are made to
+  · An improved methodology for localizing faulty network           speed up the inference. In particular, 007 [13] ranks links
+      links. We improve the state-of-the-art algorithm in Net-      based on their likelihoods to drop packets; [9] solves a system
+      Bouncer [14] by proposing a methodology that iteratively      of equations for obtaining links' packet loss rates; deTector
+      runs the algorithm in multiple stages. Our proposed           [12] localizes faulty network links with a score-based greedy
+      method leverages the path information of the lost packets,    algorithm; NetBouncer [14] and Flock [16] model the problem
+      preserves the high accuracy of NetBouncer's algorithm in      as a minimization optimization, and apply coordinate descend
+      localizing the faulty links with substantial loss rates, and
+      overcomes the limitation of the algorithm that overlooks         1The prototype source code is available at https://github.com/HPCC724/
+      the links with low loss rates.                                Canary FaultDiag
+
+  · A prototype based on commodity hardware programmable
+      switch. We have implemented a Canary system prototype.
+      In particular, we compose the switch pipeline with the
+      P416 programming language [21], and realize it on the
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+264                                                                IEEE TRANSACTIONS ON NETWORKING, VOL. 34, 2026
+
+Fig. 1. (a) An overview of the Canary system. (b) A k = 4 fat-tree data center network, where top and bottom-layer switches are used as monitor switches.
+
+(CD) and maximum likelihood estimation (MLE) algorithms            topology like fat-tree [32] as demonstrated in Fig. 1(b). In
+respectively to infer faulty network elements.                     Canary, each packet carries a Bloom filter [33], named pathBF,
+                                                                   for encoding the IDs of the switches it traverses. We assume
+   Different from these works, Canary does not send active         that each switch in the network has a unique ID. For example,
+probes, but encodes the path segment that a packet travels         a switch can use the MAC address that is numerically largest
+along in its header, thus provides location information with-      (or smallest) among its interfaces as the unique ID.
+out introducing additional probe traffic. In addition, Canary
+improves the algorithm in NetBouncer [14] by developing a             A subset of the switches in a data center network are
+multi-stage methodology, thus is capable to localize faulty        selected to host upstream and downstream meters. A meter is
+network links with a wide rang of packet loss rates.               an in-switch data structure for monitoring traffics of network
+                                                                   flows, and in particular, the downstream meter, denoted as
+B. Approaches Based on Passive Traffic Monitoring                  DSM, counts packets of a set of selected flows that the switch
+                                                                   receives, and the upstream meter USM counts the selected
+   For decades, NetFlow [28] has been used for collecting traf-    flows' packets that are about to send out by the switch.
+fic statistics on routers, and to reduce the processing overhead,  We refer to a meter-hosting switch as a monitor switch,
+NetFlow samples packets at certain rate (e.g., 1:100). However,    and illustrate its pipeline in Fig. 2. In particular, to have a
+by sampling packets, NetFlow is unable to detect packet losses,    full coverage of all the inter-switch links, we require all the
+especially when packets are silently dropped or corrupted by       bottom-layer switches in the data center network to be monitor
+faulty network elements.                                           switches, while the other switches could also serve as monitor
+                                                                   switches. For example, in Fig. 1(b), the switches at the top and
+   One feasible solution for detecting packet losses is to         bottom layers are used as monitor switches. Note that although
+monitor the entire network traffic, and to reduce the memory       we focus on inter-switch links in this paper, however, Canary
+overhead, sketch-based methods are adopted [29], [30], [31].       can be easily extended to cover host-switch links by placing
+In particular, LossRadar [18] employs a Bloom filter to capture    meters at end-hosts.
+individual packet losses; FlowRadar [17] tracks packets of
+all the network flows with an Invertible Bloom filter Lookup          Given a network path, we refer to a monitor switch's
+Table (IBLT), and detects packet losses by comparing a pair of     upstream switch as the closest monitor switch preceding it
+upstream and downstream IBLTs; ChameleMon [19] replaces            on the path, and this switch is referred to as its upstream
+IBLT with a novel sketch data structure named FermatSketch         switch's downstream switch. A pair of upstream and down-
+for overcoming IBLT's inherent limitation.                         stream switches cover a path segment. For example, the path
+                                                                   s1  s3  s18  s7  s6 in Fig. 1(b) contains two
+   Canary differs from these works in two aspects. First, unlike   segments: on the path segment of s1  s3  s18, s1 is
+the solutions that can provide location information only when      s18's upstream switch, and s18 is s1's downstream switch;
+the sketch data structures are deployed hop-by-hop, Canary         and for the segment of s18  s7  s6, s18 and s6 are each
+is capable to provide location information even though only        other's upstream and downstream switches respectively. Note
+a subset of the switches monitor the network traffic. Second,      that path segments have directions.
+unlike the works that monitor the entire network traffic, Canary
+traces only a small number of selected network flows, therefore       Unlike previous works that aim to measure the entire
+substantially reduces the measurement overhead.                    network traffic [17], [18], [19], Canary monitors only a number
+                                                                   of selected network flows. As shown in Fig. 1(a), we employ
+                    III. THE CANARY SYSTEM                         the data plane algorithm of HashPipe [20] to select large-
+                                                                   sized network flows for switches to monitor. By leveraging
+   In this section, we present the Canary system. We first         the pathBFs carried by the flows' packets, we ensure that a
+give an overview of the system design, then we describe the        sufficient number of packets are counted on each path segment.
+components that constitute the system in details.
+                                                                      To detect packet losses, at the diagnozer server, we compare
+A. Overview                                                        a monitor switch's DSM against the USMs in all its upstream
+                                                                   switches. With the assistance of the location information
+   Fig. 1(a) presents an overview of the Canary system,
+which works on a data center network with a Clos-structured
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+CHEN et al.: CANARY: DETECTING AND LOCALIZING FAULTS IN DATA CENTER NETWORKS                                                              265
+
+Fig. 2. Pipeline within a monitor switch.
+
+encoded in the pathBFs, we localize the faulty links that have       The basic idea in decoding a path segment is simple:
+packet losses with a multi-stage inference methodology.           Suppose a network flow f is reported by an upstream monitor
+                                                                  switch s and a downstream switch s , and s also reports a
+   In summary, as shown in Fig. 1(a), the Canary system is        pathBF associated with f. If there is only one path segment
+composed of both data plane and control plane components.         from s to s on the network, then it must be the segment
+On data plane, the switches host USM and DSM meters to            traversed by f. But if there exist multiple path segments,
+count packets, and encode pathBFs to log information of           we can use the pathBF to find out which path segment f
+path segments on packets; on control plane, the diagnozer         travels along. For example, consider the network in Fig. 1(b)
+collects meters to detect packet losses and localize network      and suppose that only the bottom-layer switches are used as
+faults; in addition, the data plane HashPipe algorithm assists    monitor switches, then there are up to 4 path segments from
+the controller to select large-sized network flows for packet     an upstream bottom-layer switch s to a downstream bottom-
+counting on demand.                                               layer switch s in a different pod, and ideally, we expect that
+                                                                  only one path segment passes the Bloom filter test.
+B. Encoding and Decoding pathBF
+                                                                     However, since Bloom filter has inherent false positive
+   In this subsection, we describe the Bloom filter based         errors [39], there are chances that an erroneous path segment
+method for encoding and decoding the path segment that a          from s to s also passes the Bloom filter test, and in this case,
+packet travels along. Bloom filter [33] has a history of being    we fail to decode the pathBF. Fortunately, on a Clos-structured
+applied for packet traceback in both wide-area networks [34],     network, an erroneous path segment from s to s overlaps with
+[35], [36] and under the context of software-define networking    the ground-truth segment only at the first and last hops, but
+[37], [38]. However, unlike the previous works that have          differs in all the intermediate hops [14], [40]. From example,
+zero knowledge on network topology, Canary exploits the           in Fig. 1(b), all the four path segments from s1 to s6 have 5
+characteristic of Clos-structured data center network, thus is    hops, and they differs in the 2nd, 3rd, and 4th hops. Based on
+simpler and more effective.                                       such a characteristic of Clos-structured network, we have the
+                                                                  following result.
+   1) Encoding: In Canary, each packet carries a b-bit Bloom
+filter [33], namely pathBF, within its packet header, for            Theorem 1: Given a Clos-structured network, suppose a path
+carrying information of the path segment that it travels along.   segment from an upstream switch to a downstream switch is
+More specifically, to encode a switch's ID to pathBF, the         encoded in a pathBF and both monitor switches are at the
+switch s employs m pairwise independent hash functions            bottom layer, then the probability that we fail to decode a
+hi(·) : U  {1, · · · , b}, i = 1, · · · , m, where U is the       unique path segment from the pathBF is
+switch ID universe, to compute hi(s.ID), and sets the bit
+pkt.pathBF [hi(s.ID)] as 1, for i = 1, · · · , m.                                     1 - e-  (h-1)m   (h-2)m
+                                                                                                    b
+   Different switches process packets differently. A non-                     Pfail                                                       (1)
+monitor switch simply encodes its ID to the pathBF of any
+traversing packet. But for a monitor switch, as shown in Fig. 2,  where h is the length of the bottom-to-bottom path segment,
+after updating the DSM, the switch clears all the bits in the     m is the number of the hash functions, and b is the Bloom
+packet's pathBF, and encodes its own ID before sending the        filter size.
+packet out. For example, consider the path s1  s3  s18 
+s7  s6 in Fig. 1(b), each packet received by the top-layer           We provide the proof of Theorem 1 in Appendix A. Suppose
+monitor switch s18 has 2 IDs of s1 and s3 encoded in its          that pathBF is carried in a 32-bit field such as the VLAN tag
+pathBF, and after s18 clears the pathBF, the packet travels       within a packet header (i.e., b = 32), m = 3 hash functions
+along the second segment of the path, and has the IDs of s18      are applied, and a bottom-to-bottom path segment has h = 5
+and s7 encoded when arriving to s6.                               hops, then according to (1), the decoding failure probability
+                                                                  Pfail is as small as 2.85 × 10-5.
+   2) Decoding: As we will describe in Sec. III-C, when
+monitoring a network flow, both the upstream and downstream          Theorem 1 indicates that there exists a trivial but non-zero
+switches record the flow's ID as well as its packet count in      failure probability that a pathBF is undecodable. Fortunately,
+the meters, and the downstream switch also records the pathBF     since switch ID is static, we can enumerate all the path
+carried by the flow's packets in its DSM. When the switches       segments in an offline way in advance, and examine whether
+report the meters to the diagnozer server, the server decodes     there exist path segments with their pathBFs undecodable. If
+the path segment traversed by the flow from the pathBF.           such segments exist, we can alter the IDs of the switches
+                                                                  that cause the decoding failures (e.g., by using the second
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+266                                                                IEEE TRANSACTIONS ON NETWORKING, VOL. 34, 2026
+
+largest/smallest MAC address as the switch ID), and make Algorithm 2 UpdateUSM
+sure that each path segment has a decodable pathBF.
+
+C. Monitoring Network Flows With Meters                            clean bucket, and only use data from clean buckets to detect
+   As illustrated in Fig. 2, a monitor switch hosts both the       packet losses and localize network faults.
+
+DSM and the USM meters in its pipeline, and we place                  As we will see in Sec. III-G, the probability that a flow does
+match+action tables to monitor a small number of selected          not have a clean bucket is small, and to further increase the
+network flows with them. More specifically, for each network       chance that clean buckets can be found on a pair of upstream
+flow selected to be monitored by the DSM, it has a rule in         and downstream switches covering a path segment, we use
+the DSM table that matches packets with flow ID and pathBF,        a same set of hash functions across the network, so that the
+and updates the DSM with the matched packets. Similarly,           flows colliding in the USM will also collide in the DSM.
+each flow monitored by the USM has a rule in the USM table,
+which matches packets with flow ID and updates the USM.            D. Selecting Large-Sized Network Flows
+
+   Both USM and DSM are composed of d rows, and each                  In Canary, time is divided into epochs. After each epoch, the
+row has w buckets. A DSM bucket has the following fields:          diagnozer server collects DSMs and USMs from the monitor
+                                                                   switches, detects packet losses by comparing the DSMs against
+  · dirtyFlag: a 1-bit flag indicating usability of the data in    the upstream USMs, and localizes the faulty links with the
+      this bucket;                                                 path segments encoded in the pathBFs. Intuitively, to detect
+                                                                   packet losses on a path segment that has a low loss rate, a
+  · flowID: ID of the flow (e.g., the 5-tuple) that is recorded    large number of packets should be counted. In Canary, when
+      by this bucket;                                              the diagnozer finds that on a path segment, the switches do not
+                                                                   count enough packets, the network controller will instruct the
+  · pathBF: the b-bit Bloom filter encoding the path segment       upstream and downstream switches to monitor more network
+      that the flow travels along;                                 flows on that segment in the next epoch.
+
+  · count: number of the flow's packets received by the               Since network flows in data center networks have their sizes
+      DSM-hosting switch.                                          highly skewed [41], to reduce the measurement overhead, it is
+                                                                   in our favor to monitor large-sized network flows. To this end,
+   A USM bucket has three fields of dirtyFlag, flowID, and         we employ HashPipe [20], a data plane algorithm for detecting
+count that are of the same meanings as in DSM.                     heavy hitters, within the pipeline. HashPipe is composed of
+                                                                   multiple stages of hash tables that are sequentially passed by
+Algorithm 1 UpdateDSM                                              packets. When traversing the stages, each packet seeks to have
+                                                                   the ID and packet count of its flow recorded in some hash table
+   For counting a packet pkt in DSM or USM, a monitor              entry, and evicts a lighter flow that has a smaller packet count
+switch applies d hash functions, i.e., gi(·) : F  {1, · · · , w},  if necessary. As a consequence, using a limited memory size,
+i = 1, · · · , d, where F is the flow ID universe, to compute      HashPipe maintains only the network flows with the largest
+the positions gi(pkt.f lowID), and updates the corresponding       packet counts (i.e., heavy hitters). Moreover, after passing the
+buckets. More specifically, when a monitor switch receives a       stages, a packet can carry a state in its metadata indicating
+packet that matches a rule in the DSM table, the UpdateDSM         whether its flow is a heavy hitter, as well as the flow's packet
+action is executed as in Algorithm 1, and when it encounters a     count retained by the HashPipe.
+packet that matches a rule in the USM table, the UpdateUSM
+action is executed as in Algorithm 2.                                 As shown in Fig. 2, in a monitor switch's pipeline, we
+                                                                   place a HashPipe after the DSM stage to select large-sized
+   From Algorithm 1 and Algorithm 2, we can see that a             network flows. However, for a network flow that is already
+DSM/USM bucket has its dirtyFlag set as `1' when two or            monitored by the DSM, we mark its packets in metadata, so
+more flows collide at this bucket. In addition, a DSM bucket       that the packets will not be counted by the HashPipe. Fig. 3
+could also have its dirtyFlag set as `1' if the flow changes its   demonstrates the steps for selecting network flows on a path
+path segment. We refer to a bucket with dirtyF lag = 0 as a
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+CHEN et al.: CANARY: DETECTING AND LOCALIZING FAULTS IN DATA CENTER NETWORKS                                                              267
+
+                                                                 Algorithm 3 Algorithm for Obtaining MM
+
+Fig. 3. Procedure to select large-sized network flows.
+
+segment. When the diagnozer finds that the packets being
+counted on a path segment are fewer than a threshold , or
+the flows being monitored on the segment are fewer than a
+threshold , it instructs the controller to select  additional
+large-sized network flows on that path segment (Step 1).
+
+   We use a match+action table named HH table after the
+HashPipe stage for selecting large-sized network flows. More
+specifically, to select flows on a specific path segment, the
+controller first inserts a rule in the HH table, which matches
+a packet that 1) carries a pathBF encoding the path segment;
+2) has not been monitored by the DSM; and 3) belongs to
+a heavy-hitter flow with its packet count in the HashPipe
+exceeding a threshold  (Step 2). When such a packet pkt
+is matched, it is reported to the controller (Step 3).
+
+   On receiving pkt, the controller installs a rule matching
+pkt.f lowID and pkt.pathBF to the DSM table at the down-
+stream switch of the path segment, and inserts a rule matching
+pkt.f lowID to the USM table at the segment's upstream
+switch (Step 4). The controller removes the rule in the HH
+table after  network flows have been selected (Step 5).
+
+E. Detecting Packet Losses                                       Fig. 4. An example for detecting packet losses. Each DSM/USM bucket is
+                                                                 presented as a 3-tuple of (flowID, dirtyFlag, count), and each MM entry is
+   After each epoch, the diagnozer server collects USMs and      presented as a 4-tuple of (flowID, pathBF, sent, lost).
+DSMs from the monitor switches, and detects packet losses by
+comparing the measurement data in the meters. We divide the      flowID and pathBF in its clean bucket to the table entry, and
+problem of detecting and localizing packet losses in the entire  set sent as the bucket's count value. Then for this DSM, we
+network into disjoint sub-problems, where each sub-problem       find all its upstream USMs. In each USM, we look up the
+covers a part of the network without overlapping with the other  clean buckets of each flow recorded in the MM, and update
+sub-problems, and all the sub-problems constitute the entire     the lost and sent fields. Finally, we remove the entries in the
+network. For example, for the fat-tree network as in Fig. 1(b),  MM that do not have valid lost values, as none of these flows
+each pod as well as the links between the pod's upper-layer      has a clean USM bucket. Algorithm 3 presents the algorithm.
+switches and all the top-layer switches form a sub-problem,
+and the network consists of 4 sub-problems.                         As an example, Fig. 4 presents a sub-problem of the fat-tree
+                                                                 network in Fig. 1(b). In Fig. 4, the DSM at s6 is compared
+   Within each sub-problem, the diagnozer server compares        against the USMs at s17, s18, s19, and s20. We first find that
+each DSM against its upstream USMs, and records the result       the flows f1, f2, f3, f4, and f5 can be retrieved from the DSM
+in a hash table named minus meter, denoted as MM. Each MM        at s6, as each flow has at least one clean bucket. We then query
+table entry has the flowing fields.                              the flows in the USMs at s17, s18, s19, and s20, and find that
+                                                                 for the flows f1, f2, f3, and f4, we can find at least one clean
+  · flowID: ID of the flow being monitored;                      bucket, and calculate their lost packets, but for f5, we can
+  · pathBF: Bloom filter encoding the path segment that the      not obtain its lost packets due to hash collisions, therefore
+                                                                 remove it from the MM. As a result, we find two flows, f1
+      flow travels along;                                        and f4 ending at s6 that have packet losses, in addition, f1
+  · sent: number of the flow's packets being sent out along      traverses the path segment s17  s7  s6 and f4 travels
+                                                                 along the segment s20  s8  s6. Note that since we only
+      the path segment during the epoch;                         use measurement data from clean buckets, the loss detection
+  · lost: number of the flow's packets lost on the path          is error-free.
+
+      segment during the epoch.
+
+   In each DSM, we first find all the flows that have at least
+one clean bucket. For such a flow, we hash its ID with a hash
+function H(·) to a table entry in the MM, write the flow's
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+268                                                                 IEEE TRANSACTIONS ON NETWORKING, VOL. 34, 2026
+
+F. Localizing Faulty Network Links
+
+   For each path segment p that appears in an MM, we compute
+its success probability yp as
+
+     yp =            pFp (f.sent - f.lost)  (2)
+                           pFp f.sent
+
+where Fp is the set of the flows on the segment p in the MM.        Fig. 5. An example demonstrating the multi-stage fault localization.
+For example, in Fig. 4, the segment s17  s7  s6 has a
+success probability of 0.95, and the segment s20  s8  s6            Our proposed method works as the following.
+has a success probability of 0.90. To filter out noises, in
+practice, MMs from n consecutive epochs are aggregated, and         · Step 1: Divide the path segments with non-zero loss
+we only compute success probabilities for the path segments
+that have packet losses in no less than n out of the n              rates in groups, where each group covers a range of
+epochs.
+                                                                    loss rates. For example, suppose we have detected a
+   Given success probabilities of the path segments, our objec-
+tive is to infer each link's success probability, which is defined
+as the ratio between the packets successfully transported
+through the link and the packets transmitted on the link.
+
+   Our initial approach is to apply the method proposed in [14],
+which localizes faulty network links by solving the following
+optimization problem.
+
+                         2                                          number of path segments with their loss rates between
+
+     minimize yp - xi +  xi (1 - xi)                                   0.001 and 1, we can divide them into 5 groups with the
+                                                                       ranges as [0.2, 1], [0.1, 0.2], [0.05, 0.1], [0.01, 0.05], and
+     p               ip             i                                  [0.001, 0.01] respectively.
+                                                                    · Step 2: Sort the groups in a descending order according
+     s. t. 0  xi  1                         (3)
+
+where xi is link i's success probability, and  is a constant        to loss rate, and for each group in the order:
+with a default value of 1.
+                                                                    · Step 2-1: Temporarily map the success probability
+   The first term of the objective function in (3) is the square
+error, which aims to contribute the observed path segment           of a path segment in the current group to a value in
+success probabilities to the success probabilities of the links     [0, 0.8]. For example, one may use a logarithm-based
+on the segments, and the second term is a regularization
+term, which seeks to push xi to the values either close to          function                    ln(yj -a)
+0 or 1 for avoiding false positive errors caused by imperfect                                    ln(b-a)
+measurement.                                                                     jy = eln(0.8)×                                                (4)
+
+   A coordinate descent algorithm, which we refer to as the CD         to map a segment's success probability yj in the
+algorithm, is proposed in [14] to solve the problem. Combined          current group's range [a, b] to yj in [0, 0.8]. Here we
+with active probes, the algorithm produces relatively fewer            choose 0.8 as the right edge of the range for mapping
+false positive and false negative errors comparing with the
+other active probe based methods [9], [12], [26].                      a very high success rate to a moderate-high value, as
+
+   However, the CD algorithm aims to detect faulty links with          previously explained.
+substantial loss rates. For example, in [14], the algorithm is      · Step 2-2: Set yj of the path segments in the groups
+applied to detect faulty links with loss rates between 0.02 and
+1.0. When a link has a very low loss rate, e.g., 10-3, the CD          of higher loss rates as 0.
+algorithm tends to ignore it. This is because when solving the      · Step 2-3: Set yj of the path segments in the groups
+optimization problem in (3), the second term of the objective
+function forces the algorithm to consider the links with low           of lower loss rates as 1.
+loss rates as false positives and assigns a success probability     · Step 2-4: Apply the CD algorithm (w.  = 1) to
+of 1 to them.
+                                                                       solve the problem
+   Motivated by the above observation, in this paper, we
+propose to run the CD algorithm iteratively in multiple stages,                         2
+and in each stage, we focus only on the path segments with
+their loss rates falling in a specific range. Moreover, since the   minimize yp - xi +  xi (1 - xi)
+CD algorithm tends to ignore very low loss rates, when a path
+segment has a very high success rate such as 0.999, we map                    p     ip                     i
+it to a moderate-high value (e.g., 0.8), and use the mapped
+success rates of the path segments to drive the CD algorithm.       s. t. 0  xi  1                                                             (5)
+
+                                                                               label each link detected by the algorithm that has
+                                                                               a success probability lower than 1 as "bad", and
+                                                                               remove it from the sub-problem.
+
+                                                                      · Step 3: Repeat Step 2-1 to Step 2-4 for the next path
+                                                                          segment group in the order.
+
+                                                                       Fig. 5 demonstrates an example, which is taken from a
+                                                                    sub-problem in our experiment in Sec. IV-D. Fig. 5(a) shows
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+CHEN et al.: CANARY: DETECTING AND LOCALIZING FAULTS IN DATA CENTER NETWORKS                                                              269
+
+the ground truth, in which the link s78  s40 has a loss            clean bucket due to hash collisions, and have the following
+rate of 0.3 and the link s40  s8 has a loss rate of 0.002.
+Fig. 5(b) presents the seven path segments that are detected       result.
+to have packet losses. In particular, by executing Step 1,            Theorem 2: For a large-sized network flow f, the probability
+the path segments of s78  s40  s5, s78  s40  s6,
+s78  s40  s7, and s78  s40  s8, which have loss                    that it has at least one clean bucket in a USM/DSM meter is
+rates around 0.3, are placed in a group with the range of
+[0.2, 1]; and the other three segments of s77  s40  s8,                                           e-  F -1  d
+s79  s40  s8, and s80  s40  s8, which have loss                                                         w
+rates around 0.002, are placed in the range [0.001, 0.01]. As                 Pclean = 1 -  1  -                                          (6)
+shown in Fig. 5(c), in the first iteration of Step 2, we assign
+the success probabilities of the segments s77  s40  s8,            where d and w are the rows and columns of the buckets in the
+s79  s40  s8, and s80  s40  s8 as 1, and after applying            meter, and F is the total number of the large-sized network
+the CD algorithm, we successfully localize the faulty link         flows monitored by the meter.
+s78  s40, which explains the packet losses on the segments
+of s78  s40  s5, s78  s40  s6, s78  s40  s7, and                      We present the detailed proof of Theorem 2 in Appendix
+s78  s40  s8, and remove the link from the sub-problem.            B. Suppose a USM/DSM meter contains d = 3 rows, and
+In the second iteration, we use the logarithm-based function       each row has w = 210 buckets, according to the theorem, for
+to map the success probability of yj = 0.998 to yj = 0.795         monitoring 50 large-sized network flows, Pclean is as high
+for the three lossy segments, apply the CD algorithm on the        as 0.999. Even monitoring 400 flows, Pclean is 0.966. The
+remaining sub-problem as shown in Fig. 5(d), and localized         analysis shows that with moderate-sized meters, Canary is
+the faulty link s40  s8 for explaining the packet losses on        capable to provide usable measurement data.
+the path segments of s77  s40  s8, s79  s40  s8, and
+s80  s40  s8.                                                                                 IV. EVALUATION
+
+   On the other hand, if we directly apply the CD algorithm,          In this section, we evaluate Canary and compare it with the
+only the faulty link s78 -s40 is inferred, while the link s40 -s8  state-of-the-art solutions. We carry out the experiments with
+is overlooked because of its low loss rate.                        packet-level simulation and on a real-world testbed.
+
+G. Discussion                                                      A. Experiment Setup
+
+   1) Coordinating Packet Counting: To synchronize epochs             We simulate two network topologies. The first topology
+across the switches network wide, we consider OmniMon's            is composed of two switches directly connected with a link
+synchronization mechanism [42], which does not require a           of 100 Gbit/s, and we also simulate large-scale data center
+global clock, ensures strong consistency in most time, and         networks with fat-tree topology. The simulations are conducted
+is downgraded to weak consistency for only a small bounded         on a PC equipped with Intel Core i5-12600K running Ubuntu
+time period.                                                       16.04 LTS. The real-world testbed is composed of two hard-
+                                                                   ware programmable switches based on the Intel Tofino chip
+   To make sure that a pair of upstream and downstream             [22]. The switches are inter-connected with a 40GbE link, and
+switches covering a path segment count a same set of packets       each switch is connected by a server equipped with an Intel
+during an epoch. In the Canary system, epochs are labeled as       XL710 40GbE dual-port Ethernet adapter.
+odd and even alternatively, and each monitor switch maintains
+two instances of the USM and DSM meters corresponding                 If not otherwise specified, for each simulated monitor
+to the odd and even epochs. During an odd/even epoch, the          switch, we configure the DSM, USM, and HashPipe as the
+monitor switches employ the odd/even meter instances to            following. The DSM and USM have d = 3 rows, and each
+count packets, and after the epoch, they upload the instances to   row has w = 210 buckets. Each DSM bucket has a size of 169
+the diagnozer server, and switch to the even/odd instances for     bits, which include a 1-bit dirtyFlag, a 104-bit flowID, a 32-bit
+the next epoch. Moreover, the upstream switch marks each           pathBF, and a 32-bit count. A USM bucket does not have the
+packet it has counted, which indicates whether its current         pathBF field, and has a size of 137 bits. Unlike the original
+epoch is odd or even. On receiving a marked packet, the            6-stage HashPipe in [20], we employ a lightweight HashPipe
+downstream switch counts the packet using the corresponding        containing only 3 stages. Each HashPipe stage is a hash table
+DSM instance. We use the DSCP field for packet marking.            with 32 entries, and each table entry contains a 104-bit flow
+                                                                   ID and a 32-bit counter.
+   2) Probability of Having Clean Bucket: As described in
+Sec. III-C, a USM or DSM bucket for monitoring a large-            B. Loss Detection Overhead
+sized network flow is clean only when 1) there are no other
+flows hashed to this bucket (i.e., no hash collision), and 2) the     We first examine the overhead for detecting packet losses
+flow does not change its path during the epoch. Since in multi-    incurred by Canary, and compare with the existing solutions of
+path routing, a switch chooses the next hop for a packet by        FlowRadar [17], LossRadar [18], and ChameleMon [19]. The
+hashing the packet's static flow ID, a flow rarely changes         overhead incudes the memory consumption and the decoding
+its path during an epoch. In the following, we analyze the         time of the measurement data structures. We realize these
+probability that a large-sized network flow does not have a        solutions on the 2-switch simulated network. When evaluating
+                                                                   Canary, we place a USM at one switch, and place a DSM and
+                                                                   a HashPipe at the other switch. For FlowRadar, we place a
+                                                                   counting table and a flow filter at each switch. A bucket in the
+                                                                   counting table has a 104-bit FlowXOR field, a 8-bit FlowCount
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+270                                                                                                     IEEE TRANSACTIONS ON NETWORKING, VOL. 34, 2026
+
+                                         TABLE I                                                                   TABLE II
+       CONFIGURATIONS OF SOLUTIONS IN OVERHEAD COMPARISON                 NETWORK-WIDE MEMORY OVERHEADS ON k = 8 FAT-TREE NETWORK
+
+                                                                                              UNDER VARIOUS LINK LOSS RATES (KB)
+
+Fig. 6. (a) Memory overhead and (b) decoding time of different solutions  even though it traces only a small number of network flows.
+under various link loss rates.                                            For example, at a link loss rate of 10-2, Canary consumes
+                                                                          2.3% of the in-switch memory consumed by FermatSketch.
+field, and a 32-bit PacketCount field. The number of the hash
+                                                                             Moreover, for localizing packet losses in a data center
+functions used for the counting table is 3. The flow filter of            network, FlowRadar, LossRadar, or FermatSketch needs to
+                                                                          be deployed hop-by-hop on all the switches, while Canary
+FlowRadar  is  a  standard  Bloom  filter,  which  incurs  1  of  the     does not require each switch to host the meters. In Table II,
+                                                           9              we present the network-wide memory usages of the various
+                                                                          solutions on a k = 8 fat-tree network that has a link loss
+counting table's memory usage. For LossRadar, we place a                  rate varying from 10-3 to 10-1. For Canary, we consider
+                                                                          two deployment strategies: 1) only the bottom-layer switches
+meter composed of 3 bucket rows at each switch, and a meter               host USMs and DSMs; and 2) both the top and bottom-layer
+                                                                          switches host the meters. From the table, we can see that
+bucket has a 32-bit count and a 120-bit xorSum fields. For                Canary can further reduce the memory overhead network wide,
+                                                                          as it does not need to be deployed hop-by-hop as in the other
+ChameleMon, each switch hosts a FermatSketch, which uses                  solutions under the comparison.
+
+3 hash functions to map network flows to 3 bucket rows, and                  Fig. 6(b) presents the time required to decode the data
+                                                                          structures of FlowRadar, LossRadar, FermatSketch, and the
+a FermatSketch bucket contains a 32-bit count and a 104-bit               meters of the Canary system. We can see that for FlowRadar
+                                                                          and FermatSketch that seek to decode all the network flows
+ID fields. Table I summarizes configurations of the solutions             and LossRadar that aims to recover all the lost packets, their
+                                                                          decoding times increase with the link loss rate. On the other
+under the comparison.                                                     hand, Canary only needs to retrieve the records of a small
+                                                                          number of selected network flows, therefore its decoding time
+   In our experiment, we vary the loss rate of the inter-                 is reduced as the link loss rate increases.
+switch link from 10-4 to 10-1, and send 10k network flows
+                                                                             Our observation from Fig. 6 suggests that the overhead
+through the link for 100 ms. For each solution under the                  incurred by Canary decreases as the loss rate increases. We
+                                                                          believe that this is a desired property, as a network adminis-
+comparison, we vary number of the buckets in a row of the                 trator can allocate resources according to his objective, i.e.,
+                                                                          the highest loss rate the network can tolerate, rather than
+measurement data structures, and refer its memory overhead                allocating resources blindly when they are related to the traffic
+                                                                          characteristics that change dynamically.
+as the minimum memory usage that achieves 99% success
+                                                                          C. Counting Enough Packets
+rate. The experiment results are presented in Fig. 6(a). From
+                                                                             As described in Sec. III-D, in Canary, when the diagnozer
+the figure we can make the following observations. First,                 server finds that the USM and DSM covering a path segment
+                                                                          do not count enough packets, the controller will add new
+FlowRadar has a constant memory overhead, as it aims to                   network flows selected by the HashPipe. In the following,
+                                                                          we examine the effectiveness of this mechanism under the
+monitor all the network flows regardless of the loss rate.                dynamics of real-world traffic.
+
+LossRadar seeks to record all the lost packets, so its memory                We employ the 2-switch simulated network, and drive the
+                                                                          experiment with the packet traces captured on ISP backbone
+overhead is proportional to the number of the lost packets, and           links from MAWI [43]. The trace contains 8, 892, 143 distinct
+under the loss rate of 10-1, LossRadar has the highest memory             flows. We set the thresholds as  = 1, 000 and  = 20, and
+                                                                          each time up to  = 20 flows selected by the HashPipe are
+overhead. FermatSketch's memory overhead is proportional to               added to the USM and DSM tables. When selecting large-
+                                                                          sized network flows, we vary the threshold value of  as 8,
+the network flows suffering packet losses, which increases with           16, and 32. Note that a larger  suggests that the system has a
+the loss rate. Note that when the link's loss rate is 10-1, nearly        higher standard in selecting large-sized network flows. We also
+
+all the flows have packet losses, and FermatSketch's overhead
+
+is close to FlowRadar, as it actually monitors all the network
+
+flows.
+
+Unlike these solutions, Canary's memory overhead
+
+decreases with the increase of the packet loss rate. This is
+
+because Canary only monitors a subset of network flows as
+
+long as packet losses can be detected. When the loss rate is
+
+low, more network flows should be traced by the meters, but
+
+when the loss rate is high, the system can detect packet losses
+
+        Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+CHEN et al.: CANARY: DETECTING AND LOCALIZING FAULTS IN DATA CENTER NETWORKS                                                              271
+
+Fig. 7. Distributions of (a) numbers of packets counted, (b) numbers of active flows monitored, and (c) numbers of rules installed per epoch under various
+flow selection schemes.
+
+consider the case that random flows are selected by setting       between 0.001 and 1.0. More specifically, we select 11 links
+as 0.                                                             to have loss rates in the range of [0.2, 1.0], 13 links are selected
+                                                                  with loss rates in [0.1, 0.2], 9 links in [0.05, 0.1], 9 links in
+   Our experiment lasts 300 epochs, and an epoch has a dura-      [0.01, 0.05], and 10 links in [0.001, 0.01].
+tion of 100 ms. After each epoch, we evaluate the following
+metrics:                                                             For comparison, we evaluate the following approaches:
+                                                                  1) NetBouncer [14], which applies the CD algorithm only once
+  · Number of packets counted by the switches during the          for localizing all the faulty links; 2) Flock [16], which employs
+      epoch.                                                      a maximum likelihood estimation (MLE) algorithm to infer
+                                                                  the faulty links; 3) We also evaluate a multi-stage version of
+  · Number of active flows monitored by the switches during       NetBouncer (referred to as NetBouncer-stage), which runs the
+      the epoch.                                                  CD algorithm in 5 rounds, and in each round, the faulty links
+                                                                  detected in the previous round are removed from the network.
+  · Number of match+action rules newly installed to the
+      switches in this epoch.                                        To localize faulty links with Canary, we need the USMs and
+                                                                  DSMs to count sufficient numbers of packets. For this purpose,
+   Fig. 7 presents distributions of the metrics under different   we experiment with various values of the  threshold, i.e., the
+flow selection schemes. From Fig. 7(a), we can see that in most   minimum number of packets supposed to be counted on a path
+epochs, all the schemes manage to count over  = 1, 000            segment per epoch, as 200, 500, and 1, 000. For NetBouncer
+packets, however, in about 10% epochs, less than 1, 000           and NetBouncer-stage, we actively probe each path with 100
+packets are counted, due to the traffic dynamics when flows       packets as in [14]. For Flock, we feed the inference algorithm
+stop sending packets or leave the network. Fig. 7(b) shows that   with the path loss rates detected by NetBouncer with 100 probe
+when flows are selected randomly (i.e.,  = 0), the switches       packets. Table III presents the parameters of the inference
+averagely monitors as many as 52.1 active flows per epoch,        algorithms under the comparison.
+but when  = 32, only 23.5 active flows are traced. From
+Fig. 7(c), one can see that under all the schemes, in nearly         In Fig. 8, we present performances of the approaches in
+90% epochs, no match+action rules are installed, suggesting       localizing the faulty network links in terms of accuracy,
+that Canary does not require frequent interventions from the      precision, recall, and F1-score. Note that for the approaches
+controller. In addition, with the increase of the  threshold,     containing multiple stages, i.e., NetBouncer-stage and Canary,
+fewer rules are installed to the switches.                        we present the performances after each stage in the figures.
+                                                                  From Fig. 8 we can make the following observations. First,
+   Our observation suggests that with our proposed flow           the single-stage algorithms have relatively poor performances.
+selection mechanism, Canary can effectively handle the traffic    For example, NetBouncer and Flock localize only 15 and 18
+dynamics and ensure that a sufficient number of packets are       out of the 26 faulty links.2 The reason is that comparing
+counted. In addition, by selecting large-sized network flows,     with the links of high loss rates, the links with low loss
+we reduce the controller overhead by installing fewer rules,      rates contribute little to the objective function as in (3), or
+and lower the chances of hash collisions in the USM/DSM by        the likelihood function LL(H) in Flock, thus are likely to be
+monitoring fewer network flows.                                   overlooked by the inference algorithms. Second, by applying
+                                                                  the CD algorithm in multiple stages, NetBouncer-stage has its
+D. Faulty Link Inference                                          performance improved after each stage, and eventually detects
+                                                                  22 of the 26 faulty links, at a cost of one false positive error
+   In this experiment, we examine how Canary localizes faulty     (i.e., one healthy link is mistakenly categorized as faulty). We
+links in a large-scale data center network with a k = 8 fat-      explain such an improvement with the fact that by removing
+tree topology. In the simulated network, the switches at the top  the inferred faulty links from the sub-problems after each
+and bottom layers serve as the monitor switches, and the entire
+network is divided into 8 sub-problems, with each sub-problem        2NetBouncer does not consider the link direction, so we configure 26 links
+containing 24 switches and 64 inter-switch links. We apply our    to drop packets in both directions.
+proposed inference method with multithreading, where each
+thread solves one sub-problem.
+
+   To introduce faults, we randomly select 10% links from
+the network, and configure them to drop packets with rates
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+272                                                                IEEE TRANSACTIONS ON NETWORKING, VOL. 34, 2026
+
+                             TABLE III
+     CONFIGURATIONS OF INFERENCE ALGORITHMS
+
+Fig. 8. (a) Accuracy, (b) precision, (c) recall, and (d) F1-score of different fault inference methods over a k = 8 fat-tree network with 10% faulty links.
+
+stage, the CD algorithm is able to detect more faulty links        Fig. 9. Tradeoff between Canary's fault localization accuracy and inference
+with relatively lower loss rates, which used to be concealed       algorithm's running time when dividing lossy path segments into various
+by the links with higher loss rates detected in the previous       numbers of groups.
+rounds.
+
+   Our last observation is that Canary can localize the
+faulty links more accurately than NetBouncer, Flock, and
+NetBouncer-stage, and in particular, with  = 1, 000, after the
+5 stages, Canary has localized all the 52 faulty links without
+false positive and false negative errors, therefore increases the
+F1 score by 36.7% and 22.2%, comparing with NetBouncer
+and Flock respectively. Canary's better performance can be
+explained in two folds. First, unlike NetBouncer and Flock
+that suffer from imperfect measurement, in Canary, more
+packets are used to detect pack losses, therefore a path segment
+that has a low loss rate can be detected, and its success
+probability can be measured more accurately. Second, by
+uniformly mapping all the path segments' success probabilities
+to the range of [0, 0.8] in each stage, the CD algorithm can
+work in its "comfort zone", and localize the faulty links with
+higher accuracies.
+
+E. Algorithm Running Time and Scalability                          Fig. 10. (a) F1 score and (b) inference algorithm's running time of Net-
+                                                                   Bouncer, Flock, and two Canary systems that run in 3 and 5 stages, on fat-tree
+   In Canary, we divide all the path segments with non-zero        networks with k varying from 6 to 12.
+loss rates in groups, and iteratively apply the CD algorithm
+of NetBouncer to localize the faulty links that explain the        the path segments into more groups, the F1 score is further
+losses in each group. Intuitively, the more groups we divide,      increased, at a cost of a longer algorithm running time.
+the higher accuracy Canary can achieve. On the other hand,
+by executing in more stages, the inference will take a longer         We also examine Canary's scalability by running the system
+time. Clearly, there is a tradeoff between the number of the       on fat-tree networks of different sizes with k = 6, 8, 10,
+path segment groups and the running time of the inference          and 12, and compare with NetBouncer and Flock. As in
+algorithm.                                                         Sec. IV-D, on each network, we randomly select 10% links
+                                                                   to have packet losses, and evenly divide the links in 3 or 5
+   To explore such a tradeoff, we repeat the experiment on         groups. Fig. 10 presents the F1 scores and the algorithms'
+Canary as in Sec. IV-D, but each time we evenly divide             running times of the solutions. From the figure we can make
+the lossy path segments into 1, 2, 3, 4, or 5 groups, and          the following observations. First, all the algorithms are capable
+correspondingly, the CD algorithm is executed in 1, 2, 3, 4,       to maintain their F1 scores on large-sized networks, especially
+or 5 stages. For each experiment, we examine how accurately        when k is no smaller than 8, and Canary has the F1 scores
+the faulty links are detected in terms of the F1 score, as well    above 0.95 all the time. Second, as the network size increases,
+as the time that the inference takes. Fig. 9 presents the result,  all the algorithms have their running time significantly
+from which we can see that even with 1 group, Canary can           prolonged, however, the increase of Canary's running time
+achieve an F1 score above 0.95, thanks to the over 1, 000
+probe packets on each path segment. In addition, by dividing
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+CHEN et al.: CANARY: DETECTING AND LOCALIZING FAULTS IN DATA CENTER NETWORKS                                                              273
+
+                                                                                                                      TABLE IV
+                                                                              RESOURCE CONSUMPTION OF CANARY ON P4-PROGRAMMABLE SWITCH
+
+Fig. 11. (a) F1-scores in detecting top-k heavy hitters; (b) F1-scores under
+various memory budgets, achieved by original 6-stage HashPipe and Canary.
+
+is relatively slower than the ones of NetBouncer and Flock,
+as Canary divides the problem into k sub-problems, which
+are solved in parallel with multithreading. The experiment
+result suggests that with the state-of-the-art parallel computing
+techniques, Canary is scalable on large-sized networks.
+
+F. Detecting Heavy-Hitter Flows                                               Fig. 12. Packet forwarding speeds of Canary monitor switch and simple-
+                                                                              forwarding switch.
+   Although Canary is not dedicatedly designed for detecting
+heavy-hitter flows, however, since we select large-sized net-                 G. Hardware Prototype
+work flows and count their packets in meters, by combining the
+flows monitored by the DSM and the lightweight HashPipe,                         We have implemented a prototype of the Canary system, and
+Canary can also be used to detect heavy hitters. In the                       in particular, we compose the pipeline as illustrated in Fig. 2
+following, we employ the 2-switch simulated network and                       with the P416 programming language [44], and realize moni-
+the MAWI traces as in Sec. IV-C to compare Canary with                        tor switch on the Edgecore Wedge 100BF-32X Tofino-based
+the original 6-stage HashPipe [20] in detecting heavy hitters.                hardware programmable switch. Table IV presents usages of
+Note that for fairness, the original HashPipe consumes same                   various resources in the programmable switch reported by the
+memory as the downstream monitor switch. In particular, we                    P4 compiler, from which we can see that Canary does not
+configure the DSM to have 3 × 26 buckets, the lightweight                     have high demands on hardware resources.
+HashPipe is configured as in Sec. IV-A, and the original
+HashPipe contains 56 entries per stage.                                          We use the real-world testbed to evaluate packet forwarding
+                                                                              performance of the Canary system. In our experiment, we use
+   Fig. 11(a) presents the F1-scores in detecting the top-k                   two Tofino-based switches as the monitor switches, and send
+largest network flows by Canary and the original HashPipe.                    4 TCP flows from one server to the other using iPerf [45]. For
+To our surprise, Canary is more accurate in identifying the                   comparison, we also program the switches to simply forward
+heavy hitters. Further investigation reveals that in the original             packets. We vary the flow size and measure the aggregated
+HashPipe, a heavy-hitter flow may be evicted if it is inactive                throughput of the flows. Fig. 12 presents the results, from
+for some time before the end of the 30-second experiment.                     which we can see that when the flows are large enough,
+But in Canary, large-sized network flows are always counted                   the aggregated throughput is close to 40 Gbit/s, which is
+by the DSM.                                                                   indeed the line speed of the switch, and there is no difference
+                                                                              between the monitor switch and the switch that simply for-
+   We then increase the memory usages of the two solutions                    wards packets. As the operations introduced by Canary do not
+and repeat the experiment. In particular, we enlarge the origi-               impact a programmable switch's packet forwarding speed, we
+nal HashPipe by having each stage to contain up to 176 hash                   conclude that Canary is practical for deployment on production
+table entries, and proportionally enlarge the DSM by having                   networks.
+each row to contain up to 28 buckets. Fig. 11(b) presents the
+F1-scores in detecting the top-25, top-50, and top-75 largest                                            V. CONCLUSION
+flows under various memory budgets. From the figures, we can
+see that when more memory is used, the original HashPipe                         In this paper, we present Canary, a system for detecting and
+outperforms Canary, especially in the top-75 task. This is                    localizing packet losses based on partial traffic monitoring.
+because in Canary, the DSM does not monitor more than                         Canary employs in-switch meters to monitor network flows.
+ = 20 network flows as long as no less than  = 1, 000                         However, unlike the existing traffic monitoring based solutions
+packets are counted, but HashPipe aggressively traces as many                 that are location agnostic, Canary encodes information of the
+network flows as its memory allows. The experiment results                    path that a packet travels along in its header, thus can detect
+suggest that although not dedicatedly designed for heavy hitter               packet losses on each path segment. Moreover, different from
+detection, Canary achieves a decent accuracy, especially under                the solutions that measure the entire network traffic, Canary
+a limited memory resource budget.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+274                                                                        IEEE TRANSACTIONS ON NETWORKING, VOL. 34, 2026
+
+monitors only a small number of selected large-sized network           where d and w are the rows and columns of the buckets in the
+flows, as long as a sufficient number of packets are counted
+for loss detecting. By improving a state-of-the-art inference          meter, and F is the total number of the large-sized network
+algorithm and leveraging path information of the lost packets,
+Canary is able to infer the faulty network links, especially the       flows monitored by the meter.
+ones with low loss rates, with high accuracy.
+                                                                           Proof: Suppose that the flow f is mapped to an arbitrary
+   We have implemented a Canary prototype with P4 on
+Tofino-based hardware programmable switches, and evaluated             bucket in a row of the DSM or USM meter. Since there are
+Canary with both simulation-based experiments and a real-
+world testbed. The experiment results suggest that Canary              (F - 1) other large-sized network flows randomly mapped to
+is lightweight regarding measurement overhead, and provides
+flexibility for network administrators to allocate resources.          the w buckets in this row, the probability that no other flows are
+By adaptively selecting large-sized network flows, Canary
+manages to count a sufficient number of packets on each path           mapped to this bucket is  1  -  1  F -1     e-     F -1  .  Since       there
+segment under traffic dynamics. Experiment on a large scale                                            w                    w
+fat-tree data center network shows that Canary is capable to
+detect faulty network links with few false positive and false          are d rows in a meter, among the d buckets that f is mapped
+negative errors. In addition, Canary achieves a decent accuracy
+in detecting heavy-hitters, despite that it is not dedicatedly         to, the probability that at least one collision-free bucket exists
+designed for that objective. Finally, performance evaluation
+on the hardware testbed shows that Canary does not impact a            is                                              d
+switch's packet forwarding speed, thus is ready for practical
+deployment.                                                                Pclean = 1 -                1  -  e-  F -1                          (10)
+                                                                                                                   w
+
+                               APPENDIX                                                             REFERENCES
+                                PROOFS
+                                                                       [1] Y. Zhu et al., "Packet-level telemetry in large datacenter networks," in
+A. Proof of Theorem 1                                                        Proc. SIGCOMM, London, U.K., Aug. 2015, pp. 479­491.
+
+   Theorem 1: Given a Clos-structured network, suppose a path          [2] N. Cardwell, Y. Cheng, C. S. Gunn, S. H. Yeganeh, and V. Jacobson,
+segment from an upstream switch to a downstream switch is                    "BBR: Congestion-based congestion control," Queue, vol. 14, no. 5,
+encoded in a pathBF and both monitor switches are at the                     pp. 20­53, Oct. 2016.
+bottom layer, then the probability that we fail to decode a
+unique path segment from the pathBF is                                 [3] M. Alizadeh et al., "Data center TCP (DCTCP)," in Proc. ACM
+                                                                             SIGCOMM Conf., New Delhi, India, Aug. 2010, pp. 63­74.
+                       1 - e-  (h-1)m      (h-2)m
+                                     b                                 [4] Y. Zhu et al., "Congestion control for large-scale RDMA deployments,"
+              Pfail                                               (7)        in Proc. ACM Conf. Special Interest Group Data Commun., London,
+                                                                             U.K., Aug. 2015, pp. 523­536.
+where h is the length of the bottom-to-bottom path segment,
+                                                                       [5] Y. Li et al., "HPCC: High precision congestion control," in Proc. ACM
+m is the number of the hash functions, and b is the Bloom                    Special Interest Group Data Commun., Beijing, China, Aug. 2019,
+                                                                             pp. 44­58.
+filter size.
+                                                                       [6] P. Huang et al., "Gray failure: The achilles' heel of cloud-scale systems,"
+Proof: Given a b-bit Bloom filter that has (h-1) switch IDs                  in Proc. HotOS, Whistler, BC, Canada, May 2017, pp. 150­155.
+
+encoded when arriving to the last-hop monitor switch, accord-          [7] D. Zhuo, M. Ghobadi, R. Mahajan, K.-T. Fo¨rster, A. Krishnamurthy,
+                                                                             and T. Anderson, "Understanding and mitigating packet corruption in
+ing to the Bloom filter theory [39], the probability that an ID of           data center networks," in Proc. Conf. ACM Special Interest Group Data
+                                                                             Commun., Los Angeles, CA, USA, Aug. 2017, pp. 362­375.
+a switch off the path segment passes the Bloom filter test (i.e.,
+                                                                  m    [8] Y. Zhou et al., "Flow event telemetry on programmable data plane," in
+a false positive error) is approximately         1 - e-  (h-1)m              Proc. Annu. Conf. ACM Special Interest Group Data Commun. Appl.,
+                                                               b    .        Technol., Archit., Protocols Comput. Commun., New York, NY, USA,
+                                                                             Jul. 2020, pp. 76­89.
+Since an erroneous path segment differs from the ground-truth
+path segment in (h - 2) hops, therefore the probability that an        [9] H. Herodotou, B. Ding, S. Balakrishnan, G. Outhred, and P. Fitter,
+erroneous path segment can be mistakenly decoded from the                    "Scalable near real-time failure localization of data center networks,"
+pathBF is                                                                    in Proc. 20th ACM SIGKDD Int. Conf. Knowl. discovery data mining,
+                                                                             New York, NY, USA, Aug. 2014, pp. 1689­1698.
+              1 - e-  (h-1)m   m h-2       1 - e-   (h-1)m   (h-2)m
+                            b                             b            [10] C. Guo et al., "Pingmesh: A large-scale system for data center network
+Pfail                                   =                                    latency measurement and analysis," in Proc. ACM Conf. Special Interest
+                                                                             Group Data Commun., Aug. 2015, pp. 139­152.
+                                                                  (8)
+                                                                       [11] P. Lapukhov. (2016). Move Fast, Unbreak Things! Network Debugging
+B. Proof of Theorem 2                                                        at Scale. [Online]. Available: https://archive.nanog.org/sites/default/files/
+                                                                             Lapukhov Move Fast Unbreak.pdf
+Theorem 2: For a large-sized network flow f, the probability
+                                                                       [12] Y. Peng, J. Yang, C. Wu, C. Guo, C. Hu, and Z. Li, "DeTector: A
+that it has at least one clean bucket in a USM/DSM meter is                  topology-aware monitoring system for data center networks," in Proc.
+                                                                             ATC, Santa Clara, CA, USA, Jul. 2017, pp. 55­68.
+                                     e-    F -1  d
+                                             w                         [13] B. Arzani et al., "007: Democratically finding the cause of packet drops,"
+              Pclean = 1 -     1  -                               (9)        in Proc. NSDI, Renton, WA, USA, Apr. 2018, pp. 419­435.
+
+                                                                       [14] C. Tan et al., "NetBouncer: Active device and link failure localization
+                                                                             in data center networks," in Proc. NSDI, Boston, MA, USA, Feb. 2019,
+                                                                             pp. 599­614.
+
+                                                                       [15] R. Ding et al., "RD-probe: Scalable monitoring with sufficient coverage
+                                                                             in complex datacenter networks," in Proc. ACM SIGCOMM Conf.,
+                                                                             Sydney, NSW, Australia, Aug. 2024, pp. 258­273.
+
+                                                                       [16] V. Harsh, T. Meng, K. Agrawal, and P. B. Godfrey, "Flock: Accurate
+                                                                             network fault localization at scale," Proc. ACM Netw., vol. 1, pp. 1­22,
+                                                                             Jun. 2023.
+
+                                                                       [17] Y. Li, R. Miao, C. Kim, and M. Yu, "FlowRadar: A better netflow
+                                                                             for data centers," in Proc. NSDI+, Santa Clara, CA, USA, Mar. 2016,
+                                                                             pp. 311­324.
+
+                                                                       [18] Y. Li, R. Miao, C. Kim, and M. Yu, "LossRadar: Fast detection of lost
+                                                                             packets in data center networks," in Proc. CoNEXT, Irvine, CA, USA,
+                                                                             Dec. 2016, pp. 481­495.
+
+                                                                       [19] K. Yang et al., "ChameleMon: Shifting measurement attention as net-
+                                                                             work state changes," in Proc. ACM SIGCOMM Conf., New York, NY,
+                                                                             USA, Sep. 2023, pp. 881­903.
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+CHEN et al.: CANARY: DETECTING AND LOCALIZING FAULTS IN DATA CENTER NETWORKS                                                              275
+
+[20] V. Sivaraman, S. Narayana, O. Rottenstreich, S. Muthukrishnan, and                                        Wei Chen received the bachelor's degree in com-
+                                                                                                               puter science from the University of Science and
+J. Rexford, "Heavy-hitter detection entirely in the data plane," in Proc.                                      Technology of China (USTC), Hefei, China, in 2020,
+                                                                                                               where he is currently pursuing the Ph.D. degree with
+Symp. SDN Res., Apr. 2017, pp. 164­176.                                                                        the School of Computer Science and Technology.
+                                                                                                               His research interests include data center networks
+[21] P416 Portable Switch Architecture (PSA), Archit. Working Group, 2021.                                     and network measurement.
+
+[Online]. Available: https://p4.org/p4-spec/docs/PSA.pdf                                                       Ye Tian (Member, IEEE) received the bachelor's
+                                                                                                               degree in electronic engineering and the master's
+[22] (2024). Intel Tofino Series. Accessed: Mar. 22, 2024. [Online].                                           degree in computer science from the University of
+                                                                                                               Science and Technology of China (USTC), Hefei,
+Available:    https://intel.com/content/www/us/en/products/details/                                            China, in 2001 and 2004, respectively, and the Ph.D.
+                                                                                                               degree from the Department of Computer Science
+network-io/programmable-ethernet-switch/tofino-series.html                                                     and Engineering, The Chinese University of Hong
+                                                                                                               Kong, Hong Kong, China, in 2007. He joined USTC
+[23] D. Thaler and C. Hopps, Multipath Issues in Unicast and Multicast Next-                                   in 2008 and is currently an Associate Professor with
+                                                                                                               the School of Computer Science and Technology,
+hop Selection, document RFC 2991, Nov. 2000. [Online]. Available:                                              USTC. He has published over 90 articles and co-
+                                                                                authored a research monograph published by Springer. His research interests
+https://www.rfc-editor.org/rfc/rfc2991.txt                                      include data center networks, network measurement, and network security.
+                                                                                He is the winner of the Wilkes Best Paper Award of Oxford The Computer
+[24] Y. Chen, D. Bindel, and R. H. Katz, "Tomography-based overlay              Journal in 2016.
+
+network monitoring," in Proc. ACM SIGCOMM Conf. Internet Meas.                                                 Zhaohui Wang received the bachelor's degree in
+                                                                                                               computer science from the University of Electronic
+(IMC), Miami Beach, FL, USA, Oct. 2003, pp. 216­231.                                                           Science and Technology of China, Chengdu, China,
+                                                                                                               in 2023. She is currently pursuing the master's
+[25] A. Dhamdhere, R. Teixeira, C. Dovrolis, and C. Diot, "Netdiagnoser:                                       degree with the School of Computer Science and
+                                                                                                               Technology, University of Science and Technology
+Troubleshooting network unreachabilities using end-to-end probes and                                           of China. Her research interests include network
+                                                                                                               security.
+routing data," in Proc. CoNEXT, New York, NY, USA, Dec. 2007,
+                                                                                                               Cenman Wang received the bachelor's degree in
+pp. 1­12.                                                                                                      computer science from the University of Science
+                                                                                                               and Technology of China (USTC), Hefei, China, in
+[26] D. Ghita, H. Nguyen, M. Kurant, K. Argyraki, and P. Thiran, "Netscope:                                    2022, where she is currently pursuing the master's
+                                                                                                               degree with the School of Computer Science and
+Practical network loss tomography," in Proc. IEEE INFOCOM, San                                                 Technology. Her research interests include data cen-
+                                                                                                               ter networks.
+Diego, CA, USA, Mar. 2010, pp. 1­9.
+                                                                                                               Xinming Zhang (Senior Member, IEEE) received
+[27] L. Ma, T. He, A. Swami, D. Towsley, K. K. Leung, and J. Lowe, "Node                                       the B.E. and M.E. degrees in electrical engineering
+                                                                                                               from China University of Mining and Technology,
+failure localization via network tomography," in Proc. Conf. Internet                                          Xuzhou, China, in 1985 and 1988, respectively, and
+                                                                                                               the Ph.D. degree in computer science and technology
+Meas. Conf., Vancouver, BC, Canada, Nov. 2014, pp. 195­208.                                                    from the University of Science and Technology of
+                                                                                                               China (USTC), Hefei, China, in 2001. Since 2002,
+[28] B. Claise, Cisco Systems NetFlow Services Export Version 9, document                                      he has been with USTC, where he is currently a
+                                                                                                               Professor with the School of Computer Science and
+RFC 3954, IETF, Oct. 2004. [Online]. Available: https://www.rfc-                                               Technology. From September 2005 to August 2006,
+                                                                                                               he was a Visiting Professor with the Department
+editor.org/rfc/rfc3954.txt                                                      of Electrical Engineering and Computer Science, Korea Advanced Institute
+                                                                                of Science and Technology, Daejeon, South Korea. He has published more
+[29] G. Cormode and S. Muthukrishnan, "An improved data stream summary:         than 100 articles. His research interests include wireless networks, deep
+                                                                                learning, and intelligent transportation. He won the second prize of Science
+The count-min sketch and its applications," J. Algorithms, vol. 55, no. 1,      and Technology Award of Anhui Province of China in Natural Sciences in
+                                                                                2017. He won the awards of top reviewers (1%) in computer science and
+pp. 58­75, Apr. 2005.                                                           cross field by Publons in 2019.
+
+[30] T. Yang et al., "Elastic sketch: Adaptive and fast network-wide
+
+measurements," in Proc. Conf. ACM Special Interest Group Data
+
+Commun., Budapest, Hungary, Aug. 2018, pp. 561­575.
+
+[31] L. Gu, Y. Tian, W. Chen, Z. Wei, C. Wang, and X. Zhang, "Per-flow
+
+network measurement with distributed sketch," IEEE/ACM Trans. Netw.,
+
+vol. 32, no. 1, pp. 411­426, Feb. 2024.
+
+[32] M. Al-Fares, A. Loukissas, and A. Vahdat, "A scalable, commodity
+
+data center network architecture," in Proc. ACM SIGCOMM Conf. Data
+
+Commun., Aug. 2008, pp. 63­74.
+
+[33] B. H. Bloom, "Space/time trade-offs in hash coding with allowable
+
+errors," Commun. ACM, vol. 13, no. 7, pp. 422­426, Jul. 1970.
+
+[34] A. C. Snoeren et al., "Hash-based IP traceback," in Proc. Conf. Appl.,
+
+Technol., architectures, protocols Comput. Commun., San Diego, CA,
+
+USA, Aug. 2001, pp. 3­14.
+
+[35] R. P. Laufer et al., "Towards stateless single-packet IP traceback," in
+
+Proc. 32nd IEEE Conf. Local Comput. Netw. (LCN), Dublin, Ireland,
+
+Oct. 2007, pp. 548­555.
+
+[36] H. Takurou, K. Matsuura, and H. Imai, "IP traceback by packet marking
+
+method with Bloom filters," in Proc. 41st Annu. IEEE Int. Carnahan
+
+Conf. Secur. Technol., Ottawa, ON, Canada, Oct. 2007, pp. 255­263.
+
+[37] S. Xiong, Q. Cao, and W. Si, "Adaptive path tracing with pro-
+
+grammable Bloom filters in software-defined networks," in Proc. IEEE
+
+Conf. Comput. Commun. (IEEE INFOCOM), Paris, France, Apr. 2019,
+
+pp. 496­504.
+
+[38] A. Indra Basuki, D. Rosiyadi, and I. Setiawan, "Preserving network
+
+privacy on fine-grain path-tracking using P4-based SDN," in Proc. Int.
+
+Conf. Radar, Antenna, Microw., Electron., Telecommun. (ICRAMET),
+
+Tangerang, Indonesia, Nov. 2020, pp. 129­134.
+
+[39] A. Broder and M. Mitzenmacher, "Network applications of Bloom
+
+filters: A survey," Internet Math., vol. 1, no. 4, pp. 485­509, Jan. 2004.
+
+[40] A. Roy, H. Zeng, J. Bagga, and A. C. Snoeren, "Passive realtime
+
+datacenter fault detection and localization," in Proc. NSDI, Boston, MA,
+
+USA, Mar. 2017, pp. 595­612.
+
+[41] T. Benson, A. Akella, and D. A. Maltz, "Network traffic characteristics
+
+of data centers in the wild," in Proc. IMC, Nov. 2010, pp. 267­280.
+
+[42] Q. Huang, H. Sun, P. P. C. Lee, W. Bai, F. Zhu, and Y. Bao,
+
+"OmniMon: Re-architecting network telemetry with resource efficiency
+
+and full accuracy," in Proc. SIGCOMM, New York, NY, USA, Jul. 2020,
+
+pp. 404­421.
+
+[43] (2024). Mawi Working Group Traffic Archive. Accessed: Mar. 22, 2024.
+
+[Online]. Available: https://mawi.wide.ad.jp/mawi/
+
+[44] (2024). P416 Language Specification. [Online]. Available: https://p4.org/
+
+wp-content/uploads/2024/10/P4-16-spec.pdf
+
+[45] (2024). IPerf--The Ultimate Speed Test Tool for TCP, UDP and SCTP.
+
+Accessed: Mar. 22, 2024. [Online]. Available: https://iperf.fr/
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:23:47 UTC from IEEE Xplore. Restrictions apply.
+

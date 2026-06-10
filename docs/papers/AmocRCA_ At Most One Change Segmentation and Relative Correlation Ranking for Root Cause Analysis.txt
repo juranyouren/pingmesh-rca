@@ -1,0 +1,628 @@
+.. ...... .. ..........                                                               PDF Download
+      Latest updates: hps://dl.acm.org/doi/10.1145/3696630.3731612                    3696630.3731612.pdf
+                                                                                      15 March 2026
+RESEARCH-ARTICLE                                                                      Total Citations: 1
+                                                                                      Total Downloads: 777
+AmocRCA: At Most One Change Segmentation and Relative Correlation
+Ranking for Root Cause Analysis                                        Published: 28 July 2025
+
+ANTON ALTENBERND, Technical University of Berlin, Berlin, Germany      Citation in BibTeX format
+ZHIYUAN WU, Huawei Technologies Co., Ltd., Shenzhen, Guangdong, China
+ODEJ KAO, Technical University of Berlin, Berlin, Germany              FSE Companion '25: 33rd ACM
+                                                                       International Conference on the
+Open Access Support provided by:                                       Foundations of Soware Engineering
+Huawei Technologies Co., Ltd.                                          June 23 - 28, 2025
+Technical University of Berlin                                         Trondheim, Norway
+
+                                                                       Conference Sponsors:
+                                                                       SIGSOFT
+
+                                                                                         FSE Companion '25: Proceedings of the 33rd ACM International Conference on the Foundations of Soware Engineering (June 2025)
+                                                                                                                                                                                                           hps://doi.org/10.1145/3696630.3731612
+                                                                                                                                                                                                                                  ISBN: 9798400712760
+
+.
+AmocRCA: At Most One Change Segmentation and Relative
+          Correlation Ranking for Root Cause Analysis
+
+   Anton Altenbernd                  Zhiyuan Wu                                                       Odej Kao
+
+Technische Universität Berlin              Huawei                                            Technische Universität Berlin
+        Berlin, Germany                Beijing, China                                                Berlin, Germany
+                               wuzhiyuan21@huawei.com
+  a.altenbernd@tu-berlin.de                                                                      odej.kao@tu-berlin.de
+
+Abstract                                                                                     and other QoS parameters, making the loss of control unacceptable
+                                                                                             for any system or infrastructure. Recognizing this, large service
+In this paper, we present AmocRCA, a highly effective and effi-                              providers have already deployed various measures, including the
+cient approach to Root Cause Analysis (RCA) using metric data                                integration of both human and artificial intelligence into the IT
+only. A fast and reliable localization of root causes is decisive for                        ecosystem. In particular, numerous AIOps (AI-enabled IT oper-
+self-stabilization of large systems in production and thus for contin-                       ations) platforms [10, 29] have been developed and deployed to
+uous operation. Unlike many multi-modal approaches, we omit the                              detect, identify, and mitigate anomalies and their root causes ­ typ-
+necessity to create and maintain topology and interaction graphs                             ically arising from performance issues, component/system failures
+as well as to collect and interpret semantically rich data such as                           (e.g., outages, degraded performance), or security incidents ­ before
+logs and traces for the sake of quick localization/reaction and low                          they escalate into an error.
+computational overhead while achieving comparable results in
+terms of RCA precision. AmocRCA is based on a recent and promis-                                In order to resolve anomalies, AIOps platforms rely on the avail-
+ing approach for RCA named BARO. It leverages At Most One                                    ability of appropriate and meaningful data. The current observ-
+Change (AMOC) segmentation to make the scoring mechanism                                     ability trend aims to combine three different types of system in-
+independent of anomaly detection, and employs a relative correla-                            formation ­ tracing, logging, and metric data ­ and thus support
+tion ranking that enhances the scoring mechanism while reducing                              a robust and precise anomaly detection and RCA with respect to
+the need for a preselected set of metrics. The experimental results                          false positive alarms, which are decisive for the platform acceptance
+confirm the improvement in terms of effectiveness, while achiev-                             among IT professionals [41]. While an improvement in evaluation
+ing comparable efficiency. The latter is an important requirement                            metrics is noted, the handling of complex semantics of logs (written
+for deploying the method in productive large-scale, data-intensive                           by humans for humans) and of traces (execution paths with text
+applications, where fault localization has a limited time constraint.                        sequences and real-valued response time describing the service
+                                                                                             performance) is challenging, resource consuming, and prone to
+Keywords                                                                                     interpretation errors in real-world settings. In particular, as the
+                                                                                             number of logs, traces, and metrics grows significantly with the
+AIOps, Root Cause Analysis, Change Point Detection, Segmentation,                            increasing deployment of large scale distributed applications.
+Robust Z-Scoring, Relative Correlation Ranking, Observability
+                                                                                                By abandoning logs and traces, the exclusive use of metric data
+ACM Reference Format:                                                                        enables quick identification and resolution of root causes for many
+Anton Altenbernd, Zhiyuan Wu, and Odej Kao. 2025. AmocRCA: At Most                           concurrent anomalies and thus stabilize the system under investi-
+One Change Segmentation and Relative Correlation Ranking for Root Cause                      gation without complex or time-consuming pre-processing. In the
+Analysis. In 33rd ACM International Conference on the Foundations of Soft-                   context of containers, microservice architectures and automatic
+ware Engineering (FSE Companion '25), June 23­28, 2025, Trondheim, Norway.                   scaling/migration, topology or interaction graphs are difficult to
+ACM, New York, NY, USA, 8 pages. https://doi.org/10.1145/3696630.3731612                     maintain due to their frequent and dynamic changes and are there-
+                                                                                             fore an unreliable source for RCA. The absence of topology and
+1 Introduction                                                                               interaction graphs as well as semantically rich data such as logs
+                                                                                             and traces creates a challenge to achieve a comparable quality as
+The creation of large, multi-layered systems is driven by the grow-                          multi-modal approaches while exploiting benefits of quick localiza-
+ing number of distributed applications with dynamically connected                            tion/reaction and low computational overhead.
+devices and microservice-based implementations. This, combined
+with the high update frequency of agile software development, re-                               Many existing metric-based RCA approaches use causal infer-
+sults in a constantly increasing system complexity up to a level                             ence techniques tailored to time series data [5], aiming to construct
+where it becomes almost impossible for human operators to moni-                              a causal graph that represents the relationships between services or
+tor and manage the entire system without additional support and                              metrics [36]. Discovering these causal graphs, however, is resource-
+automation. Many data-driven autonomous applications require                                 intensive, does not scale well with the number of metrics, and often
+uninterrupted services with guaranteed latency, response times,                              fails to achieve the desired accuracy [32]. Other methods rely solely
+                                                                                             on statistical analysis of the input metrics [36], allowing for faster
+This work is licensed under a Creative Commons Attribution 4.0 International License.        localization [32]. Some of these methods [31, 35] use the point in
+FSE Companion '25, Trondheim, Norway                                                         time at which the anomaly is detected to segment the observation
+© 2025 Copyright held by the owner/author(s).                                                window into two periods: the normal period before this point, and
+ACM ISBN 979-8-4007-1276-0/2025/06
+https://doi.org/10.1145/3696630.3731612
+
+                                                                                       1386
+FSE Companion '25, June 23­28, 2025, Trondheim, Norway                                                                                          Altenbernd, Zhiyuan, and Kao
+
+the abnormal period following it. Once this segmentation is com-              work in the literature, and Section 5 concludes this paper and out-
+pleted, each metric is evaluated based on these periods, aiming               lines possible directions for future work.
+to identify the most likely service or metric responsible for the
+anomaly.                                                                      2 Methodology
+
+   Among these methods, a promising and recently published ap-                In this section, we present the pipeline of AmocRCA. Our approach
+proach is BARO (BAyesian and RObust) [31]. BARO detects anom-                 assumes that data collection and anomaly detection have already
+alies using a multivariate Bayesian Online Change Point Detec-                been successfully completed in previous steps. Once an anomaly is
+tion (BOCPD) [4, 47], and segments the observation window into                detected, the pipeline is initiated to evaluate metrics based on their
+the normal period and the abnormal period, based on the time at               potential to be the root cause. We assume that an observation win-
+which the anomaly is first detected. Then, for each metric, it calcu-         dow, including an appropriate period before and after the anomaly
+lates z-scores for all points in the abnormal period using the median         originally occurred, is passed to AmocRCA.
+and Interquartile Range (IQR) computed from the normal period.
+Afterwards, the highest z-score per metric is used to produce a                  AmocRCA builds on BARO's methodology for scoring potential
+ranked list of potential root causes. By applying this efficient scor-        root causes. While BARO segments the observation window based
+ing method, which is robust to variations in the detected anomaly             on the anomaly detection time, AmocRCA decouples segmentation
+time, BARO outperforms current baselines [31, 32].                            from anomaly detection by making it an integral part of the RCA
+                                                                              pipeline. This allows segmentation to consider the entire observa-
+   While BOCPD is known to be one of the most accurate methods                tion window, independent of the detected anomaly time. Moreover,
+for detecting change points in time series [39], there is still a high        AmocRCA adapts the robust z-scoring from BARO, replacing the
+rate of false positives in BARO's anomaly detection [31]. In addition,        use of the maximum z-score with the median to improve robustness
+we observed that the effectiveness of BARO decreases as the num-              against outliers in the abnormal period.
+ber of metrics increases. Indeed, most metric-based RCA methods
+depend on a preselected set of metrics, which significantly affects              While AmocRCA is not a causal inference method in the formal
+their efficiency and effectiveness [32, 45]. Consequently, feature            sense, it is guided by causal reasoning principles grounded in sta-
+reduction is crucial for applying these methods effectively, but may          tistical analysis of time series metric data. Specifically, AmocRCA
+result in loss of relevant information. This highlights the need for          assumes that the root cause precedes observable effects, exhibits a
+methods that remain effective regardless of the number of metrics.            statistically significant change, and is correlated with other anoma-
+                                                                              lous metrics. In essence, the method first identifies a discontinuity
+   In summary, our work builds on BARO's methodology for scor-                in the observation window using change point detection, then com-
+ing potential root causes and contributes in two ways:                        putes robust z-scores to quantify the deviation of each metric from
+                                                                              normal behavior, and selects metrics based on this measure. Met-
+     · AMOC Segmentation: We employ an efficient and exact                    rics are subsequently ranked based on the assumption that the root
+        change point detection method that identifies at most one             cause is both strongly correlated with these metrics of interest and
+        change point for segmentation. This AMOC segmentation                 exhibits a significant relative difference between its minimum and
+        [14] is applied to the observation window to make the scor-           maximum values compared to other metrics.
+        ing mechanism independent of anomaly detection.
+                                                                                 In the following, we describe the stages of our RCA method,
+     · Relative Correlation Ranking: We enhance the scoring                   including AMOC Segmentation (Section 2.1), Robust Z-Scoring
+        mechanism by introducing a relative correlation ranking.              (Section 2.2), and Relative Correlation Ranking (Section 2.3). The
+        This method improves effectiveness and reduces the need               overall pipeline is illustrated in Figure 1. As an additional final step,
+        for a preselected set of metrics.                                     a Leading Metric Alignment (Section 2.4) is applied.
+
+   In order to evaluate the effectiveness and efficiency of our pre-          2.1 AMOC Segmentation
+sented method, this paper addresses the following research ques-
+tions:                                                                        Similar to previous works [15, 18, 19, 31, 35], our method relies
+                                                                              on a point in time that segments the observation window into to
+     · RQ1: How effective is our approach for root cause anal-                two periods: the normal period before this point and the abnormal
+        ysis? To evaluate this, we compare our method against base-           period following it. Instead of using the point in time detected by an
+        line RCA methods in terms of precision. The evaluation                anomaly detector, we apply AMOC segmentation [14] to identify
+        includes both coarse- and fine-grained analysis to compre-            this point within the observation window. Our goal is to provide an
+        hensively assess its performance.                                     RCA method that is independent of both the use and the inaccuracy
+                                                                              of anomaly detection.
+     · RQ2: How efficient is our approach for root cause anal-
+        ysis? To evaluate this, we compare our method against base-              The metrics generated by observation systems are typically rep-
+        line RCA methods in terms of running time.                            resented as time series. A technique used to identify abrupt and sig-
+                                                                              nificant changes in such time series is change point detection [39].
+     · RQ3: How do individual components contribute to our                    Sudden, substantial changes indicate the transition from the nor-
+        approach? To evaluate this, we conduct an ablation study              mal to the abnormal period and can provide valuable insights into
+        and analyze the impact of individual components in terms              potential underlying causes. As a result, change point detection
+        of precision for both coarse- and fine-grained RCA.                   has become an applied method to support RCA [27, 28, 31]. The
+                                                                              general goal of change point detection is to partition a time series
+   The remainder of this paper is organized as follows. Section 2
+introduces our methodology for RCA. The evaluation results are
+presented and discussed in Section 3. Section 4 explores related
+
+                                                                        1387
+AmocRCA: At Most One Change Segmentation and Relative Correlation Ranking for Root Cause Analysis  FSE Companion '25, June 23­28, 2025, Trondheim, Norway
+
+                      Figure 1: Root Cause Analysis Pipeline
+
+1) AMOC Segmentation  2) Robust Z-Scoring                                                                    3) Relative Correlation Ranking
+
+into segments, each displaying consistent behavior. This is often            period are first determined. These metrics are then used to evaluate
+achieved by formulating the problem as an optimization task that             the abnormal period based on the following formula:
+minimizes a cost function, which reflects how well a segment fits a
+chosen statistical model. Since we are interested in identifying a                                 robust =  abnormal - ~normal               (1)
+single point that segments the observation window into the normal                                                  IQRnormal
+and abnormal period, we specifically chose AMOC segmentation
+because it is efficient, and well-suited for scenarios where only a          Typically, z-scoring is based on the mean and standard deviation,
+single change point is expected.
+                                                                             where the z-score indicates how many standard deviations a data
+   To perform AMOC segmentation, we iterate over the observa-
+tion window, from left to right, computing a cost function for each          point deviates from the mean. While this method can reveal how
+potential change point by considering both the left and right seg-
+ment. The sum of these costs is evaluated for each possible change           extreme or typical the abnormal points are relative to the normal
+point, and the change point that minimizes this sum is considered
+the optimal segmentation point with respect to this cost function.           period, it is highly sensitive to outliers. Outliers can skew both
+In the rare case that the minimum cost is found for the first or last
+point, no change point is detected in the observation window. Since          the mean and standard deviation, especially if the change point is
+we are interested in the optimal segmentation point across multiple
+metrics, we apply AMOC segmentation in a multivariate manner.                detected after the abnormal period has already begun. In such cases,
+We incorporate all available metrics as input to the algorithm, al-
+lowing it to detect the change point across multiple dimensions.             the early portion of the abnormal period is incorrectly included in
+To compute the cost function across multiple metrics, it is calcu-
+lated for each metric independently, but the optimization aims to            the normal period, compromising the accuracy of the variability
+minimize the aggregated cost. As a result, this segmentation point
+may differ from the time identified by an anomaly detector, but it           estimation. In contrast, using the median and IQR, which are less
+should offer a precise estimate of the true transition point from the
+normal to the abnormal period.                                               sensitive to outliers, ensures greater robustness against inaccuracies
+
+   In our implementation1, we use the variance as the cost function          in the change point detection. In this approach, the z-score from
+for AMOC segmentation. The variance is computed independently
+for each metric, and the sum of these variances is used for the              formula 1 quantifies the absolute deviation of each data point from
+optimization task.
+                                                                             the median, relative to the IQR, providing a more reliable measure.
+2.2 Robust Z-Scoring
+                                                                             To further evaluate each metric, BARO selects the maximum z-
+Similar to BARO [31], we perform robust z-scoring on each metric
+individually after the change point has been detected. Consequently,         score from all data points for each metric to derive an overall score,
+the period before the detected change point is considered the normal
+period, while the period after it is treated as the abnormal period.         which is then used to rank all metrics. In contrast, our method com-
+To compute the z-scores, the median (~ ) and IQR of the normal
+                                                                             putes the median of the z-scores for each metric. This adjustment
+1 https://github.com/aaltenbernd/amocrca
+                                                                             further enhances robustness by reducing the influence of outliers
+
+                                                                             within the abnormal period. As the number of metrics increases,
+
+                                                                             however, more potential root causes compete in the scoring pro-
+
+                                                                             cess, complicating the evaluation. While the change point detection
+
+                                                                             may consider relationships, the robust z-scoring itself evaluates
+
+                                                                             each metric individually. To address this limitation, we introduce a
+
+                                                                             relative correlation ranking.
+
+                                                                             2.3 Relative Correlation Ranking
+
+                                                                             Once the robust z-scoring is completed, providing a score for each
+                                                                             metric, the relative correlation ranking is applied. This ranking
+                                                                             method is based on the following two assumptions:
+
+                                                                                (1) The root cause is strongly correlated with metrics that re-
+                                                                                     ceived high scores in the previous step.
+
+                                                                                (2) The root cause exhibits a significant relative difference be-
+                                                                                     tween its minimum and maximum values compared to other
+                                                                                     metrics.
+
+                                                                       1388
+FSE Companion '25, June 23­28, 2025, Trondheim, Norway                                                                                          Altenbernd, Zhiyuan, and Kao
+
+   For each metric, we first calculate the absolute Pearson correla-          metrics with significant but not extreme deviations. These metrics,
+tion with the top-scored metrics identified in the previous step. In          highlighted in green, which have a significant score, are then pri-
+line with assumption 1, the top-scored metrics are selected based             oritized with respect to the leading metric of their corresponding
+on their distance from other scores. Since we aim to identify outlier         service, while metrics highlighted in red remain unchanged. We
+scores, we compute the mean and standard deviation of all scores              exclude latency and error metrics from this alignment, as they typi-
+and apply the three-sigma rule of thumb, i.e., metrics that deviate           cally serve as symptoms of the fault's impact rather than the fault
+by at least three standard deviations from the mean are selected. To          itself. Note that this alignment only affects the fine-grained analysis,
+ensure sufficient diversity, we impose a minimum threshold on the             where we aim to identify potential root causes at the metric level.
+number of selected metrics. If less than three metrics are selected           As the order of the services is not adjusted, the coarse-grained anal-
+by the rule, we select the top three metrics. After identifying the           ysis, where we aim to identify potential root causes at the service
+top-scored metrics, we compute their mean and use this mean to                level, is not affected.
+calculate the correlation. For assumption 2, we compute the relative
+difference between the minimum and maximum values for each                    3 Evaluation
+metric.
+                                                                              In this section, we aim to answer the research questions presented
+   Finally, both assumptions are integrated into a final score by mul-        in Section 1. In Section 3.1, we describe the setup, including the
+tiplying the correlation value from assumption 1 with the relative            datasets and settings used for the evaluation. Subsequently, we
+difference value from assumption 2, resulting in a comprehensive              describe the metrics in Section 3.2, and the baselines used for com-
+ranking based on the relative correlation to the top-scored met-              parison are presented in Section 3.3. We address RQ1 in Section 3.4,
+rics from the previous stage. Unlike BARO [31], which evaluates               RQ2 in Section 3.5, and RQ3 in Section 3.6.
+each metric independently, this ranking mechanism considers re-
+lationships to metrics of interest, allowing for more contextual              3.1 Evaluation Setup
+identification of potential root causes.
+                                                                              3.1.1 Datasets. For our evaluation, we used datasets from previous
+    Figure 2: Leading Metric Alignment                                        work [15, 31, 32]. We did not use synthetic datasets from previous
+                                                                              studies [15, 18], as they do not sufficiently reflect the complexity of
+1. payment_latency             1. payment_latency                             a distributed system [32].
+
+2.  orders_latency             2.  payment_cpu                                   Table 1 presents the complexity of each dataset used. For most
+                                                                              of the datasets, both a full version, denoted as Full, containing
+3.  payment_cpu                3.  orders_latency                             all available metrics, and a simplified version, denoted as Simple,
+                                                                              with a preselected subset of metrics, were provided. The datasets
+4.  carts_latency              4.  carts_latency                              were derived from microservice benchmark systems, namely Sock
+                                                                              Shop [2], Online Boutique [1], and Train Ticket [3]. We combined
+5.  orders_cpu                 5.  orders_cpu                                 the datasets based on the microservice benchmark systems and
+                                                                              the Simple and Full versions. Additionally, we removed redundant
+1) Ranked List of Root Causes      2) Aligned Ranked List                     cases, as the datasets from [32] and [31] are from the same authors.
+                                                                              For both the number of metrics and the number of timestamps, we
+2.4 Leading Metric Alignment                                                  calculated the average across all cases.
+
+To further enhance our method, we apply a simple yet practical                   Table 2 presents the number of cases per fault type, noting an
+heuristic that aligns with the common sense of system adminis-                imbalance in the distribution. The work from [15] only considered
+trators. As illustrated in Figure 2, this heuristic ensures that each         CPU and memory faults, while the work from [31] did not include
+metric with a significant score is positioned immediately after the           disk faults. Moreover, in all Simple versions, no disk-related metrics
+leading metric of its corresponding service, i.e., the metric with            were included, making fine-grained analysis impossible under these
+the highest score within that service. This reordering is motivated           circumstances.
+by the observation that root causes often manifest across multi-
+ple types of metrics within a service, and that these metrics may             3.1.2 Setting. All experiments, with one exception, were conducted
+respond differently to the ranking mechanism. In the depicted exam-           on a Linux machine equipped with 16 cores and 131 GB of RAM,
+ple, the root cause may lie in the CPU usage of the payment service,          running Python 3.10.12. Since the baseline CausalRCA [46] requires
+while the latency metric of the same service may receive a higher             CUDA support, the experiments for this baseline were conducted
+score due to its smoother and more prominent deviation pattern. By            on a GPU node in our faculty cluster. To minimize the impact of
+applying this heuristic, potential root causes are brought into closer        randomness, each experiment was repeated three times, and the
+proximity with the indirectly affected but relevant metrics, thereby          average results were reported.
+reducing the cognitive effort and manual overhead in subsequent
+analysis. To achieve this, we again calculate the mean and standard           3.2 Metrics
+deviation of all scores and identify the metrics whose values deviate
+by more than one standard deviation from the mean. We use one                 Following previous works [15, 18, 31, 32, 46], we use average preci-
+standard deviation instead of three because it allows us to capture           sion at  (@) to the assess the effectiveness of our method for
+                                                                              RCA. @ is an extension of precision at  (@), where @ is
+                                                                              a metric used to evaluate the relevance of the top  results returned
+                                                                              by a method. It measures the proportion of true root causes within
+
+                                                                        1389
+AmocRCA: At Most One Change Segmentation and Relative Correlation Ranking for Root Cause Analysis  FSE Companion '25, June 23­28, 2025, Trondheim, Norway
+
+          Table 1: Datasets for Evaluation - Complexity                                   and IQR for robustness. Similarly, it uses the maximum deviation
+                                                                                          to rank all metrics.
+            Sock Shop               Online Boutique              Train Ticket
+                                                                                          3.4 RQ1: Root Cause Analysis
+Property    Simple        Full      Simple           Full     Simple  Full
+                                                                                          Table 3 presents the results of our experiments across all datasets,
+Source      [15, 31, 32]  [31, 32]  [31, 32]         [31]  [31, 32]   [31, 32]            including results for the Simple and Full versions, as well as results
+                            436                              214       1254               for coarse- and fine-grained analyses. In coarse-grained RCA, we
+Metrics     53              720        56            420     912        912               aim to identify potential root causes at the component or service
+                             11                               64         64               level. In fine-grained RCA, we aim to identify potential root causes
+Timestamps 675                         1653          720                                  at the metric level. To provide a compact table, we aggregated the
+                                                                                          results across all fault types. Specifically, we first determined @5
+Services    11                         12            12                                   for each fault type separately. Then, we calculated the mean and
+                                                                                          standard deviation of these values to obtain an overall measure. In
+Table 2: Datasets for Evaluation - Cases per Fault Type                                   this way, the aggregation is independent of the number of cases per
+                                                                                          fault type. Following previous work [31], methods that depend on
+            Sock Shop               Online Boutique              Train Ticket             the anomaly detection time are denoted as RCA_Method [Anomaly
+                                                                                          Detector], where [tinject] is the time at which the fault was originally
+Fault Type  Simple        Full      Simple           Full     Simple  Full                injected, [BOCPD] refers to the multivariate BOCPD used in BARO,
+                                                                                          and [N-Sigma] refers to N-Sigma [18, 19] for anomaly detection,
+CPU         50            25           50            25       25         25               i.e. applying the three-sigma rule of thumb. Note that Dummy,
+MEM                                                                                       CausalRCA and AmocRCA work independently of the anomaly
+DISK        50            25           50            25       25         25               detection time. For each case, we limited the execution time to two
+DELAY                                                                                     hours. Due to this time constraint, we were unable to complete the
+LOSS        25            25           25            -        25         25               experiments for CIRCA with the Full version of the Train-Ticket
+TOTAL                                                                                     dataset, which is indicated by a dash.
+            25            25           30            25       25         25
+                                                                                             In Table 3, we can see that all methods, in most cases, perform
+            25            25           30            25       25         25               better than random selection. For CIRCA, N-Sigma, and BARO,
+                                                                                          only BARO provides robustness with respect to the anomaly de-
+            175           125          185           100      125     125                 tector, due to its use of robust z-scoring, as already shown by the
+                                                                                          authors [31]. CausalRCA yields comparable results for the Simple
+the top  results. This metric helps assess how effectively a method                       Online-Boutique dataset. However, it is less effective on the Sock-
+ranks true root causes in the most prominent positions. Instead of                        Shop dataset and even worse on the Train-Ticket dataset. In general,
+just counting true root causes in the top  results, @ computes                            all baselines perform better on the datasets in Simple version, but
+precision at each rank up to  and then averages these precision val-                      as the number of metrics increases, they begin to struggle due to
+ues. This means that @ rewards methods that return true root                              the increased noise and complexity in locating the root cause. In
+causes early in the list more heavily than those that return them                         contrast, AmocRCA consistently outperforms the other methods
+later. It thereby quantifies the overall performance of a method for                      across all datasets, particularly in the Full version, for both coarse-
+a certain . Based on @, @ is calculated as follows:                                       grained and fine-grained RCA. Unlike the baselines, AmocRCA
+                                                                                          provides comparable results between the Simple and Full versions
+        @ = 1                       1  (     [])           =  1                           for all datasets, highlighting its ability to reduce reliance on a pres-
+                           =1                                                             elected set of metrics, making it highly adaptable and effective for
+                                                  ,     @                      (2)        real-world RCA scenarios.
+            ||            (, | |)                                     @
+                                                                                          3.5 RQ2: Running Time
+                                                              
+                                                                                          Table 4 shows the average runtime in seconds for each RCA method.
+                                                                  =1                      CIRCA and CausalRCA take significantly longer than the other
+                                                                                          methods. In particular, CIRCA's runtime increases dramatically for
+where A is a set of anomalies,  [] denotes the -th ranking                                the Train Ticket dataset in the Simple version and for all datasets
+                                                                                          in the Full version, due to scalability issues with the PC algorithm.
+result for anomaly  according to a method, and  is the set of                             Similarly, CausalRCA's runtime increases more than linearly with
+                                                                                          the number of metrics. In contrast, N-Sigma and BARO demon-
+true root causes for anomaly . 1 () is the indicator function,                            strate high efficiency, with runtimes consistently below one second,
+which equals 1 if    is true and 0 otherwise.                                             making them suitable for quick diagnostic tasks. AmocRCA also
+                                                                                          demonstrates efficiency, with runtimes close to those of N-Sigma
+3.3 Baselines                                                                             and BARO, representing a reasonable trade-off between efficiency
+                                                                                          and effectiveness when compared to these methods.
+To assess the effectiveness of our method for RCA, we compare it
+to the following five baselines. Dummy takes the list of all metrics,
+randomly shuffles it, and returns the result. Following previous
+work [31], we use this method to evaluate against random selection.
+CausalRCA [46] utilizes a DAG-GNN [48] to build a weighted met-
+ric causality graph. Subsequently, CausalRCA employs the PageR-
+ank [7] algorithm to generate a ranked list of potential root causes.
+CIRCA [18] builds a structural graph based on system architec-
+ture information and causal assumptions, identifying root causes
+through regression-based hypothesis testing that detects metrics
+with significant deviations from their expected distributions. As in
+previous work [31], due to the lack of system architecture infor-
+mation, we employ the PC algorithm [37] to construct the graph
+instead. N-Sigma [18, 19] applies a z-scoring to each metric individ-
+ually by calculating the mean and standard deviation of the normal
+period. Each data point in the abnormal period is evaluated based
+on its deviation from the mean relative to the standard deviation.
+The maximum deviation is used to rank all metrics. BARO [31] ap-
+plies a z-scoring similar to N-Sigma. In contrast, it uses the median
+
+                                                                                    1390
+FSE Companion '25, June 23­28, 2025, Trondheim, Norway                                                                              Altenbernd, Zhiyuan, and Kao
+
+Table 3: Coarse- and fine-grained analysis per RCA method in terms of AP@5 for the Sock-Shop, Online-Boutique and Train-
+Ticket datasets, each in Simple and Full versions. The mean and standard deviation ( ± ) of the results across all available
+fault types are presented. The best results are in bold, and the second best results are underlined.
+
+                                        Sock-Shop                               Online Boutique                               Train Ticket
+
+                        Coarse-grained               Fine-grained          Coarse-grained  Fine-grained  Coarse-grained             Fine-grained
+
+Method                  Simple          Full   Simple        Full    Simple     Full       Simple  Full  Simple               Full  Simple       Full
+
+Dummy            0.22 ± 0.05 0.24 ± 0.07 0.07 ± 0.03 0.12 ± 0.07 0.26 ± 0.04 0.27 ± 0.02 0.10 ± 0.05 0.05 ± 0.02 0.08 ± 0.02 0.03 ± 0.01 0.02 ± 0.01 0.02 ± 0.02
+
+CausalRCA        0.57 ± 0.14 0.43 ± 0.11 0.37 ± 0.08 0.15 ± 0.08 0.77 ± 0.14 0.49 ± 0.15 0.67 ± 0.25 0.31 ± 0.16 0.33 ± 0.20 0.04 ± 0.03 0.28 ± 0.22 0.01 ± 0.00
+
+CIRCA [tinject]  0.84 ± 0.06 0.75 ± 0.15 0.70 ± 0.18 0.21 ± 0.31 0.81 ± 0.09 0.72 ± 0.19 0.63 ± 0.13 0.29 ± 0.31 0.60 ± 0.15  --    0.47 ± 0.18  --
+
+CIRCA [N-Sigma] 0.70 ± 0.11 0.57 ± 0.06 0.56 ± 0.21 0.18 ± 0.24 0.65 ± 0.10 0.58 ± 0.13 0.39 ± 0.26 0.21 ± 0.17 0.27 ± 0.08 -- 0.21 ± 0.05 --
+
+CIRCA [BOCPD] 0.76 ± 0.05 0.59 ± 0.17 0.59 ± 0.07 0.21 ± 0.30 0.59 ± 0.13 0.48 ± 0.14 0.39 ± 0.27 0.15 ± 0.11 0.49 ± 0.09 -- 0.39 ± 0.07 --
+
+N-Sigma [tinject] 0.88 ± 0.04 0.87 ± 0.04 0.73 ± 0.14 0.49 ± 0.29 0.89 ± 0.11 0.80 ± 0.12 0.71 ± 0.17 0.51 ± 0.30 0.76 ± 0.11 0.71 ± 0.19 0.67 ± 0.16 0.60 ± 0.25
+N-Sigma [N-Sigma] 0.71 ± 0.10 0.72 ± 0.06 0.58 ± 0.20 0.36 ± 0.25 0.77 ± 0.12 0.69 ± 0.08 0.54 ± 0.18 0.40 ± 0.28 0.53 ± 0.12 0.44 ± 0.09 0.48 ± 0.12 0.37 ± 0.13
+
+N-Sigma [BOCPD] 0.82 ± 0.11 0.77 ± 0.10 0.69 ± 0.13 0.43 ± 0.27 0.75 ± 0.13 0.66 ± 0.14 0.61 ± 0.20 0.38 ± 0.29 0.60 ± 0.08 0.52 ± 0.10 0.50 ± 0.11 0.41 ± 0.16
+
+BARO [tinject]   0.94 ± 0.03 0.80 ± 0.06 0.80 ± 0.09 0.42 ± 0.30 0.88 ± 0.13 0.82 ± 0.05 0.66 ± 0.18 0.48 ± 0.33 0.77 ± 0.10 0.55 ± 0.21 0.65 ± 0.13 0.35 ± 0.27
+
+BARO [N-Sigma] 0.88 ± 0.05 0.79 ± 0.07 0.73 ± 0.14 0.41 ± 0.29 0.81 ± 0.17 0.76 ± 0.06 0.59 ± 0.20 0.44 ± 0.33 0.68 ± 0.11 0.48 ± 0.19 0.58 ± 0.16 0.30 ± 0.22
+
+BARO [BOCPD] 0.91 ± 0.05 0.78 ± 0.07 0.79 ± 0.11 0.42 ± 0.29 0.87 ± 0.12 0.80 ± 0.06 0.65 ± 0.19 0.48 ± 0.34 0.72 ± 0.11 0.54 ± 0.21 0.63 ± 0.14 0.38 ± 0.26
+
+AmocRCA          0.95 ± 0.05 0.95 ± 0.04 0.86 ± 0.13 0.83 ± 0.07 0.92 ± 0.13 0.93 ± 0.06 0.78 ± 0.16 0.81 ± 0.09 0.95 ± 0.04 0.95 ± 0.05 0.84 ± 0.12 0.82 ± 0.11
+
+Table 4: Average runtime in seconds per RCA method for the                               In Table 5, we observe that replacing the maximum with the
+Sock-Shop, Online-Boutique, and Train-Ticket datasets, each                           median in the robust z-scoring already leads to a notable increase in
+in the Simple and Full versions.                                                      precision. Enabling the Relative Correlation Ranking (RCR) further
+                                                                                      improves precision, particularly for the Full datasets. Finally, as
+Method              Sock Shop           Online Boutique       Train Ticket            expected, incorporating the Leading Metric Alignment (LMA) does
+                 Simple Full            Simple Full          Simple Full              not affect coarse-grained analysis but leads to an improvement in
+CausalRCA                                                                             fine-grained precision.
+CIRCA            73.19  163.15          72.77        162.17  130.54  744.76
+N-Sigma          4.78   432.88          8.88         302.98  942.99    --             4 Related Work
+BARO             0.01    0.03           0.01          0.03    0.02    0.08
+AmocRCA          0.01    0.08           0.01          0.08    0.06    0.21            According to [36], metric-based RCA approaches can be categorized
+                 0.02    0.13           0.03          0.13    0.10    0.39            into topology graph-based analysis, causality graph-based analysis,
+                                                                                      and statistical analysis.
+Table 5: Ablation study results showing coarse- and fine-
+grained analysis in terms of AP@5 for all datasets, in Simple                         4.1 Topology Graph-Based Analysis
+and Full versions. The mean and standard deviation ( ± )
+of the results across all available fault types are presented.                        These methods either operate on an existing topology or call graph,
+                                                                                      or construct one based on the information provided by the observa-
+                                Coarse-grained               Fine-grained             tion system. MonitorRank [17] identifies the root cause of an anom-
+                                                                                      aly by calculating similarity scores, such as correlation, between
+Scoring    RCR   LMA            Simple         Full          Simple  Full             the affected service's metrics and those of other services. These
+             ×     ×                                                                  scores are used to assign weights to a call graph's edges, and a per-
+             ×     ×    0.84 ± 0.06 0.74 ± 0.14        0.65 ± 0.12 0.48 ± 0.14        sonalized PageRank [7] algorithm ranks potential root causes based
+                   ×                                                                  on these weighted connections. Sieve [38] identifies root causes
+                        0.90 ± 0.04 0.87 ± 0.06        0.73 ± 0.11 0.63 ± 0.11        by clustering similar metrics and applying Granger Causality [12]
+                                                                                      tests to uncover relationships between components. It constructs
+                        0.94 ± 0.01 0.94 ± 0.01        0.72 ± 0.05 0.77 ± 0.08        dependency graphs from both healthy and faulty system versions
+                                                                                      and ranks components based on the novelty and similarity between
+                        0.94 ± 0.01 0.94 ± 0.01        0.84 ± 0.02 0.81 ± 0.02        these graphs. DLA [34] converts the system's topology into a Hierar-
+                                                                                      chical Hidden Markov Model (HHMM) [11] for root-cause analysis.
+3.6 RQ3: Ablation Study                                                               It uses the applied HHMM [11] to identify the path most likely to
+                                                                                      have caused the anomaly observed on a service. MicroRCA [44]
+Table 5 presents the results of our ablation study across all datasets,               performs root cause analysis by constructing a topology graph
+including both the Simple and Full versions, as well as coarse- and                   from response times and isolating anomalous subgraphs. It assigns
+fine-grained analyses. Similar to Table 3, we report precision in                     edge weights based on Pearson Correlation with resource utiliza-
+terms of @5, using the mean and standard deviation across all                         tion and applies a personalized PageRank [7] algorithm to identify
+fault types. To save space, we aggregated the results across all                      the most likely root cause of the anomaly. Later, Wu et al. [42]
+datasets, regardless of type, and included an additional component
+in each row to highlight its individual contribution. We excluded
+AMOC segmentation from this study, as the motivation for its use
+is structural rather than driven by precision improvements.
+
+                                                                                1391
+AmocRCA: At Most One Change Segmentation and Relative Correlation Ranking for Root Cause Analysis  FSE Companion '25, June 23­28, 2025, Trondheim, Norway
+
+extended their approach by incorporating an autoencoder architec-             which separates the normal operating period from the abnormal
+ture to identify anomalous metrics associated with the potential              one. Following the detection, BARO applies a z-scoring based on the
+root causes pinpointed by MicroRCA. Brandon et al. [6] propose a              median and IQR. Finally, BARO produces a ranked list of metrics
+system that identifies subgraphs surrounding anomalous nodes. The             based on the maximum of the calculated z-scores determined for
+system employs graph similarity techniques to match the current               each metric independently.
+anomalous subgraph against a library of expert-curated patterns,
+ranking potential root causes according to their similarity scores.           4.4 Comparison
+Micro-HECL [21] identifies root causes of anomalies by using a
+breadth-first search approach, starting with an entry service and             Most existing metric-based RCA methods rely on causal graph
+traversing through anomalous services in the topology graph to                construction or the availability of topology information. In the ab-
+trace the anomaly's propagation. It ranks potential root causes by            sence of reliable topology information, causal graph-based analysis
+calculating the Pearson correlation between the entry service's               has been widely explored. However, many of these approaches
+metrics and each candidate, refining the list of root causes.                 suffer from limited accuracy and poor scalability [32]. With the
+                                                                              introduction of BARO [31], a statistical method was proposed that
+4.2 Causality Graph-Based Analysis                                            outperforms current baselines in terms of precision while offering
+                                                                              mostly superior efficiency. AmocRCA builds directly on BARO and
+A variety of RCA methods have been proposed in the literature,                introduces two key extensions. First, it employs AMOC segmen-
+leveraging causal inference techniques to uncover causal relation-            tation (Section 2.1) to decouple the RCA process from anomaly
+ships and construct causality graphs [8, 9, 13, 19, 20, 22­26, 30, 33,        detection. Second, it incorporates the relative correlation ranking
+40, 43]. These approaches generally assume that root causes exert             (Section 2.3) to reduce the need for a preselected set of metrics. The
+influence over other nodes in the graph. Subsequently, algorithms             latter is particularly important, as most metric-based RCA methods
+such as depth-first search, breadth-first search, random walk, or             rely on feature reduction before application, which can significantly
+PageRank [7] are employed to traverse the graph and identify the              impact both their effectiveness and efficiency [32, 45].
+most likely root causes. More Recent approaches in this category in-
+clude the following: RCD [15] divides the data into smaller subsets           5 Conclusion and Future Work
+and constructs a causality graph for each subset using the -PC [16]
+algorithm. After applying the -PC [16] algorithm to a subset, the             In this paper, we presented an effective and efficient approach for
+F-NODE identifies potential root causes within that subset. These             RCA, building on BARO's method for RCA. We applied AMOC
+candidates are then collected, and the process is iteratively refined         segmentation to segment the observation window for further pro-
+on this set, continually narrowing down the list of potential root            cessing, making the scoring method independent of anomaly detec-
+causes until a predetermined target size is achieved. CIRCA [18]              tion. By introducing the relative correlation ranking, our approach
+constructs a structural graph using information from the system ar-           enhances the effectiveness of the scoring mechanism and reduces
+chitecture and causal assumptions. Root causes are identified using           the dependence on a preselected set of metrics.
+regression-based hypothesis testing, which detects metrics whose
+distributions significantly deviate from their expected normal state.            Through a comprehensive evaluation, we addressed three re-
+These metrics are then ranked by their anomaly scores, with a                 search questions. First, our method was shown to be more effective
+descendant adjustment step prioritizing upstream metrics that are             for RCA than BARO and other baselines in terms of average preci-
+closer to the underlying fault, refining the accuracy of the ranking.         sion, especially when applied to all available metrics. Second, our
+CausalRCA [46] is a method for RCA that utilizes a DAG-GNN [48]               method demonstrates efficiency, with a running time comparable
+to build a weighted metric causality graph. Subsequently, Causal-             to those of N-Sigma and BARO. This makes our method not only ef-
+RCA employs the PageRank [7] algorithm to generate a ranked list              fective but also practical for large-scale, data-intensive applications,
+of potential root causes.                                                     where fault localization has a limited time constraint. Third, our
+                                                                              ablation study highlights the contribution of individual components
+4.3 Statistical Analysis                                                      to our method.
+
+These methods operate independently of graph structures, relying                 Since correlation does not imply causation, we aim to investigate
+instead on statistical methods to evaluate potential root causes.             causal inference methods and explore how they can be integrated
+PAL [28] and FChain [27] utilize the CUSUM (Cumulative Sum) al-               with statistical methods for RCA. We also identify the diversity of
+gorithm and Bootstrap methods to detect change points within the              anomaly types as another critical area of interest. Both AmocRCA
+input metrics. Once change points are identified, they are chrono-            and BARO are particularly effective for level shift anomalies, where
+logically ordered, and the services associated with the earliest de-          the observation window can be clearly divided into two periods.
+tected change points are considered as potential root causes. -               However, other anomaly types, such as periodic anomalies that
+Diagnosis [35] uses threshold-based methods to identify a key point           recur over time or trend anomalies that build up gradually, intro-
+that divides the observation window into the normal and abnormal              duce challenges for segmentation. To address this, we aim to study
+period. It identifies and ranks root causes by applying a two-sample          various anomaly types and develop a taxonomy for complex sys-
+hypothesis test, scoring metrics based on the energy distance cor-            tems, along with an evaluation of the most suitable segmentation
+relation between the normal and abnormal periods. BARO [31]                   methods for each anomaly type.
+employs a multivariate BOCPD [4, 47] to identify a change point,
+                                                                              References
+
+                                                                               [1] 2023. Online Boutique is a cloud-first microservices demo application. https:
+                                                                                    //github.com/GoogleCloudPlatform/microservices-demo. Accessed: February 7,
+
+                                                                        1392
+FSE Companion '25, June 23­28, 2025, Trondheim, Norway                                                                                                            Altenbernd, Zhiyuan, and Kao
+
+      2025.                                                                                     [26] Yuan Meng, Shenglin Zhang, Yongqian Sun, Ruru Zhang, Zhilong Hu, Yiyin
+ [2] 2023. Sock Shop: A Microservice Demo Application. https://microservices-                         Zhang, Chenyang Jia, Zhaogang Wang, and Dan Pei. 2020. Localizing failure
+                                                                                                      root causes in a microservice through causality inference. In 2020 IEEE/ACM 28th
+      demo.github.io/. Accessed: February 7, 2025.                                                    International Symposium on Quality of Service (IWQoS). IEEE, 1­10.
+ [3] 2023. Train TicketA Benchmark Microservice System. https://github.com/
+                                                                                                [27] Hiep Nguyen, Zhiming Shen, Yongmin Tan, and Xiaohui Gu. 2013. Fchain:
+      FudanSELab/train-ticket. Accessed: February 7, 2025.                                            Toward black-box online fault localization for cloud systems. In 2013 IEEE 33rd
+ [4] Ryan Prescott Adams and David JC MacKay. 2007. Bayesian online changepoint                       International Conference on Distributed Computing Systems. IEEE, 21­30.
+
+      detection. arXiv preprint arXiv:0710.3742 (2007).                                         [28] Hiep Nguyen, Yongmin Tan, and Xiaohui Gu. 2011. Pal: Propagation-aware
+ [5] Charles K Assaad, Emilie Devijver, and Eric Gaussier. 2022. Survey and evaluation                a nomaly localization for cloud hosted distributed applications. In Managing
+                                                                                                      large-scale systems via the analysis of system logs and the application of machine
+      of causal discovery methods for time series. Journal of Artificial Intelligence                 learning techniques. 1­8.
+      Research 73 (2022), 767­819.
+ [6] Álvaro Brandón, Marc Solé, Alberto Huélamo, David Solans, María S Pérez,                   [29] Paolo Notaro, Jorge Cardoso, and Michael Gerndt. 2021. A survey of aiops
+      and Victor Muntés-Mulero. 2020. Graph-based root cause analysis for service-                    methods for failure management. ACM Transactions on Intelligent Systems and
+      oriented and microservice architectures. Journal of Systems and Software 159                    Technology (TIST) 12, 6 (2021), 1­45.
+      (2020), 110432.
+ [7] Sergey Brin and Lawrence Page. 1998. The anatomy of a large-scale hypertextual             [30] Yicheng Pan, Meng Ma, Xinrui Jiang, and Ping Wang. 2021. Faster, deeper,
+      web search engine. Computer networks and ISDN systems 30, 1-7 (1998), 107­117.                  easier: crowdsourcing diagnosis of microservice kernel failure from user space.
+ [8] Pengfei Chen, Yong Qi, and Di Hou. 2016. CauseInfer: Automated end-to-end                        In Proceedings of the 30th ACM SIGSOFT International Symposium on Software
+      performance diagnosis with hierarchical causality graph in cloud environment.                   Testing and Analysis. 646­657.
+      IEEE transactions on services computing 12, 2 (2016), 214­230.
+ [9] Pengfei Chen, Yong Qi, Pengfei Zheng, and Di Hou. 2014. Causeinfer: Auto-                  [31] Luan Pham, Huong Ha, and Hongyu Zhang. 2024. BARO: Robust Root Cause
+      matic and distributed performance diagnosis with hierarchical causality graph in                Analysis for Microservices via Multivariate Bayesian Online Change Point Detec-
+      large distributed systems. In IEEE INFOCOM 2014-IEEE Conference on Computer                     tion. Proceedings of the ACM on Software Engineering 1, FSE (2024), 2214­2237.
+      Communications. IEEE, 1887­1895.
+[10] Josu Diaz-De-Arcaya, Ana I Torre-Bastida, Gorka Zárate, Raúl Miñón, and Aitor              [32] Luan Pham, Huong Ha, and Hongyu Zhang. 2024. Root Cause Analysis for
+      Almeida. 2023. A joint study of the challenges, opportunities, and roadmap of                   Microservice System based on Causal Inference: How Far Are We? arXiv preprint
+      mlops and aiops: A systematic survey. Comput. Surveys 56, 4 (2023), 1­30.                       arXiv:2408.13729 (2024).
+[11] Shai Fine, Yoram Singer, and Naftali Tishby. 1998. The hierarchical hidden Markov
+      model: Analysis and applications. Machine learning 32 (1998), 41­62.                      [33] Juan Qiu, Qingfeng Du, Kanglin Yin, Shuang-Li Zhang, and Chongshu Qian. 2020.
+[12] Clive WJ Granger. 1969. Investigating causal relations by econometric models                     A causality mining and knowledge graph based method of root cause diagnosis
+      and cross-spectral methods. Econometrica: journal of the Econometric Society                    for performance anomaly in cloud applications. Applied Sciences 10, 6 (2020),
+      (1969), 424­438.                                                                                2166.
+[13] Zijie Guan, Jinjin Lin, and Pengfei Chen. 2019. On anomaly detection and root
+      cause analysis of microservice systems. In Service-Oriented Computing­ICSOC               [34] Areeg Samir and Claus Pahl. 2019. Dla: Detecting and localizing anomalies
+      2018 Workshops: ADMS, ASOCA, ISYyCC, CloTS, DDBS, and NLS4IoT, Hangzhou,                        in containerized microservice architectures using markov models. In 2019 7th
+      China, November 12­15, 2018, Revised Selected Papers 16. Springer, 465­469.                     International Conference on Future Internet of Things and Cloud (FiCloud). IEEE,
+[14] David V Hinkley. 1970. Inference about the change-point in a sequence of random                  205­213.
+      variables. (1970).
+[15] Azam Ikram, Sarthak Chakraborty, Subrata Mitra, Shiv Saini, Saurabh Bagchi, and            [35] Huasong Shan, Yuan Chen, Haifeng Liu, Yunpeng Zhang, Xiao Xiao, Xiaofeng He,
+      Murat Kocaoglu. 2022. Root cause analysis of failures in microservices through                  Min Li, and Wei Ding. 2019. ?-diagnosis: Unsupervised and real-time diagnosis
+      causal discovery. Advances in Neural Information Processing Systems 35 (2022),                  of small-window long-tail latency in large-scale microservice platforms. In The
+      31158­31170.                                                                                    World Wide Web Conference. 3215­3222.
+[16] Amin Jaber, Murat Kocaoglu, Karthikeyan Shanmugam, and Elias Bareinboim.
+      2020. Causal discovery from soft interventions with unknown targets: Charac-              [36] Jacopo Soldani and Antonio Brogi. 2022. Anomaly detection and failure root cause
+      terization and learning. Advances in neural information processing systems 33                   analysis in (micro) service-based cloud applications: A survey. ACM Computing
+      (2020), 9551­9561.                                                                              Surveys (CSUR) 55, 3 (2022), 1­39.
+[17] Myunghwan Kim, Roshan Sumbaly, and Sam Shah. 2013. Root cause detection
+      in a service-oriented architecture. ACM SIGMETRICS Performance Evaluation                 [37] Peter Spirtes, Clark Glymour, and Richard Scheines. 2001. Causation, prediction,
+      Review 41, 1 (2013), 93­104.                                                                    and search. MIT press.
+[18] Mingjie Li, Zeyan Li, Kanglin Yin, Xiaohui Nie, Wenchi Zhang, Kaixin Sui, and
+      Dan Pei. 2022. Causal inference-based root cause analysis for online service              [38] Jörg Thalheim, Antonio Rodrigues, Istemi Ekin Akkus, Pramod Bhatotia,
+      systems with intervention recognition. In Proceedings of the 28th ACM SIGKDD                    Ruichuan Chen, Bimal Viswanath, Lei Jiao, and Christof Fetzer. 2017. Sieve:
+      Conference on Knowledge Discovery and Data Mining. 3230­3240.                                   Actionable insights from monitored metrics in distributed systems. In Proceedings
+[19] JinJin Lin, Pengfei Chen, and Zibin Zheng. 2018. Microscope: Pinpoint per-                       of the 18th ACM/IFIP/USENIX Middleware Conference. 14­27.
+      formance issues with causal graphs in micro-service environments. In Service-
+      Oriented Computing: 16th International Conference, ICSOC 2018, Hangzhou, China,           [39] Gerrit JJ Van den Burg and Christopher KI Williams. 2020. An evaluation of
+      November 12-15, 2018, Proceedings 16. Springer, 3­20.                                           change point detection algorithms. arXiv preprint arXiv:2003.06222 (2020).
+[20] Weilan Lin, Meng Ma, Disheng Pan, and Ping Wang. 2018. FacGraph: Frequent
+      anomaly correlation graph mining for root cause diagnose in micro-service                 [40] Ping Wang, Jingmin Xu, Meng Ma, Weilan Lin, Disheng Pan, Yuan Wang, and
+      architecture. In 2018 IEEE 37th International Performance Computing and Com-                    Pengfei Chen. 2018. Cloudranger: Root cause identification for cloud native
+      munications Conference (IPCCC). IEEE, 1­8.                                                      systems. In 2018 18th IEEE/ACM International Symposium on Cluster, Cloud and
+[21] Dewei Liu, Chuan He, Xin Peng, Fan Lin, Chenxi Zhang, Shengfang Gong, Ziang                      Grid Computing (CCGRID). IEEE, 492­502.
+      Li, Jiayu Ou, and Zheshun Wu. 2021. Microhecl: High-efficient root cause local-
+      ization in large-scale microservice systems. In 2021 IEEE/ACM 43rd International          [41] Thorsten Wittkopp, Alexander Acker, Sasho Nedelkoski, Jasmin Bogatinovski,
+      Conference on Software Engineering: Software Engineering in Practice (ICSE-SEIP).               Dominik Scheinert, Wu Fan, and Odej Kao. 2021. A2log: attentive augmented
+      IEEE, 338­347.                                                                                  log anomaly detection. arXiv preprint arXiv:2109.09537 (2021).
+[22] Meng Ma, Weilan Lin, Disheng Pan, and Ping Wang. 2019. Ms-rank: Multi-metric
+      and self-adaptive root cause diagnosis for microservice applications. In 2019 IEEE        [42] Li Wu, Jasmin Bogatinovski, Sasho Nedelkoski, Johan Tordsson, and Odej Kao.
+      International Conference on Web Services (ICWS). IEEE, 60­67.                                   2020. Performance diagnosis in cloud microservices using deep learning. In
+[23] Meng Ma, Weilan Lin, Disheng Pan, and Ping Wang. 2020. Self-adaptive root                        International Conference on Service-Oriented Computing. Springer, 85­96.
+      cause diagnosis for large-scale microservice architecture. IEEE Transactions on
+      Services Computing 15, 3 (2020), 1399­1410.                                               [43] Li Wu, Johan Tordsson, Jasmin Bogatinovski, Erik Elmroth, and Odej Kao. 2021.
+[24] Meng Ma, Jingmin Xu, Yuan Wang, Pengfei Chen, Zonghua Zhang, and Ping                            Microdiag: Fine-grained performance diagnosis for microservice systems. In 2021
+      Wang. 2020. Automap: Diagnose your microservice-based web applications                          IEEE/ACM International Workshop on Cloud Intelligence (CloudIntelligence). IEEE,
+      automatically. In Proceedings of The Web Conference 2020. 246­258.                              31­36.
+[25] Leonardo Mariani, Cristina Monni, Mauro Pezzé, Oliviero Riganelli, and Rui
+      Xin. 2018. Localizing faults in cloud systems. In 2018 IEEE 11th International            [44] Li Wu, Johan Tordsson, Erik Elmroth, and Odej Kao. 2020. Microrca: Root cause
+      Conference on Software Testing, Verification and Validation (ICST). IEEE, 262­273.              localization of performance issues in microservices. In NOMS 2020-2020 IEEE/IFIP
+                                                                                                      Network Operations and Management Symposium. IEEE, 1­9.
+
+                                                                                                [45] Li Wu, Johan Tordsson, Erik Elmroth, and Odej Kao. 2021. Causal inference
+                                                                                                      techniques for microservice performance diagnosis: Evaluation and guiding
+                                                                                                      recommendations. In 2021 IEEE International Conference on Autonomic Computing
+                                                                                                      and Self-Organizing Systems (ACSOS). IEEE, 21­30.
+
+                                                                                                [46] Ruyue Xin, Peng Chen, and Zhiming Zhao. 2023. Causalrca: Causal inference
+                                                                                                      based precise fine-grained root cause localization for microservice applications.
+                                                                                                      Journal of Systems and Software 203 (2023), 111724.
+
+                                                                                                [47] Xiang Xuan and Kevin Murphy. 2007. Modeling changing dependency structure
+                                                                                                      in multivariate time series. In Proceedings of the 24th international conference on
+                                                                                                      Machine learning. 1055­1062.
+
+                                                                                                [48] Yue Yu, Jie Chen, Tian Gao, and Mo Yu. 2019. DAG-GNN: DAG structure learning
+                                                                                                      with graph neural networks. In International conference on machine learning.
+                                                                                                      PMLR, 7154­7163.
+
+                                                                                          1393
+

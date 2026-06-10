@@ -1,0 +1,879 @@
+IEEE TRANSACTIONS ON NEURAL NETWORKS AND LEARNING SYSTEMS, VOL. 36, NO. 10, OCTOBER 2025                                                  18983
+
+NetEventCause: Event-Driven Root Cause Analysis
+   for Large Network System Without Topology
+
+Zhaolin Yuan , Long Ma , Wenjia Wei , Xia Zhu , Mingjie Sun , Duxin Chen , and Xiaojuan Ban
+
+   Abstract--Root cause analysis (RCA) is a crucial technique in                  Symbol    NOMENCLATURE
+network systems for uncovering the abnormal nodes that lead to                    M
+the network alarm flood. Within private cloud network systems,                    s       Definition
+the calling chains and topologies among entities, such as hosts,                  ei  s   Candidate set of alarm event types.
+routes, and services, are always incomplete due to nonstandard-                   ki  M   Streaming alarm sequence.
+ized management. Existing topology-free RCA techniques, which                     ti      Alarm event, denoted as ei = (ki, ti).
+rely on the casual discovery, are inapplicable when the scale of                  vk      Type of the event ei.
+the network system is extremely large or the number of triggered                  H(t)    Occurring time of the event ei.
+alarms is sparse. This article proposes NetEventCause (NEC), an                   k(t)    Feature embedding of the event type k.
+event-driven, unsupervised, and nonintrusive RCA algorithm for                    Nk      Historical events occurring before t.
+large network systems, where the network topology is unknown.                             Intensity of event type k at time t.
+NEC learns from historical alarm events to model the occurrences                  T       Count of events with type k occurring as
+of various alarm types using a multivariate neural temporal                       Ai      root events in the training dataset.
+point process (TPP). Based on the conditional intensity predicted                 R^ ei   Total duration of the training dataset.
+by the learned TPP, NEC can identify the root alarms from a                               Contribution vector of event ei.
+cascade of alarm events and locate the causal alarms of derivative                        Inferred causative alarm set of event ei.
+alarms using the attribution method. The experimental section
+evaluates the NEC using both a synthetic event dataset and a                                                I. INTRODUCTION
+large real-world dataset. The real-world dataset is exported from
+the Huawei Shennong Intelligent Maintenance and Operation                         I N CLOUD network systems, failures or anomalies are
+Center (IMOC), a platform deployed at one of China's largest                         frequently raised by network entities, such as devices,
+airports and manages over 200000 entities. Results obtained from                  hosts, and services. These issues are typically represented as
+the two datasets demonstrate that NEC outperforms most state                      frequent alarm events. Due to the strong relations between
+of the art (SOTA) TPP models in modeling alarm events and                         linked network entities, a root alarm usually causes massive
+surpasses general RCA methods in terms of identifying root                        derivative alarms, resulting in an alarm flood for the network
+alarms and recovering transmission chains of anomalies.                           operators. Root cause analysis (RCA) is a crucial technique in
+                                                                                  the field of artificial intelligence for IT operations (AIOps)
+   Index Terms--Artificial intelligence for IT operations (AIOps),                [1], [2]. It aims to determine whether the reported alarm
+attribution method, data stream mining, event modeling.                           events are caused by the entities themselves or by other
+                                                                                  failures. A common challenge of RCA within private cloud
+   Received 3 May 2024; revised 31 October 2024 and 3 April 2025;                 systems is the incomplete calling chains and topologies due
+accepted 19 May 2025. Date of publication 5 June 2025; date of current            to nonstandardized management [3]. This limitation renders
+version 9 October 2025. This work was supported in part by the National           most existing tracing-based RCA techniques inapplicable in
+Science and Technology Major Project of the Ministry of Science and               these scenarios [4].
+Technology of China under Grant 2024ZD0608100; in part by the National
+Natural Science Foundation of China under Grant 62376025, Grant 62306032,            To recover the missed relations between entities, previous
+Grant 62332017, and Grant 62273090; in part by the Zhishan Youth Scholar          studies introduced causal discovery algorithms to recover the
+Program; and in part by Jiangsu Provincial Scientific Research Center of          missed topology. Examples of such algorithms include Peter
+Applied Mathematics under Grant BK20233002. (Corresponding author:                Clark (PC) [5] and Granger causality [6] in time series, as
+Duxin Chen.)                                                                      well as event casual discovery [7], [8]. However, existing
+                                                                                  methods suffer from several challenges in discovering the
+   Zhaolin Yuan is with the Institute of Artificial Intelligence, Shunde Innova-  causality in large network systems. First, a large private
+tion School, University of Science and Technology Beijing, Beijing 100083,        network system may contain tens of thousands of entities and
+China (e-mail: yuanzhaolin@ustb.edu.cn).                                          the dimensions of time series and event type are too high to be
+                                                                                  afforded by most causal discovery algorithms. Meanwhile, the
+   Long Ma, Wenjia Wei, and Xia Zhu are with Huawei Technologies                  number of triggered alarms on the abnormal entities is sparse,
+Company Ltd., Shenzhen 518129, China (e-mail: malong43@huawei.com;                so the inadequate log datasets degrade the accuracy of the
+weiwenjia@huawei.com; zhuxia1@huawei.com).                                        restored topology. Last but not least, most event-based models
+
+   Mingjie Sun is with the School of Computer Science and Technology,
+Soochow University, Suzhou 215006, China.
+
+   Duxin Chen is with the School of Mathematics, Southeast University,
+Nanjing 210096, China (e-mail: chendx@seu.edu.cn).
+
+   Xiaojuan Ban is with Beijing Advanced Innovation Center for Materials
+Genome Engineering, the School of Intelligence Science and Technology,
+and the Key Laboratory of Intelligent Bionic Unmanned Systems, Ministry
+of Education, University of Science and Technology Beijing, Beijing 100083,
+China, and also with the Institute of Materials Intelligent Technology, Liaoning
+Academy of Materials, Shenyang 110004, China (e-mail: banxj@ustb.edu.cn).
+
+   Digital Object Identifier 10.1109/TNNLS.2025.3574316
+
+     2162-237X © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and
+                    similar technologies. Personal use is permitted, but republication/redistribution requires IEEE permission.
+                                      See https://www.ieee.org/publications/rights/index.html for more information.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+18984  IEEE TRANSACTIONS ON NEURAL NETWORKS AND LEARNING SYSTEMS, VOL. 36, NO. 10, OCTOBER 2025
+
+employed in RCA, such as Hawkes process [9], proximal                2) NEC employs a novel continuous-time neural TPP
+graphical event model [7], and semiparametric neural point               model to fit complicated excitation between distinct
+process (SPNPP) [10], have limitations due to their strong               alarm events and integrates the evaluated conditional
+assumptions in the change of event intensities, such as the              intensities from the TPP and the attribution method to
+memoryless property and decaying excitation. Although these              identify root alarms and causative alarms.
+assumptions can simplify the hypothesis space by incorporat-
+ing prior constraints, these assumptions do not hold for the         3) NEC is applied and verified in Huawei Shennong IMOC,
+events in complicated network systems. The time difference               a large network system managing over 200000 entities,
+between a root and its derivative alarm is influenced by various         such as servers, routers, clusters, and containers.
+factors, such as the self-check period and network delay.
+This leads to complex variations in the conditional intensity                              II. RELATED WORK
+function over time, rather than a simple form like the Hawkes
+process.                                                             In most private cloud systems, the calling chains and
+                                                                  topology are usually incomplete because of nonstandardized
+   To tackle the challenges above, this article proposes a novel  management [3]. To recover the missed relations between
+RCA technique, named NetEventCause (NEC), for network             entities, some studies introduce causal discovery algorithms
+systems of arbitrary scale and unknown network topology.          to identify the missed topology. Previous studies represent
+As an unsupervised RCA technique driven by log events,            the alarm events of each entity as a time series, defined as
+NEC is capable of: 1) modeling the Granger causality among        the number of reported alarms in time bins. Temporal causal
+alarm events in the continuous-time domain; 2) distinguishing     discovery, such as PC [5] and Granger causality [6], is further
+between root alarms and derivative alarms from a cascade of       utilized on these multidimensional time series to find the
+alarm events; and 3) inferring the direct causative alarms of     causation relationships between entities. Similarly, the event
+derivative ones, expressed as a directed transmission graph.      model is also employed to estimate the conditional intensity
+                                                                  of alarm events for each entity and assess the mutual excitation
+   To achieve the objectives above, we build an ordinary          between entities [7], which serves as an approximation of
+differential equation-recurrent neural network (ODE-RNN)-         the missed topology. The causal graphs generated by these
+based continuous-time temporal point process (TPP) to learn       methods consist of vertices that represent entities, such as
+the conditional intensity of each alarm type at any timestamp     services or devices, and the directed edges that model the
+given historical alarms. The intensities predicted by neural      propagation of anomalies. The candidate entities that may
+TPP are further utilized to classify whether an alarm is a        potentially induce the root causes are identified by traversing
+root alarm by incorporating the prior intensity of each alarm     the causality graphs using random walk algorithms [13],
+type. To identify the direct causative alarms, we introduce       [14], [15].
+the attribution method, an explainable AI techniques [11],
+[12], to measure the Granger causality from each past alarm          However, existing methods face challenges in discovering
+on the evaluated intensities of new alarms. The experimen-        the event causality in large private cloud network systems.
+tal section evaluates the NEC using both a synthetic event        First, most causal discovery algorithms operate on entities
+dataset and a large real-world dataset. The real-world dataset    and rely on sufficiently frequent triggered alarms to generate
+consists of 125384 alarm events, which are exported from          accurate causality graph between entities [5]. However, the
+the Huawei Shennong Intelligent Maintenance and Operation         number of triggered alarms on the abnormal entities is usually
+Center (IMOC), a platform deployed at one of China's largest      long tail and sparse, so that inadequate training data will
+airports and manages over 200000 entities, but only a few         degrade the accuracy of the restored topology. Additionally,
+thousand nodes have raised alarms. We also create a synthetic     existing techniques cannot handle the cold start scenarios [16].
+event dataset that simulates and simplifies the alarm events      When a new entity raises its first alarm, it is challenging
+in a network system. Results obtained from the two datasets       to analyze the root cause of this alarm due to the lack of
+demonstrate that NEC outperforms most state of the art            mined causal relations between this node and other entities.
+(SOTA) TPP models in modeling alarm events and surpasses          Furthermore, a large network system may contain tens of
+general RCA methods in terms of identifying root alarms and       thousands of entities, making the dimension of time series and
+recovering transmission chains of anomalies.                      event types too high for most causal discovery algorithms to
+                                                                  handle [17]. These challenges motivate us to develop an RCA
+   The contributions are summarized as follows.                   technique that should meet two conditions: 1) applicability in
+                                                                  large network systems without topology and 2) generalizability
+   1) We propose an unsupervised, nonintrusive, and log-          to new entities. By comparing the Granger causal test on time
+       event-driven RCA technique named NEC for large             series of error counts in time bins and graph event models
+       network systems, where topologies are unknown and          [18] in modeling log events, previous studies demonstrate
+       the number of entities is extremely large. The imple-      that the event model yields the best causal graphs [7]. This
+       mentation of the low-barrier NEC is feasible as long       finding inspires us to follow the pipeline of modeling anoma-
+       as historical alarm events with annotated timestamps       lies and analyzing root causes based on the original alarm
+       and event types are available. The source code and a       event sequences. Many existing event models make idealized
+       synthetic dataset for reproduction are published.1         assumptions about the variation of event intensities [19], [20],
+                                                                  [21], [22]. Hawkes process [23] assumes that the excitation
+   1https://github.com/yuanzhaolin/NetEventCause                  between two events gradually decays with the increase of their
+
+       Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+YUAN et al.: NEC: EVENT-DRIVEN RCA FOR LARGE NETWORK SYSTEM WITHOUT TOPOLOGY                                                              18985
+
+                                                                                           TABLE I
+                                                                       EXAMPLE OF FOUR TRIGGERED ALARMS
+
+time difference. Proximal graphical event model [7] assumes              Each alarm ei is either a root alarm or a derivative alarm
+constant conditional intensities in the influential time windows.     of other past causative alarms. We denote the past causative
+As a neural TPP, SPNPP [10] introduces mixed Gaussian                 alarm set of ei as Rei . It is assumed that the recorded triggering
+bases to predict intensities. However, the time difference            timestamps are accurate, and causative alarms always occur
+between a root and its derivative alarm is influenced by various      earlier than their derivative alarms, viz., e j  Rei s.t. t j < ti.
+factors, such as the self-check period and network delay.             Anomaly propagation can occur at multiple levels, meaning
+This leads that the intensity of the actual alarm event in the        that a causative alarm may have its own causative alarm set.
+network system does not adhere to the assumptions made by             This study aims to recover the directed anomaly propagation
+most existing event models. As a key technical contribution,          among alarms, which is represented as a directed acyclic
+NEC models the multivariate TPPs of alarm events using                graph. Specifically, the analysis algorithm focuses on two
+a continuous-time neural network [24], [25], [26] without             objectives: 1) distinguishing root alarms and derivative alarms
+making any assumptions about event intensities.                       and 2) identifying the possible causative alarm set Rei for each
+                                                                      alarm ei.
+                    III. PROBLEM DEFINITION
+                                                                                             IV. NETEVENTCAUSE
+   This section gives the formulation of RCA from the per-
+spective of events. The Nomenclature lists the key notations             The workflow of NEC is illustrated in Fig. 1. The training
+used throughout this article. Taking the studied IMOC dataset         and inference of NEC consists of the following steps.
+as an example, we reserve four key fields for each alarm event:
+alarm type, alarm description, entity type, and timestamp for            1) We first train a neural continuous-time TPP [27] by
+each triggered alarm. Table I illustrates several samples of                 offline alarm dataset to model the multivariate alarm
+alarm logs.                                                                  event sequences in an unsupervised manner.
+
+   A streaming alarm sequence s consists of |s| alarm events             2) Next, by utilizing the conditional intensity predicted
+sorted by occurring timestamp, denoted as {ei = (ti, ki)}|is=|1.             by neural TPP given historical alarms, we estimate the
+For each event, ti  R+ is the normalized timestamp of the                    conditional probability of a new alarm occurring as a
+ith event, and ki  M is the corresponding event type. To                     root alarm.
+achieve two objectives: 1) distinguishing different alarms and
+2) generalizing the learned TPP on new entities with the                 3) Finally, we leverage the differentiability of neural TPP
+same entity type, we define the event type of an alarm ai                    to measure the contribution of past events to subsequent
+as the combination of its alarm type and entity type, viz.,                  alarms using the attribution method, to discover the
+the tuple (ai.at, ai.et). It is carefully considered to combine              Granger causalities between alarms.
+the alarm type and entity type as the event type. An alarm
+occurring in one entity is sometimes caused by a root alarm           A. Modeling Alarm Events as a Multivariate TPP
+from other entities. Since the topology of network entities is
+unknown and many alarms are triggered from new devices,                  We start by introducing NEC from modeling the alarm
+the identity of entities, such as entity name and ID, cannot          event sequences by a continuous-time neural TPP based on
+provide meaningful information for RCA. The only strategy             the encoder-decoder architecture. The purpose of building this
+is to omit the identity and utilize its entity type, alarm type, and  model is to predict the event intensity k(t|H(t)) at any time t
+triggering times to analyze the propagation chain. According          given the historical triggered alarm events H(t). The model is
+to our hypothesis, the occurrences of alarms with the same            trained entirely in an unsupervised manner, obviating the need
+alarm type and entity type usually follow a similar mechanism,        for annotated datasets from IT experts.
+even if they originate from different entities. This assumption
+is also a prerequisite for the effectiveness of NEC.                     In the encoding stage, we first transform each event with
+                                                                      type ki into a feature vector vki = V[ki]. The parameter
+                                                                      dictionary V stores changeable keys and parameters, which
+                                                                      is useful for incremental learning. Next, the hidden state h(t)
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+18986                                                IEEE TRANSACTIONS ON NEURAL NETWORKS AND LEARNING SYSTEMS, VOL. 36, NO. 10, OCTOBER 2025
+
+defined in continuous-time domain is inferred by an ODE-                                                   =           P (c = 0, ei)                  .  (4)
+
+RNN [24]                                                                                                      P (c  =  0, ei) + P (c = 1, ei|H (ti))
+
+          8    ti-  = ODESolve           h ti+-1 , f, ti-1, ti                      We use P(c, ei|condition) to represent the possibility that the
+          ^h                             Z ti                                       event ei identified by c occurs precisely at time ti given
+          ^                                                                         the condition. When c = 0, the condition H(ti) is omitted
+                                                                                    because the probability of a root event occurring is irrelevant
+          ^
+
+          <                  = h ti+-1 + f1 (h (t)) dt
+
+                                                                               (1)
+
+          ^    ti+  = RNN2      h        ti-  ti-1                                  to historical events.
+          ^
+          ^:h                                 , vki
+
+where the derivative net f and the RNN2 are trainable                                  The probability that an event occurs at a specific time ti
+modules. It is important to note that h(ti-) represents the hidden                  can be represented as the probability that the number of event
+state at ti before the event feature at ti is fed into the model.                   occurrences in an infinitesimal time interval [ti, ti + ] is
+The hidden state h(ti+) represents the updated embedding at ti                      greater than zero. This probability is modeled by the Poisson
+after the TPP becomes aware of an event with type ki occurred                       distribution with parameter . Therefore, we have
+at time ti.
+                                                                                         P (N ([ti, ti + t]) > 0) = 1 - e-t                              (5)
+   In the decoding stage, the hidden state h(ti-) is fed to a neu-
+ral network for predicting an intermediate query embedding                          where  is the event intensity at time ti. As the limit theorem
+                                                                                    limx0[1 - e-x] = x holds, we rewrite (4) as
+q(ti). At arbitrary timestamp ti, the logarithmic conditional
+intensity of any event type k is estimated as the dot product                               P (c           =  0|ei, H (ti))  =     ¯ ki  c               (6)
+between the embedding of event-type features (vk) and q(ti)                                                                     ¯ ki +
+
+       log k (ti) = q (ti) ·  (vk) , q (ti) = NN3 h ti- . (2)                       where ¯ ki is a parameter in ¯ = [¯ 1, . . . , ¯ |M|]T , representing
+
+By recursively feeding the features of historical event H(t) into                   the intensity that an event with event type ki occurring as an
+the ODE-RNN, the trained model can predict the conditional                          individual root event and c = ki (ti|H(ti)) - ¯ ki representing
+intensity of event type k at timestamp t, denoted as k(t|H(t)).
+                                                                                    the conditional intensity contributed by historical events. The
+   The neural encoder-decoder model is trained by minimizing                        new introduced parameter ¯ can be estimated by
+the expectation of negative log likelihood (NLL) over all
+sequences in the dataset S                                                          ¯ k  =  arg            max  Nk  log  - T                = Nk         (7)
+                                                                                                                                               T
+                    |s| "                                    tis            #                                
+                                                                         dt
+                  X          - log ksis  tis              Z       ks
+LNLL () = E                                          X
+
+                     sS i=1                   +                       t        (3)  where T represents the total duration of the training dataset,
+                                                                                    and Nk represents the total count of events of type k occurring
+                                                     kM tis-1                       as root events. To estimate Nk, professional IT operators need
+                                                                                    to annotate the root events from a small alarm dataset and
+where  denotes the trainable parameters, viz.,                                      estimate the ratio of root events for each event type. The Nk
+                                                                                    can be estimated by multiplying the ratio of root events in the
+{1, 2, 3, , V}.                                                                     small dataset by the total count of events of type k appearing
+   We go back to Section III where we define the event type as
+                                                                                    in the entire training dataset.
+the combination of the alarm type and entity type. Intuitively,                        We consider the alarm ei as a root alarm if the probability
+
+our definition of event type is improper when two different                         given by (6) exceeds a given threshold . The threshold 
+
+entities belonging to the same entity type simultaneously report                    for determining root alarms is defined as 0.2 to ensure a high
+                                                                                    recall ratio. Obviously, the combination of  and ¯k determines
+alarms with the same alarm type. In this case, two alarm                            the equilibrium between recall ratio and accuracy. From an
+
+events cannot be distinguished by their event types under                           engineering standpoint, it is allowable to modify the prior
+                                                                                    intensity ¯k and the threshold  to achieve a desired recall
+our definition. Due to the learnable statistical characteristics                    ratio, obviating the need for manual annotation of the root
+
+of the time difference between the causative alarms and the                         events, although it will lead the lost of rigorous definition of
+                                                                                    P(c = 0|ei, H(ti)).
+derivative ones with specific entity types in a network system,
+
+not only does our neural TPP learn the excitation between
+
+event types, but also the influence of time difference on
+
+conditional intensity is learned. When entities with the same
+
+et raise alarms with the same at, NEC has awareness in the
+
+time domain to distinguish these alarms.
+
+B. Identifying Root Alarms by Comparing Conditional                                 C. Discovering the Causal Relationships by Attribution
+                                                                                    Method
+Intensity and Prior Intensity
+                                                                                       In this section, inspired by the previous event Granger
+To differentiate between root alarms and derivative alarms                          causality discovery algorithm [10], we introduce the attribu-
+                                                                                    tion method [28], an explainable AI technique to discover
+from streaming alarms, we introduce a latent discrete random                        the causal relationships among events. For any function, the
+variable c  {0, 1}. This variable indicates whether ei is a                         attribution method can evaluate the individual contribution of
+root alarm (c = 0) or a derivative alarm (c = 1). Given                             each input attribute to the output scalar value. Because the
+the historical events H(ti) and the occurrence of event ei at                       conditional intensity has been modeled by the proposed neural
+time ti as conditions, inferring c is equivalent to estimating a                    TPP, it is intuitive to employ the attribution method to identify
+conditional probability                                                             the past events in H(t) that significantly contribute to the
+
+P (c   =  0|ei, H (ti))      =  P (c = 0, ei|H (ti))
+                                   P (ei|H (ti))
+
+       Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+YUAN et al.: NEC: EVENT-DRIVEN RCA FOR LARGE NETWORK SYSTEM WITHOUT TOPOLOGY                                                              18987
+
+occurrences of events at time t. The most contributing past                   Algorithm 1 Training of Neural TPP in NEC
+
+alarms are identified as the causative alarms.                                Input: Event sequences dataset S, initialized parameters 
+                                                                                   and intensity of root events ¯ .
+   Note that we have trained a TPP that can encode the previ-
+ous events H(ti) and predict the conditional event intensity                  Output: Trained parameters .
+k(ti|H(ti)) at timestamp ti. Attribution method takes in a
+function f : Rm  R, an input x  Rm, and a baseline                            1: for each events sequence s  S do
+x  Rm, and measures the contribution of each feature x1im
+to prediction f (x) relative to f (x).                                        2: for each event ei  s with past events H(ti) do
+
+   When we analyze the causes of the event ei, the conditional                3:  Generate a "null" event sequence H(ti) by replacing
+intensity of event ei predicted by neural TPP is regarded as the
+target function f. The input x is defined as the concatenation                    the event embeddings in H(ti) with 0 (Eq. (9)).
+
+of the feature embedding and timestamps of historical events                  4:  for each event type k  M do
+e1 · · · ei, viz.,
+                                                                              5:  Calculate k(ti|H(ti)) and k(ti | H(ti)) (Eq. (2)).
+
+                                                                              6:  end for
+
+                                                                              7: end for
+
+x H (ti) , ti, vki             t1, vk1 , . . . , ti-1, vki-1 , ti, vki . (8)  8: Compute the NLL, LNLL() (Eq. (3)), and the regular-
+                                                                                    ization term Lreg() (Eq. (12)).
+
+                                                                              9: Update parameters  to minimize the total loss
+
+The baseline x is defined to have the same size as x, with the                       LN EC ().
+event embedding substituted as zero vectors                                   10: end for
+
+                                                                              11: return .
+
+x H (ti) , ti, vki t1, 0, . . . , ti-1, 0, ti, vki .     (9)
+
+Thanks to the differentiability of the learned neural TPP, we                 Algorithm 2 Identifying Root Event and Analyzing Causal
+choose integrated gradients (IGs) [29], a classical gradient-
+based attribution method, to generate the contribution vector                 Events
+Ai, which represents the excitation from H(ti) to the occur-
+rence of event ei                                                             Input: Event ei, past events sequence H(ti), neural TPP with
+                                                                                   trained parameters , root event threshold  (default 0.2),
+Ai = IG f , x, x                                                                   intensity of root events ¯ , and size of the candidate set
+
+x-x                       Z1     f (x~)               d  (10)                      K.
+                                 x~      
+                            0                                                 Output: Type of ei, list of causal events
+                                         x~ =x+(x-x)                           1: Infer the conditional intensity ki (ti|H(ti)) (Eq. (2)).
+                                                                               2: Estimate the probability P(c = 0|ei, H(ti)) that ei is a root
+where is the Hadamard product and f (x~) = log ki (ti | H~ ) is                     event, given ¯ ki (Eqn. (6)).
+solved by (2) given H~ = H(ti) + (H(ti) - H(ti)). We consider                  3: if P(c = 0|ei, H(ti))   then
+the scalar value Ai( j) ( j < i), which represents the contribution
+from the event embedding vkj in x, as the score for identifying                4: return type: Root, []
+e j as a causative event of the alarm event ei. Finally, NEC
+identifies the top-K causative alarms and the rth (1  r  K)                    5: else
+                                                                               6: Compute the contribution vector Ai  R|H(ti)| (Eq. (10))
+possible causative alarm is determined as                                      7: Identify the causal events R^ ei from H(ti) that have the
+
+                       2                         3                                    top-K contributions in Ai.
+                                                                               8: return type: Derivative, [R^ ei [1], . . . , R^ ei [K]]
+
+                                                                               9: end if
+
+                          i-1
+
+R^ ei [r] = e j, s.t.    X     Ai ( j)  Ai ( j)  5 = r.  (11)
+                       4I
+
+                          j=1                                                 D. Summary of NEC
+
+The identified top-K causative alarm sets of two alarms may                      Algorithms 1 and 2 provide the pseudocode for the training
+interact with each other. The intersecting ones are the common                and utilizing the trained neural TPP to identify root events
+roots of the two derivative alarms. If the actual cause of an                 and causal events, respectively. The time complexity of two
+alarm is a combination of multiple alarms, all of them will                   algorithms is analyzed as follows. Without loss of generality,
+appear in the top-K set and receive higher contribution scores.               we assume the length of each event sequence as N and the
+                                                                              times invoking the differential network f1 in solving the
+   Because the chosen baseline x has never appeared in the                    numerical approximation of integration from ti-1 to ti as K. For
+training dataset, the predicted ki (ti | H~ ) may be meaningless.             instance, K = 4 is used in the Runge-Kutta method, whereas
+Therefore, we introduce regularization to ensure that the                     K is adaptive in our experiments where the Dormand-Prince
+predicted intensities, given null events at t1 · · · ti-1, are close          solver is employed. It is noted that K is considered a constant
+to the prior intensities of each event type, as mentioned in                  variable in our analyses. For each event sequence, solving the
+Section IV-B                                                                  NLL in Algorithm 1 requires O(NK|M|) invocations of (t),
+                                                                              which dominate the overall time consumption. It only requires
+S |s|                                                                         a single feed-forward pass on the ODE-RNN to solve for all
+                                                                              hidden states and conditional intensities at each time step,
+Lreg () = X X X k ti | H (ti) - ¯ k2.                    (12)                 resulting in the operation cost of O(1) for calling (t). In the
+                                                                              stage of identifying root events and causes, it costs O(1) to
+s=1 i=1 kM                                                                    determine whether an event is a root based on (6).
+
+Along with (3), the integrated optimized loss function is
+defined as follows:
+
+LNEC () = LNLL () + Lreg () .                            (13)
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+18988                              IEEE TRANSACTIONS ON NEURAL NETWORKS AND LEARNING SYSTEMS, VOL. 36, NO. 10, OCTOBER 2025
+
+Fig. 1. Overall structure of NEC.
+
+   Regarding locating causal events of derivative events, the       Fig. 2. Frequency distribution histogram of the number of alarms that one
+dominant cost arises from (10), where the contribution vector       entity ever reported in the dataset.
+is individually computed for each event. The computation cost
+of calculating partial derivative ( f /x~) is equal to a feed-      reported from 3634 entities. Fig. 2 illustrates the log-scale
+forward pass over the entire event sequence, incorporating both     frequency distribution of the number of alarms that one entity
+(1) and (2), and is denoted as O(NK). Assuming the number           ever reported. The number of alarms reported by each entity
+of steps for solving the integration in (10) as K , the total time  follows a long-tail distribution, with the majority of entities
+complexity of identifying the causal event set from past events     reporting only a few alarms. Among all entities, approximately
+H(ti) is O(NKK ). Consequently, the complexity of RCA for           one-third of them reported only one alarm. By considering the
+the entire event sequence is O(N2KK ).                              combination of entity type and alarm type as the event type for
+                                                                    learning TPP, all alarms are categorized into 518 event types,
+   Due to the short triggering separation between causal events     which is significantly smaller than the count of entities.
+and derivative events in network systems, there are usually not
+many events located between two relational events. Therefore,          In the training stage of the TPP, we randomly select
+the length N is defined based on the maximum possible               10 000 event sequences from the alarm database spanning
+transmission time from the root to the derivative. In our real-     from January 2021 to December 2022. These sequences are
+world application, N is very small (less than 20) and the           used to train and evaluate the neural TPP in Experiment 1.
+speed of RCA for each event is significantly faster than the        To construct an event sequence that can be fed into the neural
+generation of new alarms.                                           TPP, we sample a starting alarm, denoted as s, from all the
+                                                                    sorted alarm events. Subsequently, we search for the farthest
+                          V. EXPERIMENTS                            alarm event, denoted as e, satisfying that the time difference
+                                                                    between s and e is less than 24 h. The timestamps and event
+   This section conducts separate evaluations of NEC using          types of events that occurred between s and e are utilized to
+both a synthetic event dataset and a large real-world dataset.      construct each event tuple ei = (ti, ki). Finally, 60% of the
+Two research questions will be answered.                            10 000 sequences are reserved for model training, 20% are
+                                                                    used for model evaluation, and the remaining 20% is the test
+   1) Does the proposed continuous-time neural TPP effec-           dataset.
+       tively fit the alarm event sequences?
+                                                                       In the stage on evaluating the accuracy of RCA, we use
+   2) How accurate is the NEC in identifying root alarms and        the event log from January 2023 to May 2023 as the detected
+       locating the causative alarms of derivative alarms?          alarm sequences, which are not visible during the training pro-
+                                                                    cess. The ground truths of true causative alarms for each alarm
+A. Introduction to the Datasets                                     ei, denoted as Rei , are manually annotated by domain experts.
+                                                                    Due to the streaming nature of triggered alarms, the event
+   1) IMOC Dataset: The real-world dataset is exported from         model learned by NEC cannot be directly applied to extremely
+the Huawei Shennong IMOC system from January 2021 to
+May 2023. The IMOC is deployed in one of China's biggest
+airports and it manages about 200 000 entities, including
+network devices, containers, and microservices. The prepro-
+cessing of the IMOC dataset consists of two steps: alarm
+filtering and alarm compression. We initially removed alarm
+types with low frequencies, those with fewer than five events.
+Next, the repeated alarms triggered by an identical entity
+simultaneously are compressed by a designed filtering strategy.
+Finally, the reserved dataset includes 125 384 alarm events
+
+       Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+YUAN et al.: NEC: EVENT-DRIVEN RCA FOR LARGE NETWORK SYSTEM WITHOUT TOPOLOGY                                                                       18989
+
+Fig. 3. Event intensity of each event type varies with the time difference t.  to identify the correct causative of D when many events with
+The symbols in the parenthesis represent the causative event types.            types A, C, and D are mixed.
+
+                                         TABLE II                                 Given the functions of event intensities, we employ Ogata's
+             DERIVATIVE RELATIONSHIP BETWEEN EVENT TYPES                       thinning algorithm [30] to simulate the multivariate point
+                                                                               process sequences. A total of 1000 sequences are generated,
+                             IN THE SYNTHETIC DATASET                          with each sequence having an average length of approximately
+                                                                               100. The sequences are divided into three parts: 700 for
+long event sequences due to memory limitations. Therefore,                     training, 100 for validation, and 200 for testing.
+we introduce a sliding window approach to detect root alarms
+and locate causative alarms in a cascading sequence of alarms.                    Although the synthetic dataset is not as large as the IMOC in
+A sliding window of size W is applied to the original sequence                 the number of event types, it effectively imitates three primary
+of alarms, with a moving distance of d (d W). At each                          challenges of event-level causality analysis.
+step of the sliding window, the alarms within the window are
+inputted into the detection module, and the detected results                      1) The conditional intensity of each event type given his-
+from the last range of d are retained.                                                tory is not simply decaying with time, as demonstrated
+                                                                                      in Fig. 3.
+   2) Synthetic Dataset: To evaluate the performance of NEC
+on a dataset that can be made public, we create a synthetic                       2) Events with the same event type may occur simultane-
+event dataset that simulates alarm events in a network system.                        ously, but they were reported from different entities and
+The synthetic event dataset consists of five different event                          have different root alarms.
+types, marked as A-E. The event types A and E are root
+event types with intensities determined by the constant values                    3) A specific event type may occur as either a root event
+specified by parameter B. The other three event types B-D                             or a derivative event.
+may occur as root events or derivative events resulting from
+previous root events. The excitation from a causative event                    We, therefore, suggest experiments on the synthetic dataset are
+type ki to a derivative event type k j is modeled using a scaled               reasonable and sufficient to support the effectiveness of NEC
+probability density function of the gamma distribution                         in tacking the challenges in IMOC.
+
+         cki,k j  (t)  =  8     t-1e-t ,  t <= W         (14)                  B. Experiment 1: Evaluating Neural TPP
+                          <r         ()
+                                                                                  1) Baselines: We compare NEC to the following baselines
+                          :0,             t>W                                  in fitting alarm events.
+
+where t denotes the time elapsed since the occurrence of                          1) SPNPP [10] and recurrent point process network
+                                                                                      (RPPN) [31] are two state-of-the-art TPP models imple-
+the causative event. The derivative relationships among each                          mented with neural network. The implementation details
+                                                                                      and hyperparameters adhere to the settings in the origi-
+event type and the parameters of each conditional intensity                           nal articles.
+
+function are illustrated in Table II. We also illustrate the curve                2) HEXP, HSG, and NHPC [9]: Hawkes process with
+                                                                                      exponential kernels, Gaussian kernels, and nonpara-
+of event intensities as they change with the time difference t                        metric Hawkes process. These three statistics-based
+                                                                                      methods serve as common baselines in temporal event
+in Fig. 3. The total intensity of each event type k at time t                         modeling.
+
+is k(t)                       X                                                   2) Experimental Setting: The ODE functions defined with
+                                                                               the derivative net f in (1) and the NLL in (3) are solved
+                  k (t) =           cki,k (t - ti) + B.  (15)                  by the Dopri5 solver in torchdiffeq package [32]. It is a
+                                                                               numerical differential equation solver based on the PyTorch
+                           ei H(t)                                             framework. In terms of the hyperparameter setting, the hidden
+                                                                               size of trained event feature vk for each event type k is 64.
+The experimental task is to detect the root events, which occur                The derivative net f is defined as a single-layer multilayer
+due to their base intensity, and to identify the sole causative                perceptron (MLP) whose hidden size is 32. In the decoder
+event for each derivative event. Specifically, both A and C                    model, both embedding functions  and NN are also single-
+are causative event types of event type D. It is challenging                   layer MLPs, whose hidden size and output size are all 64. All
+                                                                               activation functions in every neural network are tanh(·). The
+                                                                               model is trained by minimizing the expected NLL and the
+                                                                               regularization terms over sequences in dataset. The maximal
+                                                                               training epoch is 500 and the training process will also be early
+                                                                               stopped if the NLL on validation does not decrease for 50
+                                                                               epochs. Adam is chosen as the optimizer whose learning rate
+                                                                               is 1e-3. It took approximately 3 h to train the TPP on a GPU
+                                                                               station equipped with an Intel Xeon Silver 4310 processor and
+                                                                               a GeForce RTX 3090 with 16-GB memory.
+
+                                                                                  3) Evaluation Metrics: We select two metrics to evaluate
+                                                                               the event models in fitting alarm datasets. The first metric,
+
+         Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+18990  IEEE TRANSACTIONS ON NEURAL NETWORKS AND LEARNING SYSTEMS, VOL. 36, NO. 10, OCTOBER 2025
+
+                                                                                RCA community [5], [13]. For an alarm set A whose causative
+                                                                                alarms are manually annotated in advance, ACC@k is defined
+                                                                                as follows:
+
+                                                                                       =  1    X     P        R^ ei  [r]    Rei  .
+                                                                                          |A|
+                                                                                ACC@k                    1rk                                     (16)
+
+                                                                                               ei A  min (k, |Rei |)
+
+Fig. 4. Training and evaluation losses over epochs.                             Generally, recall is more important than the accuracy in
+                                                                                AIOps. This is because engineers can take relatively low cost
+Fig. 5. NLLs and accuracies on a test dataset of various trained event models.  to verify if a diagnosis from intelligent algorithms is a false
+(a) NLL. (b) Accuracy.                                                          positive sample. In the chosen evaluation metric equation (16),
+                                                                                the size of causative alarm set, |Rei |, is typically equal to 1,
+NLL, assesses the accuracy of predicted conditional intensity                   indicating ACC@k represents the average recall when the
+on the test dataset. Meanwhile, we use the model to predict                     model makes k guesses.
+the category of the event that occurred at ti given the historical
+events sequence before ti. Accuracy of the predicted event type                    2) Baselines: Since the real topology is unknown and the
+is the second metric for evaluation.                                            number of entities is extremely large, most existing RCA algo-
+                                                                                rithms are disabled in this scenario. Therefore, we construct
+   4) Results: Fig. 4 illustrates the NLL losses and the classi-                the following methods as baselines.
+fication accuracy on the training dataset and the validation
+dataset during the training process. As the curves of the                             a) SPNPP + Attribution (SPNPP + A): As an approx-
+training dataset and validation dataset are close to each other,                imation of NEC, we replace the NEC's neural TPP as the
+it demonstrates that the proposed event model fits the temporal                 SPNPP, introduced in experiment 1. The method for identify-
+event intensities indeed. Fig. 5 shows the comparison of the                    ing root alarms and causative alarms is consistent with NEC.
+proposed TPP model and baselines by visualizing the two                         The comparison between SPNPP + A and NEC is informative
+evaluation metrics on the test dataset of IMOC. We find                         to demonstrate the advantage of the proposed ODE-RNN-
+the model's performance is robust under different random                        based TPP model.
+seeds for model initialization. Our neural continuous-time
+TPP model outperforms the baselines across both metrics.                              b) Frequency Item Set [33]: As the most common RCA
+This outcome verifies that the unrestricted ODE-RNN is                          method, the approach discovers the association rules between
+better suited for fitting complicated time-varying intensities,                 different alarm types using frequent item-set mining. Since fre-
+particularly under the excitation among multiple alarm event                    quency item set (FIS) only identifies the associations between
+types in network systems. A lower NLL also indicates that                       event types rather than specific events, we define the kth
+our model accurately predicts higher intensity for the correct                  nearest alarm with the causative alarm type as the located kth
+event type at the time points when the alarms occur. This is a                  possible causative alarm.
+critical prerequisite for analyzing the causality between events
+accurately.                                                                           c) Peter Clark: Following the MonitorRank [13], we
+                                                                                construct time bins of 5 min and count the number of alarms
+C. Experiment 2: Evaluation of Identifying Root Alarms and                      within each bin. This process allows us to generate a time
+Locating Derivative Alarms                                                      series of alarm counts for each event type. Next, we introduce
+                                                                                the improved PC [5], which is a causal discovery algorithm
+   The second experiment investigates the effectiveness of                      based on conditional independence tests, for identifying the
+NEC in identifying root alarms from a mixture of streaming                      sparse causality between different event types. Similar to
+alarms and locating the causative alarms of each derivative                     the FIS, the generated causal graph describes the causality
+alarm.                                                                          between event types and we adopt the identical method to
+                                                                                quantify the probability that the previous one contributes to
+   1) Evaluation Metrics: Since finding root alarms is a binary                 the occurrence of the later one.
+classification problem, we use the AUC, the area under the
+receiver operating characteristic (ROC) curve, to evaluate the                        d) Cause: In addition to the PC algorithm, we also intro-
+performance of identifying root alarms.                                         duce the CAUSE [10], an event Granger causality discovery
+                                                                                algorithm, to generate a causality matrix. When the excitation
+   In terms of locating causative alarms, the accuracy is                       from event type ki to k j exceeds 10% of the accumulative
+measured as the ACC@k metric, which is widely used in the                       excitation to type k j, their causative relationship is reserved as
+                                                                                a direct edge in the constructed causal graph.
+
+                                                                                      e) Random Guess: Random guess (RG) represents the
+                                                                                random selection of causative alarms from past alarms within a
+                                                                                specific time window. As a lower bound for the task of locating
+                                                                                causative alarms, the accuracy of RG indicates the ratio of
+                                                                                correct causative alarms to the total number of candidate
+                                                                                alarms within the detected window.
+
+                                                                                   3) Results: In Table III, the column with the head AUC
+                                                                                illustrates that NEC shows the best AUC value (0.843), in iden-
+                                                                                tifying root alarms from mixed alarms of the IMOC dataset.
+                                                                                Results obtained from the synthetic dataset also demonstrate
+
+       Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+YUAN et al.: NEC: EVENT-DRIVEN RCA FOR LARGE NETWORK SYSTEM WITHOUT TOPOLOGY                                                              18991
+
+                                        TABLE III
+      COMPARISON OF NEC AND BASELINES ON THE IMOC DATASET
+
+                                                                  Fig. 6. Relationship between the time consumption and accuracy in RCA.
+
+                                      TABLE IV
+COMPARISON OF NEC AND BASELINES ON THE SYNTHETIC DATASET
+
+a performance gap between NEC and the baselines, as shown         Fig. 7. Visualization of detected causative alarms compared with the ground
+in Table IV. The AUC values of feature importance curve           truth. (a) Ground-truth causative alarms. (b) NEC (ours). (c) CAUSE.
+(FIC), PC, and CAUSE, which generate causal graphs at the
+event-type level, are noticeably lower than the two NEC-based     In the ablation study, therefore, we use the synthetic dataset
+methods working at the event level. The reason is that the        to conduct an ablation study investigating how the number
+static causal graph only models the causality between event       of steps influences the accuracy and time consumption in
+types, instead of the causality between specific events. If       identifying causal events.
+two alarms occurred successively where their event types are
+causally correlated but the alarms themselves are irrelevant, a      As shown in Fig. 6, the number of steps, K , were varied
+method based on a static graph of event types will mistakenly     at 3, 5, 10, 20, and 30, with ACC@2, ACC@4, and time
+identify the former alarm as the causative event of the latter    visualized under different step sizes. The results demonstrate
+alarm. NEC addresses this problem by directly modeling            that the accuracies are still applicable with fewer steps, even
+the conditional intensity at the event level, rather than the     when the K is reduced to three. The time increases linearly
+event-type level. The AUC value slightly decreases when the       with the number of steps, whereas the improvements in accu-
+ODE-RNN in NEC is replaced with SPNPP. This further               racy almost cease when the step size exceeds 20. It concludes
+confirms the finding from experiment 1, demonstrating that        that the accuracy of locating causal events is highly robust with
+the proposed ODE-RNN-based TPP outperforms the baselines          respect to both step size and the precision of the integration
+in terms of the goodness-of-fit of alarm events. Therefore, our   solution. In practice, reducing the number of steps can achieve
+model can estimate a more accurate conditional probability        faster detection speeds without significantly compromising
+that an alarm is a root event.                                    accuracy.
+
+   In the evaluation of locating causative alarms, we compare
+the identified R^ ei with the ground truth Rei annotated by
+experts. The columns ACC@1­ACC@4 in Tables III and IV
+illustrate the results. In general, NEC outperforms the baseline
+methods based on the static event-type graph, as well as the
+combination of other event models and attribution methods. As
+a sequence-specific analysis method, not only does NEC utilize
+the information from event types, but the time differences
+between multiple alarms are critical features to quantify the
+contributions between events.
+
+D. Balancing Time Cost and Accuracy in RCA
+
+   As analyzed in Section IV-D, the time complexity of
+NEC for analyzing the causes of an event is O(NKK ). The
+parameter K is adjustable, allowing control over the accuracy
+and time required for solving the integration equation (10).
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+18992  IEEE TRANSACTIONS ON NEURAL NETWORKS AND LEARNING SYSTEMS, VOL. 36, NO. 10, OCTOBER 2025
+
+E. Case Analysis                                                     exported from the Huawei Shennong IMOC and compare
+
+   Fig. 7 visualizes a representative example of the detected        NEC with existing event models and RCA methods. The
+causative alarms and the corresponding ground truth. Each
+kind of marker with a specific color and geometrical shape           experimental results indicate that the proposed ODE-RNN-
+corresponds to an event type. In Fig. 7(b) and (c), the directed
+arcs between alarms represent the discovered causality with the      based neural TPP outperforms the existing SOTA neural TPPs
+highest attribution score. The arcs that are correctly identified,
+as compared to the ground-truth association in Fig. 7(a), are        in the goodness-of-fit of modeling alarm events. Meanwhile,
+marked in green. Conversely, the arcs that incorrectly identify
+the causality are marked in red. and the wrong ones are marked       NEC shows excellent accuracies in identifying root alarms
+in red. Alarms that are not connected by any arcs are identified     (AUC =0.843) and finding causative alarms (ACC@3 = 42.6%
+or annotated as root alarms. The entity name of each alarm is        and ACC@4 = 61.2%).
+displayed under the timeline. As the entities IMGU(xx.96) and
+IMGU(xx.19) raise multiple alarms, we mark these two names              The accuracy of NEC is currently limited because it only
+with specific colors. From Fig. 7(a), we observe that two root
+alarms originating from two image processing units (IMGUs)           utilizes the information on timestamps and event types. In par-
+lead to the occurrences of two derivative alarms within their        ticular, NEC is ineffective when it encounters new alarm types.
+own entities as well as three other derivative alarms in other       The only available solution for the current NEC is to allocate
+entities, including two cluster management units (CMUs) and
+one operation management unit (OMU).                                 an initial embedding for the new type and subsequently fine-
+
+   In Fig. 7(c), CAUSE incorrectly identified the second "black      tuning the event embedding through the observation of future
+circle" as the cause of the first "blue star" even though
+these two alarms are not causally related. The reason for            event sequences that include this type of event. In future
+this mistake is that methods based on static causal graphs
+of event types cannot effectively utilize the information from       research, we aim to overcome this bottleneck by incorporating
+the timestamps when multiple alarms occur. Because the time
+differences between causative alarms and derivative alarms           additional modalities. For instance, the alarm logs, expressed
+belonging to specific event types are relatively stable, NEC
+leverages this property by incorporating the timestamp of each       in text, can be employed to generate event embeddings through
+alarm as a critical feature that significantly influences the
+predicted conditional intensity of the analyzed alarm. When          the application of language encoders, such as BERT [34], [35].
+NEC analyzes the causative alarms of the first "blue star," the
+attribution method not only effectively identifies the "black        The time-series metric of each device, such as CPU utilization
+circle" as the most probable causative alarm type, but also
+infers the first "black circle" is the most significant contributor  rate and time delay, are also useful to infer the prior granger
+in the time domain. NEC can distinguish alarms with the
+same types originating from different entities and accurately        casual graph between entities [5].
+identify the causative alarms of IMGUs and CMUs, where the
+CAUSE method sometimes fails. As an unsupervised RCA                                              REFERENCES
+technique, NEC only utilizes the information from triggering
+timestamp and event type to detect root causes. This ability         [1] J. Soldani and A. Brogi, "Anomaly detection and failure root cause
+is crucial for generalizing the technique to other private cloud           analysis in (micro) service-based cloud applications: A survey," ACM
+systems without the need for manual annotations and network                Comput. Surv., vol. 55, no. 3, pp. 1­39, Feb. 2022.
+topology.
+                                                                     [2] Y. Dang, Q. Lin, and P. Huang, "AIOps: Real-world challenges and
+                          VI. CONCLUSION                                   research innovations," in Proc. IEEE/ACM 41st Int. Conf. Softw. Eng.,
+                                                                           Companion Proc. (ICSE-Companion), May 2019, pp. 4­5.
+   This article proposes the NEC for RCA in large network
+systems, where the topology among devices and services is            [3] P. Wang et al., "CloudRanger: Root cause identification for cloud
+unknown. As a nonintrusive and unsupervised log-event-based                native systems," in Proc. 18th IEEE/ACM Int. Symp. Clust. Cloud Grid
+RCA technique, NEC utilizes an ODE-RNN as a backbone                       Comput., Aug. 2018, pp. 492­502.
+to model the occurrences of temporal alarm events as a
+multivariate TPP. The trained TPP can evaluate the conditional       [4] A´ . Brando´n, M. Sole´, A. Hue´lamo, D. Solans, M. S. Pe´rez, and
+intensities of each alarm given the alarms occurred previously.            V. Munte´s-Mulero, "Graph-based root cause analysis for service-oriented
+The predicted intensities are employed to identify the root                and microservice architectures," J. Syst. Softw., vol. 159, Jan. 2020, Art.
+alarms by Bayesian inference and local causative alarms by                 no. 110432.
+attribution method. We evaluate the performance of NEC
+using a synthetic dataset and a real alarm event dataset             [5] Y. Meng et al., "Localizing failure root causes in a microser-
+                                                                           vice through causality inference," in Proc. IEEE/ACM 28th Int.
+                                                                           Symp. Quality Serv. (IWQoS), Sep. 2020, pp. 1­10, doi: 10.1109/
+                                                                           IWQoS49365.2020.9213058.
+
+                                                                     [6] Y. Liu, H.-S. Chen, H. Wu, Y. Dai, Y. Yao, and Z. Yan,
+                                                                           "Simplified Granger causality map for data-driven root cause diagno-
+                                                                           sis of process disturbances," J. Process Control, vol. 95, pp. 45­54,
+                                                                           Nov. 2020.
+
+                                                                     [7] V. Arya, K. Shanmugam, P. Aggarwal, Q. Wang, P. Mohapatra, and
+                                                                           S. Nagar, "Evaluation of causal inference techniques for AIOps," in
+                                                                           Proc. 3rd ACM India Joint Int. Conf. Data Sci. Manage. Data (8th
+                                                                           ACM IKDD CODS 26th COMAD), Jan. 2021, pp. 188­192.
+
+                                                                     [8] J. Qiao, R. Cai, S. Wu, Y. Xiang, K. Zhang, and Z. Hao, "Structural
+                                                                           Hawkes processes for learning causal structure from discrete-time event
+                                                                           sequences," in Proc. 32nd Int. Joint Conf. Artif. Intell., Aug. 2023,
+                                                                           pp. 5702­5710.
+
+                                                                     [9] A. G. Hawkes, "Spectra of some self-exciting and mutually
+                                                                           exciting point processes," Biometrika, vol. 58, pp. 83­90,
+                                                                           Apr. 1971.
+
+                                                                     [10] W. Zhang, T. K. Panum, S. Jha, P. Chalasani, and D. Page, "CAUSE:
+                                                                           Learning Granger causality from event sequences using attribution
+                                                                           methods," in Proc. 37th Int. Conf. Mach. Learn., vol. 119, Jan. 2020,
+                                                                           pp. 11235­11245.
+
+                                                                     [11] P. Linardatos, V. Papastefanopoulos, and S. Kotsiantis, "Explainable
+                                                                           AI: A review of machine learning interpretability methods," Entropy,
+                                                                           vol. 23, no. 1, p. 18, 2020.
+
+                                                                     [12] C. Chen et al., "BALANCE: Bayesian linear attribution for root cause
+                                                                           localization," Proc. ACM Manage. Data, vol. 1, no. 1, pp. 1­26, May
+                                                                           2023.
+
+                                                                     [13] M. Kim, R. Sumbaly, and S. Shah, "Root cause detection in a service-
+                                                                           oriented architecture," in Proc. ACM SIGMETRICS/Int. Conf. Meas.
+                                                                           Model. Comput. Syst., Jun. 2013, pp. 93­104.
+
+       Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+YUAN et al.: NEC: EVENT-DRIVEN RCA FOR LARGE NETWORK SYSTEM WITHOUT TOPOLOGY                                                              18993
+
+[14] D. Wang, Z. Chen, Y. Fu, Y. Liu, and H. Chen, "Incremental                                                  Zhaolin Yuan received the Ph.D. degree in com-
+      causal graph learning for online root cause analysis," in Proc. 29th                                       puter science from the University of Science and
+      ACM SIGKDD Conf. Knowl. Discovery Data Mining, Aug. 2023,                                                  Technology Beijing, Beijing, China, in 2023.
+      pp. 2269­2278.
+                                                                                                                    He is currently an Associate Professor with
+[15] M. Li et al., "Causal inference-based root cause analysis for                                               the Institute of Artificial Intelligence, University
+      online service systems with intervention recognition," in Proc. 28th                                       of Science and Technology Beijing. He has con-
+      ACM SIGKDD Conf. Knowl. Discovery Data Mining, Aug. 2022,                                                  ducted research projects in the field of artificial
+      pp. 3230­3240.                                                                                             intelligence (AI) for network modeling, smart man-
+                                                                                                                 ufacturing and mining with substantial government,
+[16] M. Grbovic, W. Li, N. A. Subrahmanya, A. K. Usadi, and S. Vucetic,                                          and industrial grants. He has published more than
+      "Cold start approach for data-driven fault detection," IEEE Trans. Ind.                                    ten articles in top AI conferences including AAAI
+      Informat., vol. 9, no. 4, pp. 2264­2273, Nov. 2013.                         and leading international journals including IEEE TRANSACTIONS ON
+                                                                                  NEURAL NETWORKS AND LEARNING SYSTEMS, IEEE TRANSACTIONS
+[17] Z. Hao, H. Zhang, R. Cai, W. Wen, and Z. Li, "Causal discovery               ON INDUSTRIAL INFORMATICS, IEEE/CAA JOURNAL OF AUTOMATICA
+      on high dimensional data," Appl. Intell., vol. 42, no. 3, pp. 594­607,      SINICA, Acta Automatica Sinica, and Tunnelling and Underground Space
+      Apr. 2015.                                                                  Technology. He has also obtained dozens of patents and copyrights. His
+                                                                                  research interests include AI for IT operations (AIOps), intelligent manu-
+[18] D. Bhattacharjya, D. Subramanian, and T. Gao, "Proximal graphical            facturing, AI in fashion, industrial system optimization, and model-based
+      event models," in Proc. Adv. Neural Inf. Process. Syst., vol. 31, Jan.      reinforcement learning.
+      2018, pp. 8136­8145.
+                                                                                                                 Long Ma received the Ph.D. degree in com-
+[19] O. Shchur, A. C. Tu¨rkmen, T. Januschowski, and S. Gu¨nnemann,                                              puter science from Delft University of Technology
+      "Neural temporal point processes: A review," in Proc. 30th Int. Joint                                      (TU Delft), Delft, The Netherlands, in 2022.
+      Conf. Artif. Intell., Aug. 2021, pp. 4585­4593.
+                                                                                                                    He is currently a Research Engineer with Huawei
+[20] J. Yu, Y. Lee, K. C. Yow, M. Jeon, and W. Pedrycz, "Abnormal                                                Technologies Company Ltd., Shenzhen, China.
+      event detection and localization via adversarial event prediction,"                                        His main interests include network modeling and
+      IEEE Trans. Neural Netw. Learn. Syst., vol. 33, no. 8, pp. 3572­3586,                                      prediction.
+      Aug. 2022.
+                                                                                                                 Wenjia Wei received the Ph.D. degree in infor-
+[21] P. Chapfuwa et al., "Calibration and uncertainty in neural time-to-                                         mation and communication engineering from the
+      event modeling," IEEE Trans. Neural Netw. Learn. Syst., vol. 34, no. 4,                                    University of Science and Technology of China
+      pp. 1666­1680, Apr. 2023.                                                                                  (USTC), Hefei, China, in 2020.
+
+[22] W. Wu, H. Liu, X. Zhang, Y. Liu, and H. Zha, "Modeling                                                         He is currently a Research Engineer with Huawei
+      event propagation via graph biased temporal point process," IEEE                                           Technologies Company Ltd., Shenzhen, China.
+      Trans. Neural Netw. Learn. Syst., vol. 34, no. 4, pp. 1681­1691,                                           His main interests include network modeling and
+      Apr. 2023.                                                                                                 simulation.
+
+[23] H. Mei and J. Eisner, "The neural Hawkes process: A neurally self-                                          Xia Zhu received the Ph.D. degree in computer
+      modulating multivariate point process," in Proc. Adv. Neural Inf.                                          science and engineering from Southeast University,
+      Process. Syst., vol. 30, Dec. 2017, pp. 6757­6767.                                                         Nanjing, China, in 2014.
+
+[24] Y. Rubanova, R. T. Q. Chen, and D. K. Duvenaud, "Latent ordinary                                               He is currently a Technical Expert with Huawei
+      differential equations for irregularly-sampled time series," in Proc.                                      Technologies Company Ltd., Shenzhen, China. His
+      Adv. Neural Inf. Process. Syst., vol. 32. Red Hook, NY, USA: Curran                                        main interests include network modeling and opti-
+      Associates, Aug. 2019.                                                                                     mization.
+
+[25] Z. Yuan, Y. Wang, X. Ban, C. Ning, H.-N. Dai, and H. Wang,
+      "Autonomous-Jump-ODENet: Identifying continuous-time jump sys-
+      tems for cooling-system prediction," IEEE Trans. Ind. Informat., vol. 19,
+      no. 7, pp. 7894­7904, Jul. 2022.
+
+[26] Z. Yuan, X. Ban, Z. Zhang, X. Li, and H. Dai, "ODE-RSSM: Learn-
+      ing stochastic recurrent state space model from irregularly sampled
+      data," in Proc. 37th AAAI Conf. Artif. Intell., vol. 37, Jun. 2023,
+      pp. 11060­11068.
+
+[27] P. Dutta, K. Mayilvaghanan, P. Sinha, and A. Dukkipati, "Deep repre-
+      sentation learning for prediction of temporal event sets in the continuous
+      time domain," in Proc. 15th Asian Conf. Mach. Learn., vol. 222,
+      B. Yanikoglu and W. Buntine, Eds., Nov. 2023, pp. 343­358.
+
+[28] M. Ancona, E. Ceolini, C. O¨ ztireli, and M. Gross, "Gradient-
+      based attribution methods," in Explainable AI: Interpreting, Explaining
+      and Visualizing Deep Learning. Cham, Switzerland: Springer, 2019,
+      pp. 169­191.
+
+[29] M. Sundararajan, A. Taly, and Q. Yan, "Axiomatic attribution for
+      deep networks," in Proc. Int. Conf. Mach. Learn., vol. 70, 2017,
+      pp. 3319­3328.
+
+[30] Y. Chen, "Thinning algorithms for simulating point processes," Florida
+      State Univ., Tallahassee, FL, USA, Tech. Rep., 2016.
+
+[31] S. Xiao, J. Yan, M. Farajtabar, L. Song, X. Yang, and H. Zha, "Learning
+      time series associated event sequences with recurrent point process
+      networks," IEEE Trans. Neural Netw. Learn. Syst., vol. 30, no. 10,
+      pp. 3124­3136, Oct. 2019.
+
+[32] R. T. Q. Chen. (2018). Torchdiffeq. [Online]. Available: https://
+      github.com/rtqichen/torchdiffeq
+
+[33] F. Lin, K. Muzumdar, N. Pavlovich Laptev, M.-V. Curelea, S. Lee, and
+      S. Sankar, "Fast dimensional analysis for root cause investigation in
+      a large-scale service environment," ACM SIGMETRICS Perform. Eval.
+      Rev., vol. 48, no. 1, pp. 25­26, Jul. 2020.
+
+[34] W. Hu, G. Yang, Y. Li, W. Cao, and M. Wu, "Root cause identifi-
+      cation of industrial alarm floods using word embedding and few-shot
+      learning," IEEE Trans. Ind. Informat., vol. 20, no. 2, pp. 1465­1475,
+      Feb. 2023.
+
+[35] Y. Chen et al., "Automatic root cause analysis via large language models
+      for cloud incidents," in Proc. 19th Eur. Conf. Comput. Syst., Apr. 2024,
+      pp. 674­688.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+18994  IEEE TRANSACTIONS ON NEURAL NETWORKS AND LEARNING SYSTEMS, VOL. 36, NO. 10, OCTOBER 2025
+
+                               Mingjie Sun received the bachelor's degree from                             Xiaojuan Ban received the Ph.D. degree from
+                               Nanjing University of Aeronautics and Astronautics,                         the University of Science and Technology Beijing,
+                               Nanjing, China, in 2016, the master's degree from                           Beijing, China, in 2003.
+                               Xidian University, Xi'an, China, in 2019, and the
+                               Ph.D. degree from the University of Liverpool, Liv-                            She is currently a Ph.D. Supervisor with the Uni-
+                               erpool, U.K., in 2022.                                                      versity of Science and Technology Beijing. She is
+                                                                                                           also the Managing Director of Chinese Association
+                                  He is currently an Associate Professor with the                          for Artificial Intelligence, Beijing. She has authored
+                               School of Computer Science and Technology, Soo-                             more than 300 articles.
+                               chow University, Suzhou, China. As the project
+                               leader, he has undertaken multiple projects funded                             Dr. Ban is a member of the Standing Committee
+                               by the National Natural Science Foundation of China                         of the human-computer interaction specialty and
+and provincial science and technology funds. His research directions mainly                                the theoretical computer science specialty in China
+include computer vision, multimodal computing, and reinforcement learning.
+                                                                                     Computer Federation.
+
+                               Duxin Chen received the B.S. degree in automatic
+                               control and the Ph.D. degree in control science
+                               and engineering from the Huazhong University of
+                               Science and Technology, Wuhan, China, in 2013 and
+                               2018, respectively.
+
+                                  He is currently an Associate Professor with the
+                               School of Mathematics and the Vice Director of
+                               Jiangsu Provincial Scientific Research Center of
+                               Applied Mathematics, Southeast University, Nan-
+                               jing, China. He is also one of the direction leaders
+                               of the Huawei-SEU Joint Innovation Laboratory of
+Networked Collective Intelligence, Nanjing. His research interests include
+causal inference, prediction/generation, system identification techniques for
+complex networks and system sciences, and artificial intelligence-related
+theory and applications.
+
+       Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 16,2026 at 02:32:51 UTC from IEEE Xplore. Restrictions apply.
+

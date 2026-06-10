@@ -1,0 +1,903 @@
+                                        Knowledge-aware Alert Aggregation in Large-scale
+                                                   Cloud Systems: a Hybrid Approach
+
+                                                        Jinxi Kuang§, Jinyang Liu§, Junjie Huang§, Renyi Zhong§,
+                                                   Jiazhen Gu§, Lan Yu, Rui Tan, Zengyin Yang, Michael R. Lyu§
+
+                                                              §The Chinese University of Hong Kong, Hong Kong SAR, China,
+
+                                                        {jxkuang22, jyliu, jjhuang23, ryzhong22, jiazhengu, lyu}@cse.cuhk.edu.hk
+                                         Computing and Networking Innovation Lab, Huawei Cloud Computing Technology Co., Ltd, China,
+
+                                                                         {yulan13, tanrui3, yangzengyin}@huawei.com
+
+arXiv:2403.06485v1 [cs.SE] 11 Mar 2024  ABSTRACT                                                                                       KEYWORDS
+
+                                        Due to the scale and complexity of cloud systems, a system fail-                               Alert aggregation, cloud systems, software reliability
+                                        ure would trigger an "alert storm", i.e., massive correlated alerts.
+                                        Although these alerts can be traced back to a few root causes, the                             ACM Reference Format:
+                                        overwhelming number makes it infeasible for manual handling.                                   Jinxi Kuang§, Jinyang Liu§, Junjie Huang§, Renyi Zhong§,, Jiazhen Gu§,
+                                        Alert aggregation is thus critical to help engineers concentrate on                            Lan Yu , Rui Tan , Zengyin Yang , Michael R. Lyu§. 2024. Knowledge-aware
+                                        the root cause and facilitate failure resolution. Existing methods                             Alert Aggregation in Large-scale Cloud Systems: a Hybrid Approach. In
+                                        typically utilize semantic similarity-based methods or statistical                             46th International Conference on Software Engineering: Software Engineering
+                                        methods to aggregate alerts. However, semantic similarity-based                                in Practice (ICSE-SEIP '24), April 14­20, 2024, Lisbon, Portugal. ACM, New
+                                        methods overlook the causal rationale of alerts, while statistical                             York, NY, USA, 12 pages. https://doi.org/10.1145/3639477.3639745
+                                        methods can hardly handle infrequent alerts.
+                                                                                                                                       1 INTRODUCTION
+                                           To tackle these limitations, we introduce leveraging external
+                                        knowledge, i.e., Standard Operation Procedure (SOP) of alerts as a                             Cloud systems, such as Microsoft Azure, Amazon AWS, and Google
+                                        supplement. We propose COLA, a novel hybrid approach based on                                  Cloud Platform (GCP), have been providing essential services for
+                                        correlation mining and LLM (Large Language Model) reasoning for                                customers worldwide. It is crucial to ensure the reliability of these
+                                        online alert aggregation. The correlation mining module effectively                            systems in order to prevent user dissatisfaction and economic loss.
+                                        captures the temporal and spatial relations between alerts, measur-                            For example, the cost of downtime for Amazon in an hour on Prime
+                                        ing their correlations in an efficient manner. Subsequently, only                              Day is up to 100 million dollars [2].
+                                        uncertain pairs with low confidence are forwarded to the LLM rea-
+                                        soning module for detailed analysis. This hybrid design harnesses                                 In practice, failures (e.g., unexcepted interruptions or service
+                                        both statistical evidence for frequent alerts and the reasoning ca-                            level degradation) are inevitable in cloud systems [2, 4, 18]. To
+                                        pabilities of computationally intensive LLMs, ensuring the overall                             detect and handle failures promptly, modern cloud systems have
+                                        efficiency of COLA in handling large volumes of alerts in practical                            configured comprehensive monitoring mechanisms to monitor the
+                                        scenarios. We evaluate COLA on three datasets collected from the                               health status of cloud services continuously, which produces moni-
+                                        production environment of a large-scale cloud platform. The exper-                             toring data including KPI (key performance indicators), logs and
+                                        imental results show COLA achieves F1-scores from 0.901 to 0.930,                              traces [13, 22, 23, 26, 27, 33]. When an unexpected pattern is de-
+                                        outperforming state-of-the-art methods and achieving comparable                                tected over these data, an alert will be triggered to notify the On-Call
+                                        efficiency. We also share our experience in deploying COLA in our                              Engineers (OCEs) for inspection and mitigation as demonstrated
+                                        real-world cloud system, Cloud X1.                                                             by the red path in Figure 1. For example, when the number of failed
+                                                                                                                                       requests increases over a threshold, an alert "failed request number
+                                        CCS CONCEPTS                                                                                   exceeded 100 within 60 seconds" would be fired to an OCE.
+
+                                        · Software and its engineering  Maintaining software.                                             When a failure happens, massive correlated alerts will be trig-
+                                                                                                                                       gered in a brief time period, a phenomenon typically referred to
+                                        1Due to the company policy, we anonymize the name as Cloud X.                                  as the notorious "alert storm" problem [39]. This issue primarily
+                                        *Corresponding author.                                                                         arises from the large-scale and complex dependency of modern
+                                                                                                                                       cloud systems. Specifically, a cloud system can own and monitor
+                                        Permission to make digital or hard copies of all or part of this work for personal or          tens of hundreds of services [7, 8]. Furthermore, these services are
+                                        classroom use is granted without fee provided that copies are not made or distributed          interdependent, meaning a failure in one service has the potential
+                                        for profit or commercial advantage and that copies bear this notice and the full citation      to spread to others, a process known as cascading failures [15].
+                                        on the first page. Copyrights for components of this work owned by others than the             For instance, a failure that occurs within a database service could
+                                        author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or         potentially impact other services that depend on it such as user
+                                        republish, to post on servers or to redistribute to lists, requires prior specific permission  authentication, transaction processing, or data analytics. In this
+                                        and/or a fee. Request permissions from permissions@acm.org.                                    process, alerts are usually triggered in an uncoordinated manner,
+                                        ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal                                             which are overwhelming for OCEs for manual handling. To address
+                                        © 2024 Copyright held by the owner/author(s). Publication rights licensed to ACM.              this issue, it is crucial to automatically aggregate these alerts that
+                                        ACM ISBN 979-8-4007-0501-4/24/04. . . $15.00                                                   are caused by the same failure (i.e., having the same root cause),
+                                        https://doi.org/10.1145/3639477.3639745
+ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal                                                                                                                Jinxi Kuang, et al.
+
+Online Service System                     On-Call Engineers  Notify             the efficiency of LLMs is low. It generally takes seconds for a typical
+ Service C                     Mitigate                                         LLM (e.g., ChatGPT) to generate responses. In real-world deploy-
+  Service B                                                                     ment scenarios, this time delay is far from ideal, particularly when
+    Service A                           Notify               Aggregated alerts  a significant number of alerts are generated during a failure event.
+          (1) Monitoring data                                Alert Aggregation
+       Logs Traces KPIs                 Massive alerts                             Our work. To tackle these challenges, in this paper, we propose
+                                                                                COLA, a novel hybrid approach based on COrrelation mining and
+         (2) Customer reports  Trigger                                          LLM reasoning for online alert Aggregation. COLA is composed
+                                                                                of two modules, a correlation mining module and an LLM reason-
+                Figure 1: The alert handling process                            ing module. To tackle the first challenge, we propose to leverage
+                                                                                in-context learning (ICL) to provide domain-specific knowledge
+which can improve the efficiency of OCEs in resolving the failure               to LLM. ICL is prompt engineering that demonstrates relevant ex-
+as depicted by the blue path in Figure 1.                                       amples to LLM to enable LLM to perform tasks by learning from
+                                                                                the examples, which has been proven to be effective in various
+   Many efforts have been devoted to alert aggregation, which                   software engineer tasks [16, 41]. To address the second challenge,
+can be categorized into semantic similarity-based methods and                   we propose a multi-round prompting mechanism to summarize
+statistical methods. Semantic similarity-based methods, such as                 long text within the SOPs progressively and extract key knowledge
+AlertStorm [39], LiDAR [6] and OAS [3], correlate two alerts having             for reasoning relations between alerts. For the third challenge, we
+similar semantics based on nature language processing technologies              propose to incorporate a lightweight and efficient correlation min-
+(e.g., word2vec and BERT). However, correlated alerts can have dis-             ing component in our framework. This component aims to filter out
+tinct semantics. For example, an alert warning of a server overload             correlated alert pairs with high confidence. Only those uncertain
+may be correlated with an alert indicating a database slowdown,                 pairs are sent to the LLM reasoning module for in-depth analysis.
+even though the semantics of these two alerts are quite different.              To evaluate the proposed approach, we collect three datasets from
+On the other hand, statistical methods, such as Warden [24], Li-                the real-world production environment of Cloud X, which contain
+DAR [6] and iPACK [25], learn from the co-occurrence patterns of                500,000 alerts and 3,000 SOPs. Extensive experiments demonstrate
+two alerts to determine their relations. Nevertheless, such methods             that COLA achieves F1-scores from 0.901 to 0.930, significantly
+rely on a large amount of historical data for learning, which might             outperforming all state-of-the-art baseline models. Furthermore,
+be inaccurate for unseen or infrequent alerts.                                  despite utilizing computationally intensive LLM for analysis, COLA
+                                                                                demonstrates comparable efficiency to existing methods.
+   To address the limitations of existing studies, motivated by the
+recent successes of large language models (LLM) for challenging                    Our major contributions are as follows:
+reasoning tasks [1, 5, 19], we propose to leverage LLM for alert
+aggregation in a large-scale cloud system. Intuitively, we aim to               · We are the first to propose introducing detailed knowledge (e.g.,
+perform reasoning about relations between two alerts using LLM                    SOPs) for alert aggregation. By leveraging this extensive knowl-
+by learning from existing knowledge of alerts. To be specific, in                 edge, we are able to effectively aggregate alerts that are semanti-
+Cloud X, each alert is associated with a comprehensive document                   cally dissimilar or infrequent (Section 2).
+called Standard Operating Procedure (SOP). These SOPs contain
+detailed information about the alert, such as the conditions that               · We propose COLA, a hybrid framework comprising a correlation
+trigger it, severity levels, potential impacts, possible root causes,             mining component and an LLM reasoning component, specifi-
+and recommended mitigation steps. The SOPs are continually up-                    cally designed for online alert aggregation. This hybrid approach
+dated by on-site engineers during maintenance activities, e.g., when              allows us to harness the capabilities of LLM while ensuring effi-
+they observe a new potential impact. These SOPs provide insights                  cient handling of a large volume of alerts in practical scenarios
+into the underlying rationale behind alerts, enabling us to engage                (Section 3).
+in reasoning rather than relying solely on semantic similarity com-
+parisons. Furthermore, LLMs can generate interpretable results for              · We evaluate COLA on three datasets collected from the industrial
+on-site engineers, facilitating their understanding the outcomes.                 production environment. The evaluation results show that COLA
+                                                                                  outperforms the state-of-the-art method with F1-scores from
+   However, designing such a solution faces the following three                   0.901 to 0.930 and archives comparable efficiency (Section 4).
+challenges. First, existing LLMs are not specialized for alert aggre-
+gation. These models are typically trained using publicly available             · We have deployed COLA in the production environment of Cloud
+general knowledge sources, such as Wikipedia and Github. Conse-                   X for four months. Our practical experience is shared to benefit
+quently, they lack specific knowledge about alerts in cloud systems,              the community (Section 5).
+which is essential for accurately reasoning about the relationships
+between alerts. Second, the SOPs typically consist of extensive tex-            2 BACKGROUND AND MOTIVATION
+tual content. Considering that LLMs often struggle to effectively
+learn from lengthy input [40], performing reasoning directly on                 In this section, we introduce background concepts in Cloud X, and
+such long text poses a significant challenge for these models. Third,           demonstrate a motivating example to elaborate our motivation.
+
+                                                                                2.1 Alerts and SOPs in Cloud X
+
+                                                                                Alert. Alerts are produced when anomalies are detected in the
+                                                                                monitoring data or raised by customers [39]. Alerts are used to no-
+                                                                                tify OCEs for timely anomaly handling and have various attributes
+                                                                                including alert ID, title, creation time, arrival time, mitigated time,
+Knowledge-aware Alert Aggregation in Large-scale                                                                              ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal
+Cloud Systems: a Hybrid Approach
+                                                                                       Correlating these overwhelming alerts poses a significant chal-
+     Alert ID: 1006601873                                                           lenge for OCEs, as it demands extensive experience and understand-
+                                                                                    ing of cloud systems to interpret alerts originating from various
+Alert Title: BasicService_OS_UDPPackageError                                        services across different levels of the infrastructure. In this example,
+                                                                                    alerts 1  6 cover hardware at the infrastructure level, nodes and
+Date: 2023/06/22                       Service: BasicService-DNS                    processes at the platform level, and the application level. Previous
+                                                                                    studies rely on statistical correlation or semantic similarity to per-
+IP: 10.34.38.123                       Region: North-Cityname                       form alert aggregation, which, however are suboptimal. For alerts
+                                                                                    shown in Table 1, not all of them appear extensively to support
+Creation Time: 2023/06/22 01: 44: 18 Engineer: XXX                                  statistical analysis. For example, 5 and 6 are rare since they gen-
+                                                                                    erally represent more severe problems. In addition, 1  6 share
+Arrived Time: 2023/06/22 01: 44: 37                                                 little semantic similarities.
+
+Mitigated Time: 2023/06/22 01: 54: 38                                                  We propose to perform reasoning based on knowledge (e.g.,
+                                                                                    SOPs) of each alert for more effective alert aggregation. SOPs associ-
+     SOP ID: 2023062200466                                                          ated with each alert in the cloud system are detailed and comprehen-
+                                                                                    sive, spanning approximately 3 to 4 A4 pages. For clarity, we have
+SOP Title: OS_Disk_Usage_Is_High                    Severity: Important             provided summarized versions of these SOPs in Table 1. Inspired by
+                                                                                    the recent success of LLM for various challenging tasks [17], we aim
+Explanation: Disk usage is too high, data can not be written in. This alert can be  to utilize LLM to comprehend these SOPs, extract key information
+                                                                                    and aggregate correlated alerts based on reasoning. In this way,
+triggered every XX hours.                                                           we can link alerts based on extensive knowledge and obtain inter-
+                                                                                    pretable results from LLM. Notably, this approach could leverage
+Possible Cause: Normal monitored logs accumulation                                  the knowledge distributed across different services and layers of
+                                                                                    the cloud system, and perform more effective alert aggregation.
+Impact on system: Interruption on normal monitoring, but no effects on service
+                                                                                    2.3 Challenges
+Recommended Mitigation Steps:
+                                                                                    Although LLM is capable of extracting knowledge from natural
+(1)Apply permission on operations of master node, log in as opadmin                 language and performing further reasoning tasks, there are still
+                                                                                    three challenges of LLM that should be addressed in practice.
+(2)Delete the real-time output logs                                                 Challenge 1: Low efficiency. LLM is time-consuming to generate
+                                                                                    a response in practical industrial scenarios. It takes LLM more than
+...                                                                                 10 seconds to summarize an SOP and even more time to perform
+                                                                                    reasoning in Cloud X. When service failure happens, a large number
+      Figure 2: Example of an alert and a SOP document                              of alerts are triggered, making it impossible to handle the failure
+owning service, region and corresponding engineer as Figure 2                       timely by inputting all the alerts to LLM. To overcome the low-
+shows. ID is unique for each alert, and the title can be regarded                   efficiency challenge, we first filter the alerts with the similarity
+as a summary of the alert. Creation time, arrival time, mitigated                   score evaluated by the correlation mining module. Then We drop
+time denote the specific time when an alert is triggered, received                  out the alert pairs with positive similarity scores, and the LLM
+by OCEs, and mitigated by OCEs, respectively. Service shows the                     module only needs to process a small scale of undetermined alerts.
+owning service of alert, and region indicates the physical location                 Challenge 2: Long text understanding. The context understand-
+of the server where the service is deployed. Engineer contains the                  ing and summarizing ability of LLM decreases as the length of the
+name and ID of the responsible OCE.                                                 text grows. Most of the input lengths of LLM are limited. Some
+SOP. The Standard Operating Procedure (SOP) [38] documents are                      LLMs claim they support infinite input length, but they also stress
+alert description documents maintained by engineers in Cloud X.                     the effectiveness would decline after inputting thousands of words.
+The documents are written in natural language along with screen-                    In our design, the prompt for LLM contains two alerts and SOPs,
+shots, tablets and website links to provide a reference for alert                   which is usually longer than these limits. To overcome the long-text
+handling. SOPs contain the ID, title, severity, explanation of the                  understanding challenge, inspired by the Chain-Of-Thought (COT)
+alert, the impact on the system, possible cause, and recommended                    design [37], we propose a two-round interaction with LLM. In the
+mitigation steps as shown in Figure 2. ID is the identifier and title               first round of requests, we ask LLM to extract and summarize the
+briefly introduces the anomaly. Severity indicates the priority of                  knowledge in SOP; In the second round, we ask LLM to perform
+handling. Explanation elaborates more detail about this alert. Impact               analyzing and reasoning on alerts with the summarized SOP.
+shows the consequential results of this alert on the owning service                 Challenge 3: Lack of domain knowledge. LLM is a generalized
+and the whole system. Possible cause and recommended mitigation                     language model that lacks of domain knowledge of online service
+steps are concluded by engineers from similar historical alerts. In                 systems. LLM is trained using a huge amount of accessible data
+addition, the domain knowledge of cloud services is also implicitly                 on the Internet. However, the knowledge of online service system
+contained in the engineer-write notes and explanations. However,                    maintenance, especially for those internal terms and descriptions, is
+SOPs are long and unstructured. Thus it is challenging to extract the
+key information automatically and further analyze the correlation.
+
+2.2 Motivating Example
+
+We present a real-world service failure in January 2023 with part
+of the relevant alerts and SOP in Cloud X as a motivating example
+shown in Table 1. The failure was originally caused by the low volt-
+age on the solid-state drive (SSD in a storage server (1), leading to
+the interruption of Object Storage Device (OSD) processes. Specifi-
+cally, some of the I/O operations of OSD were incomplete or blocked
+(2) due to insufficient power supply in SSD. This was captured by
+the OSD process monitors as an exception (3), which resulted in an
+unhealthy OSD node (4). Next, the health monitor for the storage
+cluster also reported such anomalies (5). Finally, at the application
+layer, we observed successful connection to our Redis service is
+decreased (6). In practice, a lot more alerts can be generated in a
+large-scale cloud system; we only selected representative ones for
+clearer demonstration.
+ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal                                                                                                                  Jinxi Kuang, et al.
+
+              Table 1: Correlated alerts and associated SOPs in Cloud X: a motivating example
+
+              Alert                                                                                     SOP (after manual summarization)
+
+ID            Title                                                                              Impact on the system                            Possible causes
+
+1 SSD voltage is lower than alarming threshold.                                  Latency of memory processes increases                                SSD failure
+
+2             OSD I/O blocking detected.                                                   Latency of disk requests increases      Hardware failure or OS bugs
+
+3             OSD process exception detected.                                    Data reconstruction on OSD managed disks          Unreadable sectors on disk
+
+4             OSD node 19e7fb37 is unhealthy.                                    Latency of disk requests increases or fluctuates            OSD I/O not responding
+
+5             Storage cluster a9dbc69b is abnormal.                              Storage pool redundancy reduction or failure                OSD nodes are abnormal
+
+6 Successful connection count to Redis is decreased.                                       Disconnection to Redis service          Hardware failure or component abnormal
+
+Alerts  SOPs  Separated by Region                   Divide Time Windows                          embedding and semantic similarity search. Those samples as well
+                 Region A                                                                        as pre-defined reasoning rules are inserted into prompts of the cur-
+                                                    2023/01/01 ­ 2023/05/31, training set        rent query to provide domain knowledge and inference examples
+                 Region B                              1                 2       3               for LLM. In the SFT method, the historical data is used for LLM
+                 Region C                           0  0 + 2             0 + 2   0 + 2           fine-tuning, which makes LLM capable of performing alert-related
+                                                                                                 reasoning with domain knowledge.
+                                                        = 10                               Time
+
+                                                    2023/06/01 ­ 2023/06/30, testing set
+
+                  Figure 3: The preprocessing steps                                              3.2 Preprocessing
+
+mostly not publicly available. Thus it is difficult for LLM to generate                          In a large-scale system, services are deployed in various physical
+a reasonable answer for causal analysis of alerts. To overcome the
+challenge of lacking domain knowledge, we apply two techniques                                   regions, which are isolated and can be regarded as independent.
+to leverage the summarized knowledge from SOP. In-Context Learn-
+ing (ICL) performs a few-shot learning. A few positive and negative                              Thus we separate the alerts by regions at the first step as Figure 3
+examples, which contain summarized SOP and expected answers,
+are inserted into the prompt. LLMs are expected to quickly pick                                  shows, which reduces the workload for correlation mining and
+up the domain knowledge from those examples. Supervised Fine-
+Tuning (SFT) takes historical alerts and SOPs as the training set and                            eliminates the error of grouping alerts from irrelevant services.
+learns the domain knowledge by updating the model parameters.
+                                                                                                     In most cases, the alerts of the same root cause are triggered
+3 METHODOLOGY
+                                                                                                 in a certain period [39]. This indicates the aggregation can focus
+3.1 Overview of COLA
+                                                                                                 on a relatively short time interval (e.g. several minutes). We call
+The goal of COLA is to aggregate the alerts online by performing
+correlation mining on statistic information and LLM reasoning                                    these intervals time windows. According to our practical experience
+on semantic information. The inputs of COLA are alerts and the
+corresponding SOPs. The results are the grouped alerts, where the                                in Cloud X, the length of time windows can be set to 10 minutes.
+alerts have the same cause that each of the two alerts are correlated.
+The aggregation helps to reduce the number of alerts to handle,                                  Considering service failure can happen near the boundary of the
+decreasing the workload of OCEs. In addition, compared to one
+single alert, the aggregated alerts are more beneficial to the OCEs                              interval, we employ the sliding window policy. The sliding size is set
+in understanding the whole failure process. This also reduces the
+time cost on locating and fixing the service failure.                                            as  1  windows.       Formally,   denote 0  as  the  start  time,    as  the  length
+                                                                                                     2
+   Figure 4 shows the overall framework of COLA. COLA first pre-
+processes the alerts obtained from the real-world scenarios. Those                               of the time window,  as the sliding size, then the time window
+alerts are separated based on different physical regions which can
+be regarded as isolated systems, then are divided into time windows                              for our alert division is: [0 + , 0 + ( + 1)],   [1, 2, 3...]
+according to the Arrived Time attribute. Next, the correlation min-
+ing module is proposed to determine the correlation of alert pairs by                            With this division, we maintain the potential alert groups and also
+utilizing the temporal and spatial relation, and output a similarity
+score of correlation analysis. The alert pairs with a positive similar-                          reduce the input scale for correlation mining. Finally, we split the
+ity score would be marked as correlated, while the alert pairs with
+negative scores would be processed in the LLM reasoning module                                   training set and testing set based on the time attribute of alerts. We
+along with the corresponding summarized SOPs. In LLM reasoning
+module, two popular LLM techniques, In-Context Learning (ICL)                                    further demonstrate this part in Section 4.
+and Supervised Fine-Tuning (SFT), are leveraged to learn domain
+knowledge and perform reasoning tasks. In the ICL method, similar                                3.3 Correlation Mining Module
+historical alerts and SOP samples are captured by FastText [20]
+                                                                                                 In the correlation mining module, our objective is to identify alerts
+                                                                                                 that exhibit significant statistical evidence of correlation efficiently.
+                                                                                                 In this way, when an alert storm happens, we can quickly filter out
+                                                                                                 alert pairs with high confidence and only leave uncertain pairs for
+                                                                                                 detailed analysis based on LLM.
+
+                                                                                                    To achieve this, the proposed correlation mining module incor-
+                                                                                                 porates both temporal relation and spatial relation for alert analysis.
+                                                                                                 For temporal relation, we consider the correlation in time windows.
+                                                                                                 It is intuitive that the frequently co-occurring alerts are more likely
+                                                                                                 to be correlated. If two alerts have the same root cause, they would
+                                                                                                 be triggered in a short period as the alert storm occurs. Thus it
+                                                                                                 can be captured and observed by the sliding windows. For spatial
+                                                                                                 relations, we consider the propagation sequences within the ser-
+                                                                                                 vice topology. If two services are not related in topology, the alerts
+                                                                                                 from these two services should be more likely irrelevant, and vice
+                                                                                                 versa. Combining the temporal and spatial relation, we obtain the
+                                                                                                 statistically correlated alert pairs in this step.
+Knowledge-aware Alert Aggregation in Large-scale                                                                                ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal
+Cloud Systems: a Hybrid Approach
+
+                  Correlation Mining               Positive                       Training Set                    LLM Reasoning
+                                                  Similarity                  Positive Negative
+      Alerts                                                                  samples samples              SFT Training set
+      SOPs                                          Score
+                                                                                  Testing Set
+                  Temporal     Spatial                        Alerts                                             Samples         P-tuning
+                  relation     relation                                                        Pre-define  ICL Prompt           Parameters
+                                                                                                                                              Response            OCEs
+
+                                                  Negative
+
+                     Similarity Score             Similarity
+
+                                                  Score       +                                            Samples
+
+                     Knowledge Extraction                Summarized SOPs                                   Query
+
+                                                                                                           Rules                Internal LLM
+
+                           Internal LLM
+
+                                                                      Figure 4: Overview of COLA
+
+3.3.1 Leveraging Temporal Relations. To evaluate the correlation                      a different strategy from the existing graph embedding methods
+                                                                                      when the graph is sampled.
+of alerts in time windows, we utilize conditional possibility as
+                                                                                         Inspired by node2vec [12], a novel node representation method
+our metrics for frequent pattern mining. For the alert pair which                     for graphs, we construct a two-stage service topology pattern min-
+                                                                                      ing approach. We first sample the topology graph by an alert-aware
+contains alerts 1 and 2, we first collect all the time windows                        random walk technique, then utilize the skip-gram model for alert
+                                                                                      embedding learning. Finally, the embedding of alerts are used for
+where alert 1 is involved, to compute its occurrence frequency                        similarity computing with the distance of alert embeddings.
+
+ (1)  =  #                  1  .  Similarly, we               obtain  (2).    Then       In the sampling stage, we apply the random walk on the service
+                 #                                                                    topology graph. The sampled results are node sequences in this
+we find the windows where 1 and 2 appear together to get                              approach. However, there are multiple alerts in one single node.
+                                                                                      Thus we randomly sample one of those alert to the sequence. The
+ (12)    =    #   1                          2    .  With     these   metrics,  we    sampling direction can be controlled in this algorithm, reaching a
+                          #                                                           balance between exploring different areas like breadth-first search
+can calculate the occurrence frequency of 2 given that 1 has oc-                      (BFS) and focusing on local neighborhoods as depth-first search
+                                                                                      (DFS). In our scenario, we observe the failure can be propagated to
+curred by  (2|1)  =   (12 )   and  (1|2)                 =     (12 )     as the left  services of other components, which are far from the original node
+                       (1 )                                     (2 )                  in the topology graph. To extract the long propagation characteris-
+                                                                                      tics, we set up the sampling direction similar to DFS.
+part of Figure 5 illustrates. Thus we have two conditional possibili-
+                                                                                         In the embedding stage, we employ the skip-gram model [32].
+ties that indicate the similarity from the temporal view denoted as                   The skip-gram model is first designed in natural language process-
+                                                                                      ing tasks, to predict the missing word given the neighboring context.
+1 |2, 2 |1 .                                                                          It maximizes the likelihood of predicting the context nodes using
+   However, the alerts are not ensured to be correlated even if the                   the embedding of targets. In our task, we focus on the embedding
+                                                                                      of alerts in the sequence. The embedding of alerts contains the
+conditional possibility 1 |2 or 2 |1 is high. Some alerts are is-                     topology features of their positions and neighbors in the graph,
+sued regularly to act as a reminder during the normal execution                       which is useful for correlation mining. Therefore, the embeddings
+                                                                                      are representative of the spatial relation of alerts that can be used
+of systems. These regular alerts are regarded as noises in our task,                  for similarity computing. For the alert pairs 1 and 2, we obtain
+                                                                                      their embedding from the skip-gram model. If the alert is unseen
+which cannot represent a practical co-occurrence pattern in aggre-                    to the model, we compute the average embedding of the owning
+                                                                                      service instead. Then we obtain the distance of these embeddings
+gation, and those alerts would further affect the performance of                      as a similarity score for correlation denoted as 12 .
+
+correlation analysis. Thus it is significant to remove the noise alerts
+
+in our collected dataset.
+
+To detect the noise in alerts, we utilize the Jaccard similar-
+
+ity to evaluate the proportion of overlapping for the two sets
+
+of time windows. The Jaccard similarity is calculated as divid-
+
+ing the cardinality of the intersection by the cardinality of the
+
+union. With the notations in this section, it can be denoted as
+
+                  =   (12 )    =           (1  )     (12 )    (12  )  .  The  Noise
+                      (1+2 )                      +  (2 ) -
+                                         
+
+alert  appear in time windows evenly, leading to  (  ) 
+
+ ( ) and  (  )   ( ), for most of the non-noise alert  .
+
+Thus the Jaccard similarity is close to 0 as the approximate calcu-
+
+lation shows:             (  )                  (  )           0. Based on this
+                ( )+ ( ) - (  )                  ( )
+
+observation, we filter out the alert pairs that have a small Jaccard
+
+similarity to perform denoising.                                                      3.3.3 Combining Temporal and Spatial features. We obtain the
+
+3.3.2 Leveraging Spatial Relations. To measure the correlation of                     temporal correlation metric  by conditional possibility, and get
+
+alerts in service topology, we introduce the historical links between                 the spatial correlation metric  by the distance of embeddings. To
+
+services for correlation mining. The owning service is one of the                     combine the two metrics, we compute the final similarity score by
+
+attributes of alerts, which can be obtained once the alert is trig-                   a linear combination:
+
+gered. With the services and historical failures, we can construct                                                                                                - 
+                                                                                                                                                                  - 
+the topology graph of services. The nodes in this graph are services,                                                        =   {1 |2,       2 |1 }  -    ·  12
+                                                                                                                                                              
+and edges indicate that there are correlated alert pairs from these
+
+two services in historical records. The edge points from the service                  The temporal metric  is a possibility value ranging from 0 to 1,
+
+of the earlier alert to the service of the later alert. Besides, each ser-            while the spatial metric is a positive real number that stands for
+
+vice may trigger multiple alerts in one failure, which means there                    distance. To align with the temporal metric, we normalized the
+
+are multiple alerts in each node in the graph. This also requires                     spatial metric to the same interval. Notice that the larger distance
+ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal                                                                                                                                Jinxi Kuang, et al.
+
+        Temporal relation                                  Spatial relation  Service                Prompt: Please summarize the possible root cause, the explanation, the
+                                                                                                    impact on system of the following alert, and provide a concise summary
+    Time windows containing                                                                         on the recommended handling steps of this alert. The information of this
+          alert 1 and 2                                                                             alert: {Alert and SOP contents}. Please answer in the format like
+                                                                                                    "Explanation: ..."
+                                                                                    Service
+                                                                             Dependency graph     Figure 6: The prompt template for knowledge extraction
+
+  Time windows         Time windows                                              Sampled Alert  key information of documents and shorten the length of the input,
+containing alert 1   containing alert 2                                            Sequences    inspired by the COT technique, we interact with LLMs by rounds,
+                                                                                                where the result of the current round would be inserted as input
+(2  1  =     111     (1  2   =     111                                                Alert     for the next round. This helps LLM focus on the task of the current
+          111+111               111+111                                           Embeddings    round and preserves the information in previous rounds.
+
+Jaccard  Similarity  =         111                         Embedding distance                      In particular, we perform knowledge extraction on the original
+                        111+111+111                                                             SOPs, summarize the main knowledge of these documents, and
+                                                                                                store the output for the next round interaction as the upper row of
+    Conditional Possibility              Similarity Score                                       Figure 4 shows. We design the prompt for this step by mainly asking
+                                                                                                LLM to summarize the information in the given SOPs, and stress
+   Figure 5: The design of correlation mining component                                         out some aspects that are useful for reasoning, such as the detailed
+represents a lower similarity, thus the spatial term is negative. The                           explanation, the consequence of the system and the handling steps.
+parameter  controls the threshold for correlation. We conduct a                                 The answers follow the instructions, containing the attributes given
+grid search, with  ranging from 0 to 10 and the step size as 0.5, and                           in the prompt as in Figure 6.
+determine the optimal  is 3.5 in our task. Finally, if the similarity
+score is positive, we output the alert pairs as correlated. Otherwise,                          3.4.2 In-Context Learning. With the extracted SOP information
+we input the pair to the next module.                                                           and domain knowledge obtained in the knowledge extraction, sev-
+                                                                                                eral approaches are proposed for LLM to take up the knowledge.
+3.4 LLM Reasoning Module                                                                        In-context learning (ICL) is one of the most popular prompting
+                                                                                                methods. As a few-shot learning method, ICL requires a few pre-
+In correlation mining module, we output the alert pairs with posi-                              processed samples, which is flexible on deployment in real-world
+tive similarity scores. For those pairs where the similarity score is                           scenarios. Recent research [11] shows that the ICL method with
+negative, they can be irrelevant, or they are not statistically sim-                            high-quality samples can achieve a similar performance compared
+ilar but logically correlated. Statistical methods cannot get better                            with tuning methods. Therefore, we adopt ICL as one of the meth-
+conclusions on their relevance. Thus we need to introduce more                                  ods to enhance LLM reasoning.
+knowledge for alerts, and utilize more advanced but relatively inef-
+ficient techniques (e.g., LLM) for further analysis.                                               We construct the prompts for ICL with the three parts of samples,
+                                                                                                query and rules as the LLM reasoning component in Figure 4 shows.
+   As section 2 mentioned, SOP documents are widely used for                                    Samples of semantically similar previous alerts and SOPs provide
+service failure handling. SOP contains more key information about                               a reliable reference for the current handling. Thus the quality of
+alerts, including possible causes, explanations, impacts on the sys-                            the samples has a significant impact on the response from LLM. To
+tem and recommended mitigation steps. Furthermore, those con-                                   extract the semantic features and compute the similarity directly,
+tents contain potential domain knowledge. For example, the impacts                              we employ the FastText [20] as our embedding model. FastText is
+and mitigation steps usually describe the fact that hardware outage                             a lightweight model that performs well on domain-specific texts,
+may be the root cause of customer-side service failure. However,                                but is more efficient in training and evaluating compared with the
+the SOPs are written in unstructured natural language with long                                 generalized embedding model such as BERT [9]. We embed the
+lengths. It is hard to extract key information from SOP automatically.                          alert title and SOP documents into a 750-dimension vector. For each
+With the capability of context understanding and reasoning, LLMs                                alert pair in LLM reasoning module, LLM reasoning module embeds
+become one of the feasible solutions to SOP processing. We design                               the two alerts, respectively. Then compute the semantic similarity
+a two-round interaction with LLM based on the COT technique.                                    with the vector distance of the current alert and all sampled alerts,
+In the first round, we summarize and store the key information.                                 taking the top-k similar samples to be inserted into the prompt. Due
+Then in the second round, we design the prompts for the in-context                              to the input length limit of LLM, we adopt the top-1 similar positive
+learning (ICL) method with the matched historical samples and pre-                              sample and top-1 negative sample as final samples in prompts.
+defined rules. And we further fine-tune the LLM by the p-tuning
+v2 [29] technique, a popular supervised fine-tuning (SFT) method.                                  Query organizes the main question of the prompt. It contains
+With the extra model parameters trained in p-tuning v2, we can                                  the title and summarized SOP of two alerts, and connects the infor-
+get responses to the alert correlations accurately and clearly.                                 mation fluently with natural language. The query part also consists
+                                                                                                of some instructions to highlight the core problem, suggesting the
+3.4.1 Knowledge Extraction. To understand and leverage the do-                                  structure and format of the answer. Thus, the responses from LLM
+main knowledge in the SOPs, we introduce LLMs for semantic                                      would be in a more standard format which is efficient to evaluate.
+information extraction. LLMs are capable of natural language un-
+derstanding, but the long text input would worsen the effectiveness                                Rules help LLM generate more stable responses. The general
+of context handling. Most of the existing LLMs limit the length                                 knowledge implied in LLM makes it respond flexibly to some con-
+of the prompt, which is not enough for the contents and SOPs of                                 cepts like "root cause" and "similar", resulting in unstable answers
+the alert pair along with the query instruction. To maintain the
+Knowledge-aware Alert Aggregation in Large-scale                                                                                  ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal
+Cloud Systems: a Hybrid Approach
+                                                                                        · RQ1: What is the effectiveness of COLA?
+          Prompt:                                                                       · RQ2: What is the impact of each component in COLA?
+          <Samples:>                                                                    · RQ3: What is the time efficiency of COLA?
+
+             Positive samples:                                                          4.1 Datasets
+                Question1: {Similar alert titles and extracted SOPs}. Based on the
+                                                                                        The three datasets in our evaluation are collected from the industrial
+          information above, determine the two alerts have the same root cause          production environment of Cloud X. The datasets contain alerts
+          or not. Answer: Based on the possible root cause, explanation and             from 2023/01/01 to 2023/06/30, covering over 60 services from 14
+          impacts, the two alerts are related, may be caused by the same root           physical regions. There are around 500,000 alerts and 3,000 iden-
+          cause.                                                                        tical SOP documents in all three datasets. Alerts and SOPs from
+                                                                                        2023/01/01 to 2023/05/31 are used to select parameters in corre-
+                ...                                                                     lation mining, ICL samples supporting and LLM fine-tuning. The
+             Negative samples:                                                          remaining data are used for the testing of our framework.
+
+                ...                                                                     4.2 Baselines
+          <Query:>
+                                                                                        We compare our approaches with two traditional machine-learning
+                According to the samples above, answer the question with the            techniques and four popular recent research methods. FP-growth [14]
+          following information: {The queried alert titles and extracted SOPs}.         is an algorithm used for frequent pattern mining in data mining and
+          <Rules:>                                                                      association rule learning. DBSCAN (Density-Based Spatial Clus-
+                                                                                        tering of Applications with Noise) [10] is a popular density-based
+                1. If event A triggers event B through a series of events, event B is   clustering algorithm that can discover semantic clusters with alert
+          one of the results of event A, event A can be regarded as the root cause      title embeddings. The four state-of-the-art research methods are
+          of event B;                                                                   introduced as follows:
+
+                2. If the titles, explanations, impacts of two alerts are similar, the     AlertStorm [39]: AlertStorm conducts the first empirical study
+          two alerts are caused by the same reason;                                     of the alert storm and proposes a novel approach to handling alert
+                                                                                        storms, consisting of alert storm detection and alert storm sum-
+                3. In the absence of compliance with Rule 2, if the recommended         mary. The detecting part adaptively and accurately detects alert
+          handling steps of two alerts are roughly the same, the two alerts are         storms based on Extreme Value Theory, while the summarizing
+          related.                                                                      part proposes an alert denoising method and an alert discrimination
+                                                                                        method. We mainly focus on its summarizing part in our evaluation.
+          Based on the given samples, information and rules, analyze the causes
+          of the two alerts in query, determine whether they are related, and have         LiDAR [6]: LiDAR (Linked Incident identification with DAta-
+          the same root cause or not.                                                   driven Representation) consists of a textual embedding module for
+                                                                                        semantic information and a component representation learning
+              Figure 7: The prompt template for ICL                                     module for dependency structure. It is an integrated framework
+                                                                                        that can effectively identify possible linked incidents. In our evalu-
+to the same question. To improve the consistency of the responses,                      ation, we managed to utilize LiDAR for identifying linked alerts by
+we insert some pre-defined rules for reasoning as Figure 7 shows.                       providing similar semantic and dependency information.
+Rule 1 explains the propagation feature of causality to help LLM
+understand the concept of root cause. Rule 2 and 3 explicitly define                       OAS [3]: OAS (Online Alert Summarizing) first aggregates the
+the priority of different information when comparing similarity.                        contextual information of alert words by the word frequency in
+                                                                                        alert contents, then mines the common behavior pattern between
+3.4.3 Supervised Fine-Tuning. Another method for LLM to learn                           alerts from the alert occurrence series. Finally, it combines the above
+domain knowledge is to retrain the parameters in the model. How-                        two types of alert information and determines the correlation by a
+ever, it is impractical to fully update the billions of parameters in                   deep learning model.
+LLMs due to resource constraints. Thus fine-tuning techniques are
+proposed for updating a small part of the parameters, preserving                           iPACK [25]: iPACK is an incident-aware method for aggregating
+the ability of natural language processing and obtaining domain-                        duplicate tickets, consisting of alert parsing, incident profiling and
+specific knowledge. P-tuning [29] is one of the most popular meth-                      ticket-event correlation. In particular, incident profiling filters noisy
+ods for LLM fine-tuning. Different from updating parameters from                        events and links the correlated events that are caused by the same
+LLM, p-tuning maintains another set of parameters as the lower                          incidents. In our evaluation, we apply incident profiling on alerts
+row in Figure 4 shows, to transform prompts into embedding. By                          to determine correlated alerts.
+learning these extra parameters, p-tuning makes LLM respond more
+consistently with prompts, and get knowledge from the training                          4.3 Implementation Details
+dataset. In LLM reasoning module, we employ p-tuning v2 [28],
+which provides a larger scale of parameters with new learning skills,                   We implement COLA on a Windows server with an Intel(R) Core(TM)
+leading to a more efficient and effective tuning process.                               i7-10700 CPU @ 2.90GHz and 32GB RAM. The inference tasks and
+                                                                                        fine-tuning of LLM components are done on 4 NVIDIA Tesla T4
+   To perform fine-tuning on LLM, we split part of the data from the                    GPUs with 12GB graphic memory for each. We set the parameters
+training set to make up the validation set. The training set covers                     of fine-tuning as default __ = 128 and  = 2 - 2.
+alerts and SOPs reported from January to May of 2023, consisting of
+about 85.1% of all data. We randomly select data from the original
+training set to the amount of 80% as the new training set, and the
+rest 5.1% is for the validation set. We perform p-turning on GPUs
+and train the model for 1800 steps. We evaluate the fine-tuned
+model on the validation set and save every 300 steps. Finally, the
+checkpoint with minimum validation loss is chosen for testing.
+
+4 EVALUATION
+
+We evaluate COLA by answering the research questions (RQs).
+ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal                                                                               Jinxi Kuang, et al.
+
+                   Table 2: Effectiveness of experimental approaches on identifying correlated alerts
+
+                   Method                             Dataset A                       Dataset B                Dataset C
+
+                                    Precision Recall F1 score Precision Recall F1 score Precision Recall F1 score
+
+                   FP-Growth        0.413             0.744       0.531        0.409  0.692      0.514  0.364  0.655      0.467
+                    DBSCAN          0.166             0.432       0.240        0.187  0.364      0.247  0.227  0.400      0.289
+
+                   Alert Storm      0.328             0.662       0.438        0.356  0.604      0.448  0.338  0.639      0.442
+                      LiDAR         0.636             0.514       0.568        0.682  0.589      0.632  0.672  0.653      0.662
+                       OAS          0.454             0.483       0.468        0.427  0.521      0.469  0.486  0.561      0.521
+                      iPACK         0.691             0.635       0.661        0.603  0.642      0.621  0.654  0.614      0.633
+
+                   COLA w/o SFT     0.694             0.651       0.672        0.638  0.693      0.664  0.653  0.638      0.645
+                        COLA        0.892             0.924       0.908        0.916  0.943      0.930  0.921  0.882      0.901
+
+For the compared methods which are not open-sourced, we follow                        The parameters of the internal LLM are insufficient, compared to
+the demonstrated techniques and given parameters to reproduce                         the commercial LLMs with over 100B parameters. 2) The given
+the works and ensure their performance as well.                                       samples in the prompt are not enough, due to the length limits of
+                                                                                      LLM inputs. 3) The quality of samples is not satisfying, because
+4.4 Metrics                                                                           the sample matching is based on a simple SOP embedding. 4) The
+                                                                                      sample response only shows the label, without giving any reasoning
+The goal of our methods is to identify the correlated alerts. Some                    steps which makes LLM hard to follow.
+
+of the compared methods score on the alert pairs to determine                            COLA achieves the best F1-score among all datasets, and outper-
+                                                                                      forms the existing method by 37.3%, 47.1%, 36.1% on Dataset A, B, C,
+the result, while the others directly give out the aggregated alert                   respectively. The distinguished improvement in the F1-score indi-
+                                                                                      cates the p-tuning parameters have learned the domain knowledge
+groups by clustering methods. Thus a unified output format is re-                     and can be effectively utilized by LLM for inference. However, the
+                                                                                      training set size is relatively small because the labeled correlated
+quired. For those clusters, we transform them into alert pairs by pair-               alerts and SOPs are limited. Thus there is a potential overfitting
+                                                                                      risk during the fine-tuning, and the learning steps and validation
+wised combination. In particular, for a -alert cluster  =                             loss should be carefully checked.
+{ },   [1, 2, 3..., ], we obtain 2 -  alert pairs as  =
+                                                                                         As for the baseline methods, the recall of FP-Growth, DBSCAN
+{(, )}, ,   [1, 2, 3..., ],   . To compare the pair-wised                             and Alert Storm are significantly higher than their precision. Be-
+                                                                                      cause those three methods output their result by clusters instead of
+results with the ground-truth labels, we compute the four metrics of                  the identified correlated pairs, and we transform the clusters into
+                                                                                      pairs for our evaluation. Thus the number of false-positive sam-
+the fusing matrix and obtain the final measurement: Ture Positive                     ples would be enlarged, resulting in a low accuracy. Both LiDAR
+                                                                                      and OAS mine the correlation through semantic information and
+(TP) stands for the correlated alerts in results which are also labeled               co-occurrence information. However, the pattern mining part of
+                                                                                      OAS is not so effective in our evaluation, because our data do not
+as related in ground truth; True Negative (TN) are for those irrele-                  contain the Type or Template attributes. Thus the performance of
+                                                                                      OAS is lower than expected. The relation learning module in iPACK
+vant alert pairs both in results and ground truth. False Positive (FP)                utilizes point-wise mutual information (PMI) as the metric, which is
+                                                                                      mathematically similar to the conditional possibility in our design.
+are correlated alerts in our tests but are not correlated in ground                   Besides, the Kneedle algorithm of iPACK for denoising is effective
+                                                                                      for the evenly distributed noises in our task. Thus iPACK reaches a
+truth. False Negative (FN) means the irrelevant pairs in tests but                    close performance with LiDAR and the COLA without SFT.
+
+actually correlated in ground truth. With these four basic metrics,                   4.5.2 RQ2: In this RQ, we illustrate the effectiveness of each
+                                                                                      component in COLA by removing the corresponding parts from the
+we obtain the precision, recall and F1-score as the final metrics                     framework and performing the evaluation. The full version of COLA
+                                                                                      combines the correlation mining module, which leverages temporal
+for our evaluation, where           =                      ,      =            ,      and spatial relations, with the LLM reasoning module utilizing the
+                                                       +                  +           SFT technique. To remove the contribution of temporal relation,
+                     ·                                                                we only maintain the sequence sampling and node embedding for
+ 1  -     =  2  ·   +            .                                                    spatial relation in the correlation mining module, while the LLM
+                                                                                      module remains unchanged. And vice versa for the spatial relation.
+4.5 Evaluation Results                                                                To remove the contribution of LLM, we mark all the alert pairs with
+                                                                                      negative similarity scores as unrelated to get the test result.
+4.5.1 RQ1: In this RQ, we demonstrate the effectiveness of COLA
+on identifying correlated alerts by comparing it with the two ma-
+chine learning algorithms and four research methods. The evalua-
+tion result is shown in Table 2. The highest F1-score is shown in
+bold, which represents the best overall performance considering
+the correctness and completeness of the result. And the second-
+highest F1-score is underlined.
+
+   We implement the LLM module of COLA with ICL and SFT
+independently. We evaluate the two methods and list the result in
+Table 2. COLA without SFT reaches the best F1-score in Dataset A
+and B, while getting the second highest in Dataset C, compared with
+the existing methods. The result supports that LLM contributes to
+the correlation analysis. However, the increase of F1-score is not
+significant, which is 1.7% and 5.1% compared to the state-of-the-
+art method on Dataset A and B, respectively. This result shows
+the great potential to improve ICL on the alert aggregation task.
+There are several possible reasons for the low improvement: 1)
+Knowledge-aware Alert Aggregation in Large-scale                                                  ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal
+Cloud Systems: a Hybrid Approach
+
+             Table 3: Effectiveness of each component in COLA on identifying correlated alerts
+
+             Method                               Dataset A                     Dataset B                Dataset C
+
+                       Precision Recall F1 score Precision Recall F1 score Precision Recall F1 score
+
+w/o temporal relation  0.521                      0.583      0.550       0.536  0.566      0.551  0.548  0.579      0.563
+ w/o spatial relation  0.876                      0.893      0.884       0.861  0.852      0.856  0.874  0.853      0.863
+       w/o LLM         0.652                      0.596      0.616       0.594  0.633      0.613  0.627  0.649      0.638
+         COLA          0.892                      0.924      0.908       0.916  0.943      0.930  0.921  0.882      0.901
+
+Table 4: Average inference time (s)                                      LLM. The SFT takes hours to fine-tune depending on the parameter
+                                                                         settings and hardware environments. In practice, the time cost of
+Method Dataset A Dataset B Dataset C                                     training would not reduce the efficiency. Because the fine-tuned
+                                                                         model only needs to be trained once before being deployed. The time
+Alert Storm  2.14      1.67                       1.64                   cost of fine-tuning is about 12 hours in our evaluation. That means
+                                                                         if it is necessary to retrain parameters due to system updates after
+LiDAR        1.12      0.78                       0.82                   a long time, the time cost is practical and acceptable. The retraining
+                                                                         process would not interrupt the on-work online inference.
+OAS          0.19      0.29                       0.23
+                                                                            For the time cost of online inference, the average inference time
+iPACK        0.47      0.52                       0.58                   for each alert pair is shown in Table 4. The ICL is the most time-
+                                                                         consuming technique and much more costly compared with other
+ ICL         42.81     50.02                      47.86                  methods, which matches the observation of the low-efficiency prob-
+COLA         5.78      8.94                       7.48                   lem of LLM. Even worse, the long ICL prompt with samples, queries
+                                                                         and rules results in a longer time to wait for the LLM response.
+   The evaluation result is shown in Table 3. The average F1-score       AlertStorm and LiDAR give a result with 1.82 and 0.91 seconds
+reduction on all datasets for removing temporal relation, spatial        on average. The main cost for Alert Storm is the DBSCAN clus-
+relation and LLM module is 39.3%, 5.5%, 31.8%, respectively. The         tering, and for LiDAR is the two types of embedding computing
+contribution of spatial relation is much smaller than the other two      with distance calculating. OAS and iPACK response in less than 1
+components. We conclude two main reasons from our historical             second for all datasets. In our implementation, the co-occurrence
+data for the low effectiveness: 1) Inaccuracy: We construct the          pattern mining part in OAS is not fully implemented because there
+service topology graph by linking the related service nodes in           is no attribute for the alert type or template in our dataset. The
+history. However, the different intensity of service connection is not   main technique we reproduce from iPACK, incident profiling, is a
+taken into consideration. Some service pairs appear more frequently      statistic method with high efficiency. Thus the time costs of these
+than other pairs, which indicates a closer correlation and yields a      two methods are low. As for the COLA, the average response time is
+higher contribution to spatial similarity. 2) Incompleteness: The        7.4 seconds. The LLM module in COLA accounts for the most time
+historical data can not cover the real-world topology, and can not       cost. However, COLA significantly reduces the time cost compared
+deal with the new services and alerts as the system updates from         with the standalone ICL method. Because many of the alerts are
+time to time. We expect the performance of spatial relation would        filtered and denoised by the correlation mining module, which is
+be improved with high-quality topology data.                             an efficient statistic component. LLM only handles the rest of the
+                                                                         alerts. Thus even with the LLM introduced in COLA, the inference
+   The temporal relation and LLM module account for the main per-        time cost is still at a similar scale to the state-of-the-art designs
+formance of COLA. For the temporal component, the distribution           which contain both statistic and semantic modules like LiDAR.
+of alerts in the online service system follows the temporal locality.
+Thus the time widow division method is suitable and effective for        5 INDUSTRIAL EXPERIENCE
+capturing the locality. Besides, the correlation analysis based on
+co-occurrence pattern mining is reliable and achieves satisfying         In this section, we share our experience in integrating COLA to our
+performance in previous research on many tasks [24, 35, 36]. The         SRE (site reliability engineering) platform in Cloud X. The SRE plat-
+LLM component utilizes the semantic information to determine             form is a centralized platform that manages the life cycle of alerts,
+correlation. Different from previous semantic methods based on           including alert configuration, alert reporting, assignment, mitiga-
+embeddings, LLM learns the domain knowledge from SOPs, and               tion and resolution. One critical object for OCEs using the platform
+stores it in local parameters. The domain knowledge helps LLM un-        is to ensure a cloud problem can be quickly resolved to minimize
+derstand alerts better and makes LLM possible to infer and compare       customer impact. However, this is usually challenging when OCEs
+the cause of alerts. In addition, LLM acts as the complementary          face overwhelming information on the platform. Especially, when
+of co-occurrence mining, further improving the performance by            an alert storm happens, hundreds of alerts can be simultaneously
+analyzing the statistically unrelated samples. For example, some         reported from multiple services. In particular, during alert storms,
+correlated alerts may have a large time interval between their ap-       numerous alerts can be simultaneously reported from multiple ser-
+pearances, and some may be triggered rarely or are completely new        vices. OCEs often find it necessary to aggregate alerts stemming
+and unseen to the model. LLM tackles these samples by summariz-          from the same problem to accelerate their resolution. In our previ-
+ing their SOPs and analyzing the causes, thus achieving significant      ous practice, multiple OCEs were required to manually comprehend
+improvement over statistical methods.
+
+4.5.3 RQ3: In this RQ, we investigate the efficiency of COLA from
+the time cost of offline training and online inference. For the offline
+training stage, the different components of COLA can be trained
+in a paralleled way. The most time-consuming component is the
+ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal                                                                                                                              Jinxi Kuang, et al.
+
+Aggregated Alert Clusters                        Details on Alert Linkage                     Internal validity. Implementation and parameter settings are the
+                                                                                              primary internal threats. For implementation, the compared re-
+                            Alert1         Alert1 title: Redis_switch_to_backup_instance      search methods are not open-sourced. Thus we reproduce the meth-
+                                   Alert2  SOP1: Internal link to detailed SOP1               ods based on the original paper, following the detailed algorithms
+                                           Alert2 title: DCS_user_log_count_failover          and parameter settings. We utilized established libraries to imple-
+                                           SOP2: Internal link to detailed SOP2               ment the core components. Peer code review is employed for the
+                                                                                              proposed and baseline methods implementations. For parameter
+                                           Response from LLM: The explanation of alert 1 is   settings, we conduct a thorough hyperparameter tuning process,
+                                           that the Redis instance on master node switches    such as grid-search, to select the optimal results.
+                                           to the backup. The possible cause of alert 2 is a
+                                           failure or instance switch of the Redis instance,  7 RELATED WORK
+                                           resulting in the inconsistent connection status
+                                           and concurrent operations. The instance switch     7.1 Failure Analysis
+                                           can lead to the abnormal connection counts.
+                                           Therefore, alert 1 probably causes alert 2, these  Failure analysis, such as incident management and root cause anal-
+                                           two alerts are correlated.                         ysis, has become a popular topic as online service systems develop
+                                                                                              rapidly nowadays [2, 4, 7]. It aims to mitigate the failure timely
+Figure 8: An industrial case of alert clusters                                                to recover the service quality, and identify the root causes to di-
+                                                                                              agnose and fix the outage thoroughly. Researchers have devoted
+these alerts and identify correlated instances through discussions.                           sustained efforts to reliable analysis based on various data sources,
+This approach proved to be inefficient, labor-intensive, and heavily                          such as alerts, incidents and internal failure reports. For alerts, Zhao
+reliant on the OCEs' experience. Considering the large scale of                               et al. [39] observe and name the alert storm phenomenon. They
+Cloud X, it is non-trivial for OCEs to understand these alerts and                            propose a learning-based method to denoise the alerts by the iso-
+correlate them quickly. This is primarily due to each OCE primarily                           lation forest, and design a clustering-based method to group the
+specializing in a specific component of a service, thereby limiting                           alerts by DBSCAN. OAS [3] combines the semantic and behavior
+their knowledge scope.                                                                        information, and fuse the representation of two types of informa-
+                                                                                              tion by a deep learning model. iPACK [25] mines the correlation
+   To assist OCEs in alert analysis, we have integrated COLA within                           pattern of parsed alerts by point-wise mutual information. These
+the SRE platform. COLA has learned from extensive knowledge                                   methods mainly focus on textual information and co-occurrence
+(e.g., SOPs) accumulated in the SRE platform, which covers almost                             patterns in time windows, while the service topology is not well uti-
+all services in Cloud X. As demonstrated in Figure 8, COLA will                               lized. For incidents, LiDAR [6] proposes a textual encoding module
+present alerts in clusters to OCEs, where the link between alerts                             with TextCNN [21] for incident contents, a component embedding
+is associated with linkage details i.e., the concrete title, associated                       module with Skip-Gram [32] for service topology, and combine
+SOPs and response from LLM. Alerts that are not correlated do                                 them to identify the linked incidents. COT [36] predicts the root
+not possess such linkages. In practice, COLA not only is capable                              cause by building service correlation from incident correlation.
+of predicting the relationships between two alerts for aggregation,                           Groot [35] analyzes the root cause by constructing dependency and
+but it can also provide interpretable explanations based on the                               causality graphs based on failure events. Warden [24] groups the
+knowledge it has acquired, such as summarized information from                                incidents with the same cause to perform timely incident triage. For
+the SOPs and its reasoning procedure. In Cloud X, we have received                            internal failure reports, Shetty et al. [34] from Microsoft leverage
+positive feedback from OCEs. With the aggregation results, OCEs                               the Troubleshooting Guides (TSG) to propose AutoTSG, for auto-
+can quickly obtain a comprehensive picture of a failure event and                             matically minimizing the manual effort of On-call engineers on
+improve the efficiency of resolving a problem. More importantly,                              incident handling. Different from these works, we introduce the
+OCEs found it is more acceptable to interpretable results rather                              internal Standard Operation Procedure (SOP) documents in Cloud X
+than yes or no predictions. They appreciate that the adoption of                              and further leverage the Large Language Model (LLM) to perform
+COLA has effectively bridged knowledge gaps that exist across                                 reasoning based on the alert and SOP contents.
+different services, contributing to the overall efficiency of cloud
+maintenance activities.                                                                       7.2 LLM for Software Engineering
+
+6 THREATS TO VALIDITY                                                                         With the rapid development and promising rise of LLM in recent
+                                                                                              years, LLM has been employed to solve various challenging prob-
+We identify the following threats to external and internal validity.                          lems in software engineering, including code generation, summa-
+External validity. The study's object is the primary external threat.                         rization, testing and root cause analysis. Mastropaolo et al. [31] per-
+In the evaluation, we utilize the Standard Operation Procedure                                form a study about the capability of fine-tuned text-to-text-transfer-
+(SOP) documents. The three datasets are all from Cloud X, because                             transformer (T5) on a series of code-related tasks. LANCE [30] gen-
+there is no publicly available dataset containing such detailed and                           erates logging statements by fine-tuning the T5 model. On online
+complete alert descriptions as SOPs. However, Cloud X is a globally                           systems, Ahmed et al. [1] do the first large-scale study to evalu-
+recognized cloud provider, known for its extensive scale and lead-                            ate the effectiveness of recommending root cause and mitigation
+ership in the industry. And the data are indiscriminately collected                           steps by fine-tuned GPT-3.x. RCACopilot [5] collects the runtime
+from various services of diverse regions. Thus the evaluation should                          diagnostic information, then predicts the root cause category of
+be representative and convincing. Furthermore, the historical data
+are maintained and accumulated regularly in commercial cloud
+providers. The contents of SOPs are about necessary alert handling,
+which is commonly recorded in related documents such as failure
+reports of various cloud systems. Thus we believe COLA is capable
+of generalizing to similar cloud systems.
+Knowledge-aware Alert Aggregation in Large-scale                                                                                     ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal
+Cloud Systems: a Hybrid Approach
+                                                                                           [11] Shuzheng Gao, Xin-Cheng Wen, Cuiyun Gao, Wenxuan Wang, Hongyu Zhang,
+incidents with the collected information by LLM. OASIS [19] ag-                                  and Michael R. Lyu. 2023. What Makes Good In-context Demonstrations for Code
+gregates the incidents and generates human-readable summaries                                    Intelligence Tasks with LLMs?. In Proceedings of the 38th International Conference
+by fine-tuned GPT-3.x. Different from those methods, we introduce                                on Automated Software Engineering (ASE).
+the fine-tuned internal LLM to perform alert aggregation based on
+domain knowledge reasoning.                                                                [12] Aditya Grover and Jure Leskovec. 2016. node2vec: Scalable feature learning for
+                                                                                                 networks. In Proceedings of the 22nd ACM SIGKDD international conference on
+8 CONCLUSION                                                                                     Knowledge discovery and data mining. 855­864.
+
+In this paper, we present COLA, a novel hybrid approach for on-                            [13] Wenwei Gu, Jinyang Liu, Zhuangbin Chen, Jianping Zhang, Yuxin Su, Jiazhen
+line alert aggregation in large-scale cloud systems. By leveraging                               Gu, Cong Feng, Zengyin Yang, and Michael Lyu. 2023. Performance Issue Identi-
+detailed knowledge from Standard Operating Procedures (SOPs),                                    fication in Cloud Systems with Relational-Temporal Anomaly Detection. arXiv
+COLA effectively aggregates alerts that may be semantically dissim-                              preprint arXiv:2307.10869 (2023).
+ilar or lack sufficient statistics for analysis. The proposed framework
+combines a correlation mining component and an LLM reasoning                               [14] Jiawei Han, Jian Pei, and Yiwen Yin. 2000. Mining frequent patterns without
+component, allowing for efficient handling of a large volume of                                  candidate generation. ACM sigmod record 29, 2 (2000), 1­12.
+alerts in practical scenarios. Extensive evaluation on three real-
+world datasets from Cloud X demonstrates that COLA outperforms                             [15] Shilin He, Qingwei Lin, Jian-Guang Lou, Hongyu Zhang, Michael R Lyu, and
+state-of-the-art methods in terms of F1-scores while maintaining                                 Dongmei Zhang. 2018. Identifying impactful service system problems via log
+comparable efficiency. The deployment of COLA in the production                                  analysis. In Proceedings of the 2018 26th ACM joint meeting on European software
+environment of Cloud X further validates its effectiveness.                                      engineering conference and symposium on the foundations of software engineering.
+                                                                                                 60­70.
+9 ACKNOWLEDGMENT
+                                                                                           [16] Xinyi Hou, Yanjie Zhao, Yue Liu, Zhou Yang, Kailong Wang, Li Li, Xiapu
+The work described in this paper was supported by the Research                                   Luo, David Lo, John Grundy, and Haoyu Wang. 2023. Large Language Mod-
+Grants Council of the Hong Kong Special Administrative Region,                                   els for Software Engineering: A Systematic Literature Review. arXiv preprint
+China (No. CUHK 14206921 of the General Research Fund).                                          arXiv:2308.10620 (2023).
+
+REFERENCES                                                                                 [17] Jie Huang and Kevin Chen-Chuan Chang. 2022. Towards reasoning in large
+                                                                                                 language models: A survey. arXiv preprint arXiv:2212.10403 (2022).
+ [1] Toufique Ahmed, Supriyo Ghosh, Chetan Bansal, Thomas Zimmermann, Xuchao
+      Zhang, and Saravan Rajmohan. 2023. Recommending Root-Cause and Mitiga-               [18] Jiajun Jiang, Weihai Lu, Junjie Chen, Qingwei Lin, Pu Zhao, Yu Kang, Hongyu
+      tion Steps for Cloud Incidents using Large Language Models. arXiv preprint                 Zhang, Yingfei Xiong, Feng Gao, Zhangwei Xu, et al. 2020. How to mitigate
+      arXiv:2301.03797 (2023).                                                                   the incident? an effective troubleshooting guide recommendation technique for
+                                                                                                 online service systems. In Proceedings of the 28th ACM Joint Meeting on European
+ [2] Junjie Chen, Xiaoting He, Qingwei Lin, Yong Xu, Hongyu Zhang, Dan Hao, Feng                 Software Engineering Conference and Symposium on the Foundations of Software
+      Gao, Zhangwei Xu, Yingnong Dang, and Dongmei Zhang. 2019. An empirical                     Engineering. 1410­1420.
+      investigation of incident triage for online service systems. In 2019 IEEE/ACM 41st
+      International Conference on Software Engineering: Software Engineering in Practice   [19] Pengxiang Jin, Shenglin Zhang, Minghua Ma, Haozhe Li, Yu Kang, Liqun Li,
+      (ICSE-SEIP). IEEE, 111­120.                                                                Yudong Liu, Bo Qiao, Chaoyun Zhang, Pu Zhao, et al. 2023. Assess and Summarize:
+                                                                                                 Improve Outage Understanding with Large Language Models. arXiv preprint
+ [3] Jia Chen, Peng Wang, and Wei Wang. 2022. Online summarizing alerts through                  arXiv:2305.18084 (2023).
+      semantic and behavior information. In Proceedings of the 44th International Con-
+      ference on Software Engineering. 1646­1657.                                          [20] Armand Joulin, Edouard Grave, Piotr Bojanowski, and Tomas Mikolov. 2016. Bag
+                                                                                                 of tricks for efficient text classification. arXiv preprint arXiv:1607.01759 (2016).
+ [4] Junjie Chen, Shu Zhang, Xiaoting He, Qingwei Lin, Hongyu Zhang, Dan Hao,
+      Yu Kang, Feng Gao, Zhangwei Xu, Yingnong Dang, et al. 2020. How incidental           [21] Yoon Kim. 2014. Convolutional neural networks for sentence classification. arXiv
+      are the incidents? characterizing and prioritizing incidents for large-scale online        preprint arXiv:1408.5882 (2014).
+      service systems. In Proceedings of the 35th IEEE/ACM International Conference on
+      Automated Software Engineering. 373­384.                                             [22] Cheryl Lee, Tianyi Yang, Zhuangbin Chen, Yuxin Su, and Michael R Lyu. 2023.
+                                                                                                 Eadro: An End-to-End Troubleshooting Framework for Microservices on Multi-
+ [5] Yinfang Chen, Huaibing Xie, Minghua Ma, Yu Kang, Xin Gao, Liu Shi, Yunjie                   source Data. arXiv preprint arXiv:2302.05092 (2023).
+      Cao, Xuedong Gao, Hao Fan, Ming Wen, et al. 2023. Empowering Practical Root
+      Cause Analysis by Large Language Models for Cloud Incidents. arXiv preprint          [23] Cheryl Lee, Tianyi Yang, Zhuangbin Chen, Yuxin Su, Yongqiang Yang, and
+      arXiv:2305.15778 (2023).                                                                   Michael R Lyu. 2023. Heterogeneous anomaly detection for software systems via
+                                                                                                 semi-supervised cross-modal attention. arXiv preprint arXiv:2302.06914 (2023).
+ [6] Yujun Chen, Xian Yang, Hang Dong, Xiaoting He, Hongyu Zhang, Qingwei Lin,
+      Junjie Chen, Pu Zhao, Yu Kang, Feng Gao, et al. 2020. Identifying linked incidents   [24] Liqun Li, Xu Zhang, Xin Zhao, Hongyu Zhang, Yu Kang, Pu Zhao, Bo Qiao, Shilin
+      in large-scale online service systems. In Proceedings of the 28th ACM joint meeting        He, Pochian Lee, Jeffrey Sun, et al. 2021. Fighting the fog of war: Automated
+      on European software engineering conference and symposium on the foundations of            incident detection for cloud systems. In 2021 USENIX Annual Technical Conference
+      software engineering. 304­314.                                                             (USENIX ATC 21). 131­146.
+
+ [7] Zhuangbin Chen, Yu Kang, Liqun Li, Xu Zhang, Hongyu Zhang, Hui Xu, Yangfan            [25] Jinyang Liu, Shilin He, Zhuangbin Chen, Liqun Li, Yu Kang, Xu Zhang, Pinjia He,
+      Zhou, Li Yang, Jeffrey Sun, Zhangwei Xu, et al. 2020. Towards intelligent incident         Hongyu Zhang, Qingwei Lin, Zhangwei Xu, et al. 2023. Incident-aware Duplicate
+      management: why we need it and how we make it. In Proceedings of the 28th                  Ticket Aggregation for Cloud Systems. In Proceedings of the 44th International
+      ACM Joint Meeting on European Software Engineering Conference and Symposium                Conference on Software Engineering.
+      on the Foundations of Software Engineering. 1487­1497.
+                                                                                           [26] Jinyang Liu, Junjie Huang, Yintong Huo, Zhihan Jiang, Jiazhen Gu, Zhuangbin
+ [8] Zhuangbin Chen, Jinyang Liu, Yuxin Su, Hongyu Zhang, Xuemin Wen, Xiao Ling,                 Chen, Cong Feng, Minzhi Yan, and Michael R Lyu. 2023. Scalable and Adap-
+      Yongqiang Yang, and Michael R Lyu. 2021. Graph-based incident aggregation for              tive Log-based Anomaly Detection with Expert in the Loop. arXiv preprint
+      large-scale online service systems. In 2021 36th IEEE/ACM International Conference         arXiv:2306.05032 (2023).
+      on Automated Software Engineering (ASE). IEEE, 430­442.
+                                                                                           [27] Jinyang Liu, Jieming Zhu, Shilin He, Pinjia He, Zibin Zheng, and Michael R
+ [9] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2018. Bert:               Lyu. 2019. Logzip: Extracting hidden structures via iterative clustering for log
+      Pre-training of deep bidirectional transformers for language understanding. arXiv          compression. In 2019 34th IEEE/ACM International Conference on Automated
+      preprint arXiv:1810.04805 (2018).                                                          Software Engineering (ASE). IEEE, 863­873.
+
+[10] Martin Ester, Hans-Peter Kriegel, Jörg Sander, Xiaowei Xu, et al. 1996. A density-    [28] Xiao Liu, Kaixuan Ji, Yicheng Fu, Weng Tam, Zhengxiao Du, Zhilin Yang, and Jie
+      based algorithm for discovering clusters in large spatial databases with noise. In         Tang. 2022. P-tuning: Prompt tuning can be comparable to fine-tuning across
+      kdd, Vol. 96. 226­231.                                                                     scales and tasks. In Proceedings of the 60th Annual Meeting of the Association for
+                                                                                                 Computational Linguistics (Volume 2: Short Papers). 61­68.
+
+                                                                                           [29] Xiao Liu, Kaixuan Ji, Yicheng Fu, Weng Lam Tam, Zhengxiao Du, Zhilin Yang,
+                                                                                                 and Jie Tang. 2021. P-tuning v2: Prompt tuning can be comparable to fine-tuning
+                                                                                                 universally across scales and tasks. arXiv preprint arXiv:2110.07602 (2021).
+
+                                                                                           [30] Antonio Mastropaolo, Luca Pascarella, and Gabriele Bavota. 2022. Using deep
+                                                                                                 learning to generate complete log statements. In Proceedings of the 44th Interna-
+                                                                                                 tional Conference on Software Engineering. 2279­2290.
+
+                                                                                           [31] Antonio Mastropaolo, Simone Scalabrino, Nathan Cooper, David Nader Palacio,
+                                                                                                 Denys Poshyvanyk, Rocco Oliveto, and Gabriele Bavota. 2021. Studying the
+                                                                                                 usage of text-to-text transfer transformer to support code-related tasks. In 2021
+                                                                                                 IEEE/ACM 43rd International Conference on Software Engineering (ICSE). IEEE,
+                                                                                                 336­347.
+
+                                                                                           [32] Tomas Mikolov, Ilya Sutskever, Kai Chen, Greg S Corrado, and Jeff Dean. 2013.
+                                                                                                 Distributed representations of words and phrases and their compositionality.
+                                                                                                 Advances in neural information processing systems 26 (2013).
+ICSE-SEIP '24, April 14­20, 2024, Lisbon, Portugal                                                                                                                          Jinxi Kuang, et al.
+
+[33] Yun Peng, Shuqing Li, Wenwei Gu, Yichen Li, Wenxuan Wang, Cuiyun Gao, and                  in large language models. Advances in Neural Information Processing Systems 35
+      Michael R Lyu. 2022. Revisiting, benchmarking and exploring API recommen-                 (2022), 24824­24837.
+      dation: How far are we? IEEE Transactions on Software Engineering 49, 4 (2022),     [38] Tianyi Yang, Jiacheng Shen, Yuxin Su, Xiaoxue Ren, Yongqiang Yang, and
+      1876­1897.                                                                                Michael R Lyu. 2022. Characterizing and Mitigating Anti-patterns of Alerts
+                                                                                                in Industrial Cloud Systems. In 2022 52nd Annual IEEE/IFIP International Confer-
+[34] Manish Shetty, Chetan Bansal, Sai Pramod Upadhyayula, Arjun Radhakrishna,                  ence on Dependable Systems and Networks (DSN). IEEE, 393­401.
+      and Anurag Gupta. 2022. AutoTSG: learning and synthesis for incident trou-          [39] Nengwen Zhao, Junjie Chen, Xiao Peng, Honglin Wang, Xinya Wu, Yuanzong
+      bleshooting. In Proceedings of the 30th ACM Joint European Software Engineering           Zhang, Zikai Chen, Xiangzhong Zheng, Xiaohui Nie, Gang Wang, et al. 2020.
+      Conference and Symposium on the Foundations of Software Engineering. 1477­                Understanding and handling alert storm for online service systems. In Proceedings
+      1488.                                                                                     of the ACM/IEEE 42nd International Conference on Software Engineering: Software
+                                                                                                Engineering in Practice. 162­171.
+[35] Hanzhang Wang, Zhengkai Wu, Huai Jiang, Yichao Huang, Jiamu Wang, Selcuk             [40] Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang, Yupeng Hou,
+      Kopru, and Tao Xie. 2021. Groot: An event-graph-based approach for root cause             Yingqian Min, Beichen Zhang, Junjie Zhang, Zican Dong, et al. 2023. A survey
+      analysis in industrial settings. In 2021 36th IEEE/ACM International Conference on        of large language models. arXiv preprint arXiv:2303.18223 (2023).
+      Automated Software Engineering (ASE). IEEE, 419­429.                                [41] Zibin Zheng, Kaiwen Ning, Jiachi Chen, Yanlin Wang, Wenqing Chen, Lianghong
+                                                                                                Guo, and Weicheng Wang. 2023. Towards an Understanding of Large Language
+[36] Yaohui Wang, Guozheng Li, Zijian Wang, Yu Kang, Yangfan Zhou, Hongyu Zhang,                Models in Software Engineering Tasks. arXiv preprint arXiv:2308.11396 (2023).
+      Feng Gao, Jeffrey Sun, Li Yang, Pochian Lee, et al. 2021. Fast outage analysis of
+      large-scale production clouds with service correlation mining. In 2021 IEEE/ACM
+      43rd International Conference on Software Engineering (ICSE). IEEE, 885­896.
+
+[37] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi,
+      Quoc V Le, Denny Zhou, et al. 2022. Chain-of-thought prompting elicits reasoning
+

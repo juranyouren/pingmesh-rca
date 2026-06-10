@@ -1,0 +1,943 @@
+IEEE TRANSACTIONS ON SERVICES COMPUTING, VOL. 18, NO. 6, NOVEMBER/DECEMBER 2025               4221
+
+  TAMO:Fine-Grained Root Cause Analysis via
+ Tool-Assisted LLM Agent With Multi-Modality
+
+    Observation Data in Cloud-Native Systems
+
+Xiao Zhang , Qi Wang, Mingyi Li , Yuan Yuan , Mengbai Xiao , Fuzhen Zhuang , and Dongxiao Yu
+
+   Abstract--Implementing large language models (LLMs)-driven                  of distributed systems [25], [30], [37], [45]. Microservices de-
+root cause analysis (RCA) in cloud-native systems has become a                 compose traditional monolithic applications into independent
+key topic of modern software operations and maintenance. How-                  distributed services, while cloud native technologies leverage
+ever, existing LLM-based approaches face three key challenges:                 containerization and container orchestration to enhance the ca-
+multi-modality input constraint, context window limitation, and                pabilities for flexible resource allocation and autoscaling [21],
+dynamic dependence graph. To address these issues, we propose a                [33]. In detail, cloud-native systems are composed of numerous
+tool-assisted LLM agent with multi-modality observation data for               independent microservices and containerized entities (e.g., pod,
+fine-grained RCA, namely TAMO, including multi-modality align-                 node) [52], which inevitably brings inter-service dependencies
+ment tool, root cause localization tool, and fault types classification        and complex communication patterns. Therefore, the failure
+tool. In detail, TAMO unifies multi-modal observation data into                of any entity (e.g., network corruption) can trigger cascading
+time-aligned representations for cross-modal feature consistency.              effects that damage overall system stability, potentially leading
+Based on the unified representations, TAMO then invokes its spe-               to significant economic losses [2], [38].
+cialized root cause localization tool and fault types classification
+tool for further identifying root cause and fault type underlying                 Root cause analysis (RCA) aims to quickly correlate features
+system context. This approach overcomes the limitations of LLMs                of multiple related entities, localize root cause, identify corre-
+in processing real-time raw observational data and dynamic ser-                sponding fault type, and provide reasonable solutions, thus re-
+vice dependencies, guiding the model to generate repair strategies             alizing an automatic fault response mechanism and minimizing
+that align with system context through structured prompt design.               human intervention [5], [48]. Therefore, how to perform accu-
+Experiments on two benchmark datasets demonstrate that TAMO                    rate and efficient root cause analysis in cloud-native systems has
+outperforms state-of-the-art (SOTA) approaches with comparable                 become an important research topic recently [14], [51]. On one
+performance.                                                                   hand, traditional RCA methods [29], [31] typically rely on rule-
+                                                                               based anomaly detection or statistical correlation analysis (e.g.,
+   Index Terms--Root cause analysis, tool-assisted LLM agent,                  causal graphs) [24] to localize faults. These methods struggle to
+cloud-native systems, multimodal data, diffusion.                              jointly analyze heterogeneous data modalities with unstructured
+                                                                               logs and metric data, often leading to undetected faluts. On the
+                           I. INTRODUCTION                                     other hand, deep learning (DL) based RCA methods attempt to
+                                                                               incorporate multimodal feature fusion and dependency-sensitive
+I N RECENT years, microservice architecture in cloud-native                    graph neural networks (GNNs) [23], [50] to achieve accurate
+    systems has become foundational elements in modern en-                     fault localization. For instance, MULAN [51] infers causal
+terprise software development, driving the rapid improvement                   structures from heterogeneous observation data for service-level
+                                                                               diagnosis, while PDiagnose [18] treats multimodal data inde-
+   Received 10 June 2025; revised 30 September 2025; accepted 27 Octo-         pendently and aggregates decisions via voting to pinpoint root
+ber 2025. Date of publication 5 November 2025; date of current version 11      causes. The abovementioned methods mainly focus on specific
+December 2025. This work was supported in part by the National Natural         tasks such as fault localization in complex systems, ignor-
+Science Foundation of China under Grant 62202273 and Grant 62176014, in        ing fine-grained RCA with fault type identification, contextual
+part by the Joint Key Funds of National Natural Science Foundation of China    anomaly interpretation, and cross-level dependency reasoning.
+under Grant U24B20149, in part by the Major Basic Research Program of          Recently, large language models (LLMs) have demonstrated
+Shandong Provincial Natural Science Foundation under Grant ZR2025ZD18,         revolutionary capabilities in automated RCA, opening new av-
+in part by China Postdoctoral Science Foundation under Grant 2024M761806,      enues for AIOps [9], [12]. LLMs can combine RCA with current
+and in part by the Fundamental Research Funds for the Central Universities.    system context to generate reasonable fault diagnosis reports,
+(Corresponding author: Dongxiao Yu.)                                           emerging with RCACopilot [6]. Recent works such as RCA-
+                                                                               gent [41] and mABC [49] develop LLM-driven automated RCA
+   Xiao Zhang, Qi Wang, Mingyi Li, Mengbai Xiao, and Dongxiao Yu are with      frameworks that enable accurate fault localization and provide
+the School of Computer Science and Technology, Shandong University, Qingdao    reasonable repair suggestions, thus further advancing the field
+266237, China (e-mail: xiaozhang@sdu.edu.cn; wsq5457@mail.sdu.edu.cn;
+limee@mail.sdu.edu.cn; xiaomb@sdu.edu.cn; dxyu@sdu.edu.cn).
+
+   Yuan Yuan is with the School of Software & Joint SDU-NTU Centre for
+Artificial Intelligence Research (C-FAIR), Shandong University, Jinan 250000,
+China (e-mail: yyuan@sdu.edu.cn).
+
+   Fuzhen Zhuang is with the Institute of Artificial Intelligence, State Key
+Laboratory of Complex & Critical Software Environment (SKLCCSE), Beihang
+University, Beijing 100191, China (e-mail: zhuangfuzhen@buaa.edu.cn).
+
+   Digital Object Identifier 10.1109/TSC.2025.3629066
+
+       1939-1374 © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and similar technologies.
+Personal use is permitted, but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+
+              Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+4222                                         IEEE TRANSACTIONS ON SERVICES COMPUTING, VOL. 18, NO. 6, NOVEMBER/DECEMBER 2025
+
+of automated operations and maintenance. RCAgent proposes              causal analysis. Subsequently, the fault types classification tool
+
+a tool-augmented autonomous agent framework that leverages             (T3) further utilizes the casual graph from T2 to identify the
+
+log and code data with an internally deployed LLM to perform           anomalous patterns.
+
+root cause analysis, while mABC mitigates circular dependency          TrhWe me aipnrocopnotsreibuatiodnosmaraeins-usmpemciafiriczedtoaoslsfolalosswisst:ed LLM
+
+issue in microservice RCA through blockchain-inspired multi-
+
+agent voting within a structured workflow.                                agent framework for fine-grained RCA, including multi-
+
+However, existing LLM-based methods still face some tricky                modality alignment tool, root cause localization tool, and
+
+challenges when applied to fine-grained RCA in cloud-native               fault types classification tool to empower the LLM for
+
+systems involving multi-level entities and heterogeneous multi-        r  real-time system diagnosis.
+                                                                          In detail, we present a dual-branch collaborative diffusion
+mordaMlituyltdi-aMtao: dality Input: Existing LLM-driven methods such
+                                                                          tool for multi-modality alignment that captures potentially
+
+      as COCA [26], RCAgent [41], only support log data or code           consistent patterns across modalities and provides unified
+
+      data as input, ignoring abundant context information such           representations for downstream tasks through condition-
+
+      as metric data and trace data. However, directly feeding            oriented collaborative reconstruction. Otherwise, the root
+
+      multimodal data into LLMs often hinders accurate RCA                cause localization tool is based on frequency-domain at-
+
+      due to inherent modality misalignment, for instance, the            tention mechanisms, which identifies causal dependency
+
+      semantic gap between time-series metrics and textual logs.          patterns in frequency-domain features while filtering out
+
+      Therefore, how to map different modalities into unified             low-frequency noise, achieving precise root cause local-
+
+      semantic space to assist the LLM in accurate RCA is              r  ization.
+                                                                          Experiments on two benchmark datasets demonstrate that
+r     challenging.
+      Context Window Limitation: Limited by fixed-length con-             our proposed TAMO outperforms state-of-the-art (SOTA)
+
+      text windows, the LLM is unable to effectively process              approaches, achieving average Acc@1 improvement of
+
+      the massive real-time metric data generated by continuous           4.8% for root cause localization and MiPr improvement
+
+      monitoring across kinds of microservices, nodes or pods in          of 10.8% for fault types classification respectively.
+
+      cloud-native systems. The real-time metric data typically
+
+      reflect system states but does not explicitly indicate anoma-                              II. RELATED WORK
+
+      lies or fault types, yet lacking aligned semantic meaning           In modern cloud-native systems, with the widespread adop-
+                                                                       tion of microservice architectures and dynamic infrastructures,
+      with text logs. So how to transform raw measurements             it has become particularly important to ensure high system
+                                                                       availability and rapid fault recovery, making root cause analysis
+      into meaningful diagnostic prompts and input them into           (RCA) a critical part of operations and maintenance. As a result,
+                                                                       various RCA methods have been developed to guarantee sys-
+r     the LLM with limited context length?   service  call             tem reliability, including traditional RCA methods, multi-modal
+      Dynamic Dependence Graph: The dynamic                            RCA methods, and LLM-based RCA methods.
+
+      chains from the trace data in the system inevitably bring           Traditional RCA methods: Traditional RCA methods are
+                                                                       mainly based on statistical correlation analysis techniques, such
+      evolving dependencies. However, exsiting LLM-based               as anomaly detection based on predefined rules and root cause
+                                                                       localization strategies based on causal discovery [7], [43]. While
+      methods [40] struggle with fine-grained RCA over dy-             these approaches perform well in static environments, they have
+                                                                       difficulties in adapting to the dynamic service dependencies
+      namic dependence graphs, making it difficult to capture im-      that characterize cloud native environments. With the rapid ad-
+                                                                       vancement of deep learning, neural network-based methods for
+      plicit fault propagation path. So how to assist the LLM agent    real-time system data analysis continue to emerge. DeepLog [11]
+                                                                       models log features via long short-term memory networks.
+      in modeling fault propagation paths based on dynamic             GDN [10] and GTA [8] construct graph neural networks using
+                                                                       metrics data to capture fault propagation paths. Sage [13] lever-
+      dependence graph to improve root cause localization and          ages causal Bayesian networks with trace data for root cause
+                                                                       localization. However, these approaches predominantly focus
+      fault types classification?                                      on unimodal data, failing to exploit complementary inter-modal
+                                                                       relationships.
+To address these chanllenges, we propose a tool-assisted LLM
+                                                                          Multi-modal RCA methods: The multimodal-based approach
+agent framework based on kinds of domain-specific tools. This          significantly reduces the undetected fault rate by compre-
+                                                                       hensively considering system observation data from different
+framework decouples the LLM from the raw multi-modality                modalities. MULAN [51] learns causal structures from logs
+                                                                       and metrics for service-level localization. PDiagnose [18] an-
+observation data by utilizing specialized tools: multi-modality        alyzes different modality data as independent entities and uses a
+
+alignment tool T1, root cause localization tool T2, and fault
+types classification tool T3. These specialized model tools are
+
+used to perceive the contextual environment, and their results
+
+form structured prompts that are fed back to the RCA expert
+
+agent for further analysis, generating accurate root cause analy-
+
+sis results and reasonable maintenance recommendations. In de-
+
+tail, multi-modality alignment tool T1 is based on a dual-branch
+diffusion architecture, which unifies multi-modality observation
+
+data, such as log data, trace data and metric data, into temporally
+
+consistent representations. To address dynamic dependencies
+
+challenge, the root cause localization tool (T2) jointly utilizes
+the extracted representations from T1 and dependence graphs
+extracted from trace data to model fault propagation and identify
+
+the root cause via frequency-domain attention-driven temporal
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+ZHANG et al.: TAMO:FINE-GRAINED ROOT CAUSE ANALYSIS VIA TOOL-ASSISTED LLM AGENT                                                           4223
+
+                                          TABLE I
+ COMPARISON OF DIFFERENT LLM RCA MODELS BY MODALITY AND TASK.
+ FTC DENOTES FAULT TYPES CLASSIFICATION; RCL DENOTES ROOT CAUSE
+
+                                      LOCALIZATION.
+
+voting mechanism to identify the root cause entity. Although          Fig. 1. A failure case in a cloud-native system demonstrates three major
+this method successfully utilizes data from multiple modali-          challenges when using LLM directly for root cause analysis.
+ties, it overlooks the consistency relationships between features
+from different modalities. Eadro [23] performs gated fusion of        Multi-Modality Observation Data to address root cause en-
+features extracted from different modalities and uses a graph         tity localization and fault types classification in cloud-native
+neural network to fuse embedded features at the service level for     systems. This framework utilizes observation tools composed
+root cause localization. HolisticRCA [14] compared to Eadro,          of a dual-branch collaborative diffusion model to effectively
+fully considers the heterogeneous characteristics of cloud native     extract and integrate multimodal data from different entities.
+systems and standardizes the embedding of different modality          Additionally, task-specialized tools explicitly model the com-
+data using an assembling building blocks strategy, combining          plex dependencies among entities using a causal graph, with
+masked embeddings for overall root cause analysis. In contrast        feature propagation through the causal graph enabling accurate
+to directly using raw data for root cause localization, Nezha [46]    root cause analysis. Furthermore, to fully incorporate domain
+and DiagFusion [48] convert heterogeneous multimodal data             knowledge, we employ a LLM with operational expertise as an
+into homogeneous event representations, performing joint anal-        expert agent. The expert agent A integrates the outputs from the
+ysis through event graphs to achieve root cause localization.         preceding tools T2-T3 with context knowledge of the system
+CoE [44] further supports the operational experience of site          to offer human engineers a comprehensive fault analysis and
+reliability engineers as input on the event graph, enhancing the      recommended solutions. As shown in Fig. 2, the proposed
+understanding and interpretability of the event.                      framework consists of three tools and one agent, T1­T3 and
+                                                                      A , each responsible for a specific task in the root cause analysis
+   LLM-based RCA methods: Large language models are in-               process:
+creasingly leveraged for root cause analysis due to their strong
+reasoning capabilities. Recent works explore various LLM ap-             1) Multi-modality Alignment Tool (T1): This tool employs
+plications: Adarma [36] combines LLMs with traditional ML                    a dual-branch collaborative diffusion model to integrate
+for microservice anomaly detection and remediation using logs                multimodal features. It reconstructs and fuses textual data
+and metrics. RCAcopilot [6] maps multimodal observation data                 features, such as logs, into time-series data based on
+to predefined events and predicts root cause categories in pro-              conditional guidance;
+duction through an LLM-driven workflow, and agent-based
+approaches [35] utilize tool-assisted LLMs to actively retrieve          2) Root Cause Localization Tool (T2): Utilizing the
+diagnostic data like logs and metrics for localization. Despite              multimodal-enhanced time-series data as input, this tool
+these advancements, significant challenges persist. The limited              models causal relationships between entities using a
+context window of LLMs restricts their ability to process large              frequency-domain self-attention module, enabling accu-
+scale of observation data, while their inherent text-based input             rate fault root cause localization;
+modality makes handling time series metrics difficult, risking
+loss of critical temporal patterns. Furthermore, existing methods        3) Fault Types Classification Tool (T3): Based on the causal
+often face limitations in generalizability (e.g., reliance on prede-         relationships between entities and the calling chain topol-
+fined rules [6]), lack integration of crucial trace data for precise         ogy, this tool classifies the types of faults;
+localization [35], [36]. These challenges highlight the need for
+frameworks that can effectively unify multimodal data (logs,             4) RCA Expert Agent (A ): Leveraging the expertise of a
+metrics, traces) within an LLM architecture to achieve both                  LLM, this agent synthesizes the outputs from previous
+fine-grained root cause localization and accurate classification.            tools along with system environment context to provide a
+We compare these existing methods with our approach in Table I.              comprehensive fault analysis and recommended solutions.
+
+                         III. METHODOLOGY                             A. Multi-Modality Alignment Tool (T1)
+
+   To fully exploit the multi-modality observation data of cloud         Diffusion models are a class of generative models based on
+native systems while integrating prior domain knowledge, we           Markov processes that have demonstrated exceptional perfor-
+propose TAMO, Tool-Assisted LLM Agent that Integrates                 mance in the generation of data in various domains, including
+                                                                      images [19], voice [34], and time series [47]. The core idea is
+                                                                      to gradually add noise to the data through a forward denoising
+                                                                      (forward diffusion) process, which converts the original data
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+4224                                              IEEE TRANSACTIONS ON SERVICES COMPUTING, VOL. 18, NO. 6, NOVEMBER/DECEMBER 2025
+
+Fig. 2. The proposed TAMO framework consists of a Multi-modality Alignment Tool (T1), a Root Cause Localization Tool (T2), a Fault Types Classification
+Tool (T3), and an RCA Expert Agent (A ). In the framework, the agent A calls tools T1-T3 as perception tools to analyze the system contextual observation data
+in real time. The results of these perceptions are structured into text inputs that are fed back into the agent. By analyzing the perception results, the expert agent
+
+will provide the corresponding root cause analysis and repair suggestions.
+
+distribution to an approximate Gaussian distribution. In the      where C = {clog, ctime} represents the set of control conditions,
+reverse denoising process, the model learns how to gradually      with clog and ctime corresponding to the log branch and the
+remove the noise to generate the desired data. In this tool, we   time-series branch, respectively. These conditions guide the
+use log patterns and temporal features as control conditions for  denoising process, ensuring that the generated data have multi-
+two diffusion branches. During the denoising process, the two     modal features by utilizing both log-based patterns and temporal
+branches collaborate to guide the generation of time-series data  features.
+with multimodal features from the noise-perturbed original data.
+Specifically, during the forward diffusion process, the original     For the generation of the log-conditioned variable clog, since
+data x0  q(x0)  RE×m×l consists of E entities, m channels,        unstructured log representations are difficult to extract high-
+and a time series of length l. This process can be expressed as:  quality features, inspired by previous work [14], [23], we extract
+                                                                  event patterns E and keywords W from the raw logs using
+                                    T                             Drain [16], and by calculating the TF-IDF scores, we select the
+                                                                  highest scoring pattern-keyword pairs as the conditional variable
+      q (x1, . . . , xT | x0) := q (xt | xt-1) .  (1)             clog .
+
+                                    t=1
+
+If t  (0, 1) is a predefined noise scaling factors that deter-
+
+mines how much information from the previous step is retained,    clog =  arg max TF-IDF(e)    arg max TF-IDF(w)                                .
+
+then each step of the (1) is:                                                     eE                 wW
+
+      q (xt | xt-1) = N (xt; txt-1, (1 - t) I) .                                                                                                (4)
+
+                                                  (2)             For the generation of the time-conditioned variable ctime, we
+
+After T steps of noise addition, xT converges to random noise     extract key performance indicators (KPIs) such as latency and
+xT  N (0, I), which approximates an Gaussian distribution.
+                                                                  duration from trace files. These KPIs xkpi are then embedded
+   Subsequently, we perform stepwise denoising on the noisy
+data using a dual-branch conditional mechanism. The parame-       into a latent space using a Multi-Layer Perceptron (MLP) net-
+terized conditional transition distribution can be expressed as:
+                                                                  work, enabling the model to effectively incorporate temporal
+
+                                                                  characteristics into the denoising process.
+
+                                                                          ctime = Embedding (xkpi)  Rhtime .                                    (5)
+
+p (xt-1 | xt, C) = N (xt-1;  (xt, t, C) ,  (xt, t, C)) ,
+
+                               T                                     During training, we use a dual-branch network to learn
+                                                                  the reverse diffusion process, gradually denoising the noisy
+      p (x0:T , C) = p (xT ) p (xt-1 | xt, C) ,   (3)             data. In this process, the noise term estimated at each step is
+
+                               t=1
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+ZHANG et al.: TAMO:FINE-GRAINED ROOT CAUSE ANALYSIS VIA TOOL-ASSISTED LLM AGENT                                                                     4225
+
+collaboratively generated by the two branches.                               obscured by smoothed trends in the time domain. To address this
+                                                                             issue, we apply the Fast Fourier Transform (FFT) to convert the
+xt-1  =    1    xt   -  1 - t        (xt, t, C)       + tz                   data from the time domain to the frequency domain. Formally,
+                          1 - ¯t                                             the transformation can be expressed as:
+
+           t
+
+z  N (0, I),                                                (6)                                   L-1
+
+in which, ¯t =  t    s  represents  the  cumulative   product  of            F Hemb = FFT Hemb =                   Hiembe-j2ki/L,                   (10)
+                s=1
+                                                                                                     i=0
+the noise scaling factors s and  represents the noise term
+                                                                             where e-j2ki/N is the complex exponential fourier basis func-
+predicted by the model, which is jointly generated based on the              tion, j is the imaginary unit, Hiemb represents the time-series
+                                                                             value corresponding to the time step i, and k = 0, 1, . . . , N - 1
+computations from the log branch log and time-series branch                  is the frequency index.
+ time. A hyperparameter  is used as a mixing coefficient to
+                                                                                Considering the real-time demands of root cause localization,
+balance the contributions of the two branches.
+                                                                             the model needs to focus on short-term fluctuations in the
+  (xt, t, C) =  log (xt, t, clog) + (1 - ) time (xt, t, ctime) .
+                                                                        (7)  observed data. To achieve this, we apply a high-pass filter to
+                                                                             the frequency-domain data, retaining the first k high-frequency
+   The original denoising diffusion model employs U-Net as                   components which helps to amplify the anomalous signals
+the denoising backbone [17]. However, considering the char-
+acteristics of time-series data, we adopt a patch-based Trans-               within the data. Formally, this can be expressed as:
+former network [32] as the backbone for each branch to better
+capture the representations of time-series subsequences. The                 Indices = topk F Hemb , k = f req_topk ,                               (11)
+training objective of the denoising process is to minimize the
+KL-divergence between the distributions p and q. According                   M ask =      1,  if k  Indices  ,  k  =  0,  1,  .  .  .  ,  K  -  1,  (12)
+to [17], the objective derivation is formulated as follows:                               0,  otherwise
+
+      Ldif f = Ex0,     -  (xt, t, C)           2  .        (8)              Ffiltered = F H emb  M ask, Ffiltered  R , E×K×dmodel
+                                                2                                                                                        (13)
+
+Through this denoising process, we obtain time series data                      Since the interactions between microservices in the cloud-
+xent  RL×dent that integrates multimodal features for subse-                 native systems can be described by a dependency graph, in
+quent analysis, where ent denotes the corresponding resource                 order to fully consider the relationships between entities in the
+entity, L denotes the length of the time window, and dent denotes            system and capture potential fault propagation pathways, we use
+the dimension of the feature associated with each entity. This               the self-attention mechanism to construct a causal dependency
+                                                                             graph in the frequency domain. The process can be defined as:
+generative alignment avoids the semantic misalignment inherent
+                                                                               A = Sof tmax Attention(FfilteredW Q, FfilteredW K ) (14)
+in feature concatenation, yielding a more coherent and tem-
+                                                                             where W Q, W K are the query and key matrices respectively.
+porally consistent multimodal representation for downstream                  Subsequently, to reduce the influence of irrelevant entities and
+analysis (T2 and T3).                                                        remove redundant relationships, we introduce topological con-
+                                                                             straints into the graph generation process. These constraints can
+B. Root Cause Localization Tool (T2)                                         be defined as:
+
+   Through the dual-branch diffusion model of Tool T1, we                    Amaske = A (I - IE) TopkMask(·, k = topk) (15)
+obtain time-series data that integrates multimodal features. How-
+ever, since this process operates at the level of system resource            in which IE is the entity diagonal matrix for avoiding self-loops
+entities, the generated time-series xent maintains the same
+dimensionality as the original resource entities. There exists               and TopkMask preserves the top k most significant dependen-
+heterogeneity in the observable data from different resource enti-
+ties in cloud-native systems, leading to inconsistencies between             cies for each entity. Then, we apply graph neural network to
+them, which hinders the unified learning of the model. To address
+this issue, we first perform data embedding on the features of               perform root cause inference and localization. Specifically, we
+different entities, mapping them into a unified dimensional space
+for consistency:                                                             select the Graph Attention Network (GAT) [3] as the backbone
+
+         Hent = DataEmbedding (xent)  R , L×dmodel (9)                       for aggregating neighborhood feature information among sys-
+
+where dmodel represents the unified embedding dimension.                     tem entities, in order to simulate the fault propagation process
+After mapping all entity features into the latent space, we
+concatenate the output results to obtain the embedded vector                 as follows:                                                  
+H emb  R . E×L×dmodel
+                                                                             His+1 = Relu iiW Hjs +                   ij W Hjs ,                    (16)
+   After obtaining the unified embedding vector Hemb, we con-
+sider that root cause localization tasks typically require the de-                                           jN (i)
+tection and identification of short-term anomalies or disturbance
+signals within the system entity. These transient features may be            where N (i) = {j|Amask[i, j] = 1}, His is the representation of
+                                                                             entity i in the sth layer and Hi0 = Ffiltered. i,j is the attention
+                                                                             coefficient between system entity i and its related entity j, which
+
+                                                                             can be calculated by the following formula:
+
+                                                                             (i, j) = LeakyRelu a W s · his  W s · hsj , (17)
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+4226                                         IEEE TRANSACTIONS ON SERVICES COMPUTING, VOL. 18, NO. 6, NOVEMBER/DECEMBER 2025
+
+              exp((i, j))                                            network to output the fault type for the corresponding entity.
+      ij =                             ,                       (18)  Considering the issues of multi-class overlap and class imbal-
+              pNi{i} exp((i, p))                                     ance in the fault classification task, we adopt a weighted binary
+                                                                     cross-entropy (wBCE) loss function with the introduction of
+where  denotes the concatenation operation, aT represents the        class weight coefficients  as the model's training objective:
+vector of attention parameters and W s is the weight matrix for
+the sth layer. Finally, we use a max-pooling layer to aggregate      LwBCE  =    -1    E   [w  · yi  log(y^i)  + (1 - yi) log(1                 - y^i)] ,
+the importance of instances, thereby obtaining the root cause                      E  i=1
+
+probability for the system entities:
+
+              y^ = MaxPool HS  RE,                             (19)                                                                             (24)
+
+Considering that multiple types of entities may experience faults    in which w represents the ratio of negative to positive samples
+simultaneously within the same time period, meaning that the
+root cause entity may not be unique, we use binary cross-entropy     within each fault type class, which is used to enhance the loss
+(BCE) as the loss function to optimize the model. Specifically,
+for each label yi and the model predicted value y^i (where i         contribution of the samples. Additionally, to prevent overfitting,
+{0, 1, . . ., E - 1}, and E represent the total number of system
+entities), the loss function is defined as:                          we include an L2 weight decay term in the loss function. The
+
+                                                                     final loss function can thus be formulated as:
+
+                                                                                      L = LwBCE +              W  2  .                          (25)
+                                                                                                                  2
+
+LBCE  =  -1    E   [yi  log(y^i)  + (1  - yi) log(1 - y^i)] ,  (20)  where  is a predefined hyperparameter and W is the model
+           E  i=1                                                    weights.
+
+C. Fault Types Classification Tool (T3)
+
+   After the root cause entity localization is performed by Tool     D. RCA Expert Agent (A )
+T2, the fault diagnosis process typically requires further identi-
+fication of the specific fault type of the root cause entity (e.g.,  After the three tools T1-T3 have completed tasks such as
+hardware overload, resource leakage, or configuration errors)
+to guide precise remediation strategies. Although root cause         multi-modality alignment, root cause localization, and fault
+localization narrows down the scope of fault analysis (i.e., de-
+termining "where" the anomaly occurs), in practical operational      types classification, the framework has achieved a relatively
+scenarios, different fault types often correspond to differentiated
+handling strategies (e.g., memory leaks require service restarts,    deep understanding of the fault. However, relying solely on
+while CPU contention necessitates resource scaling). Therefore,
+this tool uses the time series data xent generated by tool T1        these outputs makes it difficult to provide comprehensive and
+(for simplicity, denoted as z) to train a fault classification
+model.                                                               accurate failure analysis and remediation plans. Therefore, to
+
+   To model the latent temporal dependencies in the input time-      further improve fault response and system recovery efficiency,
+series data z, we use a Transformer model [39] as the encoder
+network. The output of its single-head self-attention mechanism      we introduce the RCA expert agent A . Using large language
+is given by:
+                                                                     models, this agent synthesizes the predictions from the previ-
+
+                                                                     ous tools and incorporates the current context of cloud-native
+
+                                                                     microservice architecture to offer a more comprehensive and
+
+                                                                     accurate fault diagnosis and resolution strategy for site reliability
+
+                                                                     engineers.
+
+                                                                     Specifically, we use the GPT-4 [1] as the expert model,
+
+                                                                     which gathers the outputs from the previous tools as background
+
+      Attention = softmax zW Q^ · z(W K^ ) zW V^ , (21)              knorwRleodogteC, ainucsleuLdoincga:lization Results (from T2): Identifying the
+                                            dk
+                                                                        root cause location of the fault and the associated system
+
+where W Q^ , W K^ , W V^ are linear projection matrices. Subse-      r  components.
+quently, we concatenate the results of the multi-head attention         Fault Types Classification Results (from T3): Providing the
+to obtain the latent vector representation:
+                                                                        specific type of fault, such as network failure, hardware
+
+                                                                     r  failure, configuration errors, etc.             the  microservice
+                                                                        System Context Information: Includes
+
+      V = MultiHead zW Q^ , zW K^ , zW V^ ,                    (22)     architecture (e.g., service roles, dependencies, and call
+
+                                                                        chains), deployment topology, and resource usage patterns.
+
+   After capturing the internal temporal dependencies of the            This context, often derived from system documentation,
+time-series data, we employ the GAT model to capture the spatial
+dependencies between the time steps. According to formulas              guides the agent in understanding operational relationships
+(16)­(18), we perform feature propagation on the latent vector
+representation. The representation of each entity is obtained by        and diagnosing faults.
+aggregating the weighted features of its neighboring entities:
+                                                                     In practice, we prepare the prompt in the format shown in
+
+                                                                     Fig. 3 as input to the model, and the expected output is a
+
+                                                                     detailed fault analysis report along with corresponding solution
+
+            Z = ELU (GATConv(X, A)) ,                          (23)  recommendations. Such outputs assist the engineers in quickly
+
+                                                                     understanding the root cause, impact scope, and taking reason-
+
+where ELU is the activation function and A  RE×E is the              able remediation actions, thus enhancing system reliability and
+dependency between entities. Subsequently, we use an MLP
+                                                                     response efficiency.
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+ZHANG et al.: TAMO:FINE-GRAINED ROOT CAUSE ANALYSIS VIA TOOL-ASSISTED LLM AGENT                                                                                                                                         4227
+
+                                                                                                                                                  HipsterShop2. The dataset primarily consists of three types
+
+                                                                                                                                                  of data: metrics, logs, and traces. The system uses a dy-
+
+                                                                                                                                                  namic deployment architecture, consisting of 10 services,
+
+                                                                                                                                                  each with 4 pods, totaling 40 pods that are dynamically
+
+                                                                                                                                                  deployed across 6 nodes. The dataset includes 15 types
+
+                                                                                                                                                  of faults in total. Among these, 9 fault types are related
+
+                                                                                                                                                  to services and pods in the context of Kubernetes (K8s)
+
+                                                                                                                                                  containers [4], while node faults include 6 types: sudden
+
+                                                                                                                                                  memory pressure, disk space exhaustion, disk read/write
+
+                                                                                                                                               r  issues, CPU pressure, and slow CPU growth.               from         the
+                                                                                                                                                  Dataset B. B is a public dataset3 collected
+
+                                                                                                                                                  broadcast-style SocialNetwork system in [23], which only
+
+                                                                                                                                                  contains service-level entities. It includes 21 microservices
+
+                                                                                                                                                  and also consists of three types of data: metrics, logs, and
+
+                                                                                                                                                  traces. The dataset is generated by injecting faults into
+
+                                                                                                                                                  the system using Chaosblade, producing data that includes
+
+                                                                                                                                                  three types of faults: CPU resource exhaustion, network
+
+                                                                                                                                                  latency, and packet loss.
+
+                                                                                                                                               2) Baselines: We compare TAMO with the most popular
+
+                                                                                                                                               integrated multimodal methods and derivative methods from the
+
+                                                                                                                                               time series domain. Specifically, we select two state-of-the-art
+
+                                                                                                                                               integrated multimodal root cause analysis methods, Eadro [23]
+
+                                                                                                                                               and HolisticRCA [14], as well as four unimodal time series anal-
+
+                                                                                                                                               ysis methods (i.e., TimesNet [42], SegRNN [28], DejaVu [27],
+
+                                                                                                                                               Transformer [39]). These methods are implemented using their
+
+                                                                                                                                               publicly available and reproducible open-source code, and we
+
+                                                                                                                                               adjust the data format to match the required input. Furthermore,
+
+                                                                                                                                               since our research task is relatively novel and includes both fault
+
+                                                                                                                                               localization and classification, we incorporate the same fault
+
+                                                                                                                                               classifier used in TAMO for methods that do not natively imple-
+
+                                                                                                                                               ment fault classification (such as methods [23], [39], [42], etc.)
+
+Fig. 3. Prompt templates for this RCA expert agent.                                                                                            for comparison. Furthermore, we introduce LightGBM [20], a
+
+                                                                                                                                               method specifically designed for fault classification tasks, as a
+
+   IV. EVALUATION                                                                                                                              benchmark to evaluate TAMO performance.
+
+                                                                                                                                               3) Evaluation Metrics: TAMO is dedicated to locating root
+
+A. Research Questions                                                                                                                          cause instances and identifying fault types. Based on previous
+
+TrrhRRisQQse12c::tiHHoonowwaneesfffwfeeeccrtistvivteheiesisfToATllAMowMOiOningiRnreosFoeatauCrlctahuTqsyeupeLessoticCoanllaiszs:asitfiiocna?-  research works [14], [15], [23], [48], we select different eval-
+
+                                                                                                                                               uation metrics to evaluate the performance of model for these
+
+                                                                                                                                               two tasks. Specifically, for the root cause localization task, we
+
+   tion?                                                                                                                                       use top-k accuracy (Acc@K) as the evaluation metric, which
+   RQ3: How well does TAMO work when ablation studies
+r                                                                                                                                              represents the probability that the true root cause entity appears
+
+   are performed on its various components?                                                                                                    within the top-k results produced by the method. Here, we set
+   RQ4: What are the training and inference
+r                                                        efficiency  of                                                                        k = {1, 3, 5}. Given S as the set of faults, RC is the ground
+
+   TAMO, and how do hyperparameters affect its perfor-                                                                                         truth root cause, and rc[k] are the top-k root causes generated
+
+   mance?                                                                                                                                      by the model. Therefore, Acc@K can be defined as follows:
+   RQ5: How well does TAMO
+r                                perform             in  real-world case                                                                                                  1S       1, if RCi  rci[k]
+                                                                                                                                                            Acc@k = |S|            0, otherwise
+   studies and fault scenarios?                                                                                                                                                                                         (26)
+
+                                                                                                                                                                         iS
+
+B. Experiment Setup                                                                                                                            For the fault classification task, we use P recision(P re),
+
+   1) Datasets: We conducted extensive experiments on two                                                                                      Recall(Rec), and F 1 - score(F 1) to evaluate performance.
+
+pubrlicDdaatatasseettsA: . A is a large-scale public dataset from the                                                                          Given true positives (TP), false positives (FP), and false
+
+      AIOps Challenge1, which is collected through fault in-                                                                                   negatives (FN), the formulas for these metrics are as fol-
+      jection into the real-world deployed microservice system
+                                                                                                                                               lows:  P re  =     TP     , Rec  =  T   TP   N  ,  F1  =  2·P re·Rec  .  Con-
+                                                                                                                                                               T P +F P               P +F               P re+Rec
+
+                                                                                                                                               sidering that this task is a multi-label classification problem,
+
+   1https://competition.AIOps-challenge.com/home/competition/                                                                                  2https://github.com/GoogleCloudPlatform/microservices-demo
+1496398526429724760                                                                                                                            3https://doi.org/10.5281/zenodo.7615393
+
+   Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+4228  IEEE TRANSACTIONS ON SERVICES COMPUTING, VOL. 18, NO. 6, NOVEMBER/DECEMBER 2025
+
+we adopt both micro and macro metrics for a comprehensive            achieves the best or second-best performance across all datasets.
+evaluation. Micro metrics aggregate the performance across           Specifically, on the As dataset, the score of TAMO exceeds the
+all labels, treating all instances equally, which is useful when     second-best score by at least 6%, and even in the second-best
+the class distribution is imbalanced. In contrast, macro metrics     performance case, the gap with the best result is kept under 3%,
+compute the metric for each label independently and then av-         clearly outperforming other baselines. Furthermore, we observe
+erage the results, giving equal weight to each label regardless      that the Eadro and Transformer models, which perform well
+of its frequency. Thus, the final performance is measured us-        on the B dataset, experience a significant drop in performance
+ing micro-precision (M iP r), macro-precision (M aP r), micro-       on heterogeneous datasets such as As, Ap, and An. This is
+recall (M iRe), macro-recall (M aRe), micro-F1 score (M iF 1),       because these two methods can only handle homogeneous entity
+and macro-F1 score (M aF 1).                                         features (e.g., in the dataset B, there is only one type of service
+                                                                     entity). When confronted with heterogeneous entity features that
+   4) Implementation: We implement TAMO using Python                 need to be processed separately, their performance significantly
+torch 2.4.0 and CUDA 12.1. The experiments are conducted on          deteriorates due to the lack of inter-entity correlation informa-
+a Linux server equipped with an NVIDIA GeForce RTX 3090              tion. In contrast, both HolisticRCA and our approach model
+GPU, using Python 3.8. The model is trained with the Adam            heterogeneous entities in a unified manner, maintaining strong
+optimizer [22], and all experiments use a fixed random seed.         performance even on the dataset A. Compared to HolisticRCA,
+For hyperparameters, we set the batch size to 32,  to 0.5,           we map multimodal information into time-series features and
+to 0.001, epoch to 200, and the initial learning rate to 0.001.      further optimize it through spatiotemporal modeling, achieving
+Considering the requirements of TAMO for system contextual           better performance in the root cause localization task.
+awareness and temporal consistency, data cleaning is performed
+on datasets A and B before training. This process remove noisy       D. RQ2: Effectiveness in Fault Types Classification
+and misaligned multimodal records and realigned log and trace
+data to ensure temporal consistency and enhance the quality             In the fault classification task, as shown in Table II, TAMO
+of input observation data for T1. Additionally, considering the      demonstrates significant improvments in two key metrics: Micro
+pre-training needs of T1, an extra dataset of observation data       Precision (MiPr) and Micro F1 (MiF1). Particularly on the
+from normal runtime operations is constructed. This dataset is       An dataset, TAMO achieves a MiPr of 0.8718 and MiF1 of
+used for T1 pre-training to enable learning of normal system         0.8831, outperforming the second-best model (HolisticRCA)
+patterns.                                                            by 24.99% and 19.85%, respectively, and ranks first across all
+                                                                     evaluation metrics. With MiPr reaching 0.7164 and 0.7182 on As
+   For training, we adopt a sequential and modular strategy          and Ap, respectively, TAMO outperforms the best baseline by
+to ensure stable learning across the tool ensemble. We first         8.09% and 12.69%, significantly reducing the misclassification.
+pre-train tool T1 using normal operational data from Datasets        Furthermore, we observe that transformer-based models achieve
+A and B, leveraging the diffusion framework to learn robust          relatively strong performance on relatively simpler dataset B.
+representations of multi-modal system observations. Once T1          However, their performance degrades significantly on the large-
+is pre-trained, its parameters are frozen and it serves as a fixed   scale, complex system dataset A, indicating that metric-only
+feature extractor for subsequent stages. Tool T2 is then trained     transformer architectures struggle to capture the intricate, multi-
+using the embeddings generated by T1 to perform root cause           modal dependencies inherent in large-scale distributed systems.
+localization. After T2 is trained, both T1 and T2 are kept frozen
+while training T1-generated embeddings and the causal graphs         E. RQ3: Ablation Study
+from T2 as input for fault classification. Finally, all components
+are jointly fine-tuned for 5 epochs with a small learning rate       To explore the effectiveness of each component in our TAMO
+of 0.0001 to refine the overall pipeline. This staged training
+ensures effective knowledge transfer and prevents instability        framework, we designed three variant models and conducted
+during end-to-end optimization.
+                                                                     ablratiTonAeMxpOewri/mo eTn1t:sT. oTihnevvesatriigaanttemthoedeeflfsecatrieveansefsoslloofwths:e diffu-
+   Additionally, due to the heterogeneity of system entities in
+Dataset A, which includes three levels: Pod, Service, and Node.            sion method used by tool T1 in fusing multimodal feature,
+The collected data features vary across these levels, making
+it challenging to train certain baselines uniformly. For such              in this variant we remove the tool T1 and directly use
+baselines, we partition Dataset A into subsets composed of
+different entity types (e.g., Ap, As, and An) and perform separate      the raw time series data as input to evaluate the variant
+training and testing for each subset to evaluate their perfor-
+mance. Finally, the symbol '-' is used in the results Table II       r  performance.
+to indicate cases where a method failed to achieve meaningful           TAMOw/o branch: To investigate the effectiveness of the
+classification performance (e.g., accuracy close to 0) on different
+datasets.                                                               dual-branch diffusion model in tool T1, we remove the
+
+C. RQ1: Effectiveness in Root Cause Localization                        branch time, which is responsible for maintaining tempo-
+
+   Table II presents the results for root cause localization.           ral features, in this variant. Only the log branch log is used
+The experimental data shows that our proposed TAMO model
+                                                                        in the diffusion reconstruction process. The reconstructed
+
+                                                                        data are then used for fault classification to evaluate variant
+
+                                                                     r  performance.     To  investigate  the  effectiveness                    of  the
+                                                                        TAMOw/o F F T :
+
+                                                                        frequency domain-based root cause localization method
+
+                                                                        proposed for tool T2, we remove the Fourier process in this
+
+                                                                        variant. Instead, the original time-domain data are directly
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+ZHANG et al.: TAMO:FINE-GRAINED ROOT CAUSE ANALYSIS VIA TOOL-ASSISTED LLM AGENT                                                           4229
+
+                                                                                    TABLE II
+EXPERIMENTAL RESULTS OF DIFFERENT APPROACHES ON ROOT CAUSE LOCALIZATION AND FAULT CLASSIFICATION. BEST RESULTS ARE BOLDED, AND
+
+                                                                 SECOND-BEST RESULTS ARE UNDERLINED.
+
+                                                            TABLE III
+THE EXPERIMENTAL RESULTS OF THE ABLATION STUDY CONDUCTED ON OUR PROPOSED TAMO FRAMEWORK
+
+      used for subsequent causal graph generation and graph          Similarly, removing the time branch time lead to noticeable
+      convolution processes. The root cause localization results     decreases in performance for both tasks, indicating that time
+      are then used to evaluate variant performance.                 series features are crucial for accurate fault localization and
+   Table III presents the results of the ablation experiments, from  classification. Eliminating the FFT process result in a substan-
+which it is evident that the removal of any component in TAMO        tial degradation in RE localization metrics, demonstrating that
+leads to performance degradation. This demonstrates that each        frequency domain analysis is essential for precise root cause
+of the component within TAMO has an important effect. In             localization.
+particular, the variant of TAMO without tool T1 shows a signif-
+icant decrease in performance. This is because the fact that the     F. RQ4: Performance Study
+variant TAMOw/o T1 lacks the ability of the diffusion model to
+fuse multi-modality information, thereby being reduced to learn         To evaluate computational efficiency, we measure the training
+with only a single modal feature. The absence of key feature         and inference time of TAMO on both datasets, as shown in Fig. 5,
+information makes accurate root cause analysis challenging.          with Eadro as a representative baseline. For training, TAMO
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+4230  IEEE TRANSACTIONS ON SERVICES COMPUTING, VOL. 18, NO. 6, NOVEMBER/DECEMBER 2025
+
+Fig. 4. Hyperparameter sensitivity analysis across batch size, , regularization strength (), and hidden dimension.
+
+Fig. 5. Comparision of training time and inference time of TAMO with Eadro.  Fig. 6. In case study experiments, two types of faults were induced in mi-
+                                                                             croservices, with the root cause entities identified as the Currency Service and
+                                         TABLE IV                            CheckoutPod0.
+              PARAMETER COUNTS OF THE TOOL MODELS IN TAMO
+                                                                             shown in Fig. 6, the microservices system is deployed using
+requires 0.81 seconds per epoch on Dataset B and 5.7 seconds                 a Kubernetes (K8s) architecture, with service components de-
+on Dataset A, indicating favorable scalability with minimal                  veloped in multiple programming languages. The system entry
+computational overhead relative to Eadro. For inference, TAMO                is managed through the Frontend service, and each service
+processes each sample in 0.17 seconds, which is slightly slower              node is configured with three Pod replicas. Monitoring data
+than Eadro but still meets the real-time requirement for root                collection points are set at both the service and Pod levels.
+cause analysis.                                                              Experimental data shows that TAMO demonstrates precise root
+                                                                             cause identification for the current failure scenario: the root
+   In addition, we provide the parameter counts for each compo-              cause localization confidence for the Currency Service reaches
+nent of the TAMO framework in Table IV. The multi-modality                   97.96% (service level), while the confidence for CheckoutPod0
+alignment tool T1 accounts for the majority of parameters                    is 82.39% (Pod level). Notably, while the overall Checkout
+(9.32M), as aligning heterogeneous multimodal data into a                    service is functioning correctly, only Pod0 experiences issues. In
+unified temporal representation requires a large number of pa-               contrast, the Currency service suffers from a global failure at the
+rameters to learn effective alignment. In contrast, the root cause           service level, causing anomalies in Pods 0-2. This comparative
+localization tool T2 and fault types classification tool T3 are              case indicates that TAMO effectively integrates multi-entity fea-
+significantly more lightweight (1.38M and 258.32K parameters,                tures and topological causal relationships to achieve precise root
+respectively).                                                               cause diagnosis across multiple layers. In the fault classification
+                                                                             task, we perform a visual analysis of observation data for the
+   Finally, we analyze sensitivity to key hyperparameters (batch             anomalous services/Pods: CheckoutPod0 is accurately classified
+size, , , hidden dimension). As shown in Fig. 4, perfor-                     as a CPU overload fault due to a significant spike in core
+mance is highly sensitive to , with minor changes caus-                      metrics such as "CPU Usage Second." The Currency service
+ing sharp accuracy drops. In contrast, smaller batch sizes                   exhibits a correlation between increased service-level response
+consistently yield better results, while  causes significant                 time and decreased request success rate, while its Pod-level
+performance degradation at its boundary values ( = 0 or                      Receive Packet count continues to decline. TAMO successfully
+1), indicating that it is designed to achieve critical branch                identifies the anomaly as a network packet loss fault through
+balancing.                                                                   multi-dimensional time-series pattern analysis.
+
+G. RQ5: Case Study                                                              Subsequently, we input the model inference results along
+   To validate the root cause analysis capabilities of TAMO                  with system context information into the RCA expert LLM
+                                                                             and compare its output with that of an LLM fed directly with
+in cloud-native ecosystems, this study conducts a case inves-                raw data, as shown in Fig. 7. This framework leverages tool
+tigation using real-world failure data from HipsterShop. As                  information and domain expertise to accurately analyze current
+                                                                             system faults and provide reasonable remediation suggestions.
+                                                                             In contrast, the normal LLM using only raw data struggles to
+                                                                             handle the vast amount of observation data due to severe context
+                                                                             limitations, resulting in significant omissions and misjudgments
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+ZHANG et al.: TAMO:FINE-GRAINED ROOT CAUSE ANALYSIS VIA TOOL-ASSISTED LLM AGENT                                                           4231
+
+Fig. 7. Comparison of LLM results between RCA analysis of Agent A enhanced with TAMO tools and root cause analysis performed directly on raw data.
+
+in root cause identification and fault classification, as well as                   [7] Y. Chen et al., "Outage prediction and diagnosis for cloud service systems,"
+corresponding errors in the proposed remediation suggestions.                            in Proc. World Wide Web Conf., 2019, pp. 2659­2665.
+
+                            V. CONCLUSION                                           [8] Z. Chen, D. Chen, X. Zhang, Z. Yuan, and X. Cheng, "Learning graph
+                                                                                         structures with transformer for multivariate time-series anomaly detec-
+   In this paper, we introduced a tool-assisted LLM agent                                tion in IoT," IEEE Internet Things J., vol. 9, no. 12, pp. 9179­9189,
+framework named TAMO to address the complex challenges                                   Jun. 2022.
+of root cause analysis in cloud-native systems. By integrating
+domain-specific tools with large language models, TAMO ef-                          [9] Q. Cheng et al., "AI for it operations (AIOps) on cloud platforms: Reviews,
+ficiently handled high-dimensional, multi-modal cloud-native                             opportunities and challenges," 2023, arXiv::2304.04661.
+observation data and accurately located root causes of failures
+in dynamically changing service dependencies. The approach                         [10] A. Deng and B. Hooi, "Graph neural network-based anomaly detection
+not only overcame the information loss issues incurred when                              in multivariate time series," in Proc. AAAI Conf. Artif. Intell., 2021,
+converting raw observability data into a format suitable for                             pp. 4027­4035.
+LLM processing, but also addressed the challenge that static
+pre-trained knowledge struggled to adapt to real-time changes in                   [11] M. Du, F. Li, G. Zheng, and V. Srikumar, "DeepLog: Anomaly detection
+service dependencies. The experimental results show that, com-                           and diagnosis from system logs through deep learning," in Proc. ACM
+pared to existing advanced methods and benchmarks, TAMO                                  SIGSAC Conf. Comput. Commun. Secur., 2017, pp. 1285­1298.
+performs notably better on two standard datasets, highlighting
+its potential to improve fault diagnosis efficiency and accuracy.                  [12] A. Fan et al., "Large language models for software engineering: Survey
+                                                                                         and open problems," in Proc. IEEE/ACM Int. Conf. Softw. Eng.: Future
+                                 REFERENCES                                              Softw. Eng., 2023, pp. 31­53.
+
+ [1] J. Achiam et al., "GPT-4 technical report," 2023, arXiv::2303.08774.          [13] Y. Gan, M. Liang, S. Dev, D. Lo, and C. Delimitrou, "Sage: Practical and
+ [2] A. Amin, L. Grunske, and A. Colman, "An approach to software reliability            scalable ML-driven performance debugging in microservices," in Proc.
+                                                                                         26th ACM Int. Conf. Architectural Support Program. Lang. Operating
+      prediction based on time series modeling," J. Syst. Softw., vol. 86, no. 7,        Syst., 2021, pp. 135­151.
+      pp. 1923­1932, 2013.
+ [3] S. Brody, U. Alon, and E. Yahav, "How attentive are graph attention           [14] Y. Han et al., "Holistic root cause analysis for failures in cloud-native
+      networks?," 2021, arXiv:2105.14491.                                                systems through observability data," IEEE Trans. Serv. Comput., vol. 17,
+ [4] B. Burns, B. Grant, D. Oppenheimer, E. Brewer, and J. Wilkes, "Borg,                no. 6, pp. 3789­3802, Nov./Dec. 2024.
+      Omega, and Kubernetes," Commun. ACM, vol. 59, no. 5, pp. 50­57, 2016.
+ [5] J. Chen, H. Huang, and H. Chen, "Informer: Irregular traffic detection        [15] Y. Han, Q. Du, Y. Huang, J. Wu, F. Tian, and C. He, "The potential of
+      for containerized microservices RPC in the real world," High-Confidence            one-shot failure root cause analysis: Collaboration of the large language
+      Comput., vol. 2, no. 2, 2022, Art. no. 100050.                                     model and small classifier," in Proc. 39th IEEE/ACM Int. Conf. Autom.
+ [6] Y. Chen et al., "Automatic root cause analysis via large language models            Softw. Eng., 2024, pp. 931­943.
+      for cloud incidents," 2023, arXiv:2305.15778.
+                                                                                   [16] P. He, J. Zhu, Z. Zheng, and M. R. Lyu, "Drain: An online log parsing
+                                                                                         approach with fixed depth tree," in Proc. IEEE Int. Conf. Web Serv., 2017,
+                                                                                         pp. 33­40.
+
+                                                                                   [17] J. Ho, A. Jain, and P. Abbeel, "Denoising diffusion probabilistic models,"
+                                                                                         in Proc. Adv. Neural Inf. Process. Syst., 2020, pp. 6840­6851.
+
+                                                                                   [18] C. Hou, T. Jia, Y. Wu, Y. Li, and J. Han, "Diagnosing performance issues
+                                                                                         in microservices with heterogeneous data source," in Proc. IEEE Int. Conf.
+                                                                                         Parallel Distrib. Process. Appl. Big Data Cloud Comput. Sustain. Comput.
+                                                                                         Commun. Social Comput. Netw., 2021, pp. 493­500.
+
+                                                                                   [19] Z. Huang, K. C. K. Chan, Y. Jiang, and Z. Liu, "Collaborative diffusion
+                                                                                         for multi-modal face generation and editing," in Proc. IEEE/CVF Conf.
+                                                                                         Comput. Vis. Pattern Recognit., 2023, pp. 6080­6090.
+
+                                                                                   [20] G. Ke et al., "LightGBM: A highly efficient gradient boosting decision
+                                                                                         tree," in Proc. Adv. Neural Inf. Process. Syst., 2017, pp. 3149­3157.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+4232  IEEE TRANSACTIONS ON SERVICES COMPUTING, VOL. 18, NO. 6, NOVEMBER/DECEMBER 2025
+
+[21] A. Khan, "Key characteristics of a container orchestration platform to en-       [46] G. Yu, P. Chen, Y. Li, H. Chen, X. Li, and Z. Zheng, "Nezha: Interpretable
+      able a modern application," IEEE Cloud Comput., vol. 4, no. 5, pp. 42­48,             fine-grained root causes analysis for microservices on multi-modal ob-
+      Sep./Oct. 2017.                                                                       servability data," in Proc. 31st ACM Joint Eur. Softw. Eng. Conf. Symp.
+                                                                                            Found. Softw. Eng., 2023, pp. 553­565.
+[22] D. P. Kingma, "Adam: A method for stochastic optimization," 2014,
+      arXiv::1412.6980.                                                               [47] X. Yuan and Y. Qiao, "Diffusion-TS: Interpretable diffusion for general
+                                                                                            time series generation," 2024, arXiv:2403.01742.
+[23] C. Lee, T. Yang, Z. Chen, Y. Su, and M. R. Lyu, "Eadro: An end-to-end
+      troubleshooting framework for microservices on multi-source data," in           [48] S. Zhang et al., "Robust failure diagnosis of microservice system
+      Proc. IEEE/ACM 45th Int. Conf. Softw. Eng., 2023, pp. 1750­1762.                      through multimodal data," IEEE Trans. Serv. Comput., vol. 16, no. 6,
+                                                                                            pp. 3851­3864, Nov./Dec. 2023.
+[24] P. Li et al., "RealTCD: Temporal causal discovery from interventional
+      data with large language model," in Proc. 33rd ACM Int. Conf. Inf. Knowl.       [49] W. Zhang et al., "mABC: Multi-agent blockchain-inspired collabo-
+      Manage., 2024, pp. 4669­4677.                                                         ration for root cause analysis in micro-services architecture," 2024,
+                                                                                            arXiv::2404.12135.
+[25] Y. Li et al., "Unity is power: Semi-asynchronous collaborative training
+      of large-scale models with structured pruning in resource-limited clients,"     [50] X. Zhang et al., "Rethinking robust multivariate time series anomaly
+      2024, arXiv::2410.08457.                                                              detection: A hierarchical spatio-temporal variational perspective," IEEE
+                                                                                            Trans. Knowl. Data Eng., vol. 36, no. 12, pp. 9136­9149, Dec. 2024.
+[26] Y. Li et al., "COCA: Generative root cause analysis for distributed systems
+      with code knowledge," 2025, arXiv::2503.23051.                                  [51] L. Zheng, Z. Chen, J. He, and H. Chen, "MULAN: Multi-modal causal
+                                                                                            structure learning and root cause analysis for microservice systems," in
+[27] Z. Li et al., "Actionable and interpretable fault localization for recurring           Proc. ACM Web Conf., 2024, pp. 4107­4116.
+      failures in online service systems," in Proc. 30th ACM Joint Eur. Softw.
+      Eng. Conf. Symp. Found. Softw. Eng., 2022, pp. 996­1008.                        [52] X. Zhou et al., "Fault analysis and debugging of microservice systems:
+                                                                                            Industrial survey, benchmark system, and empirical study," IEEE Trans.
+[28] S. Lin, W. Lin, W. Wu, F. Zhao, R. Mo, and H. Zhang, "SegRNN: Segment                  Softw. Eng., vol. 47, no. 2, pp. 243­260, Feb. 2021.
+      recurrent neural network for long-term time series forecasting," 2023,
+      arXiv::2308.11200.                                                                                             Xiao Zhang is now an associate professor with the
+                                                                                                                     School of Computer Science and Technology, Shan-
+[29] D. Liu et al., "MicroHECL: High-efficient root cause localization in large-                                     dong University. His research interests include data
+      scale microservice systems," in Proc. IEEE/ACM 43rd Int. Conf. Softw.                                          mining, distributed learning and edge intelligence. He
+      Eng.: Softw. Eng. Pract., 2021, pp. 338­347.                                                                   has published more than 60 papers in the prestigious
+                                                                                                                     refereed journals and conference proceedings, such
+[30] S. Luo et al., "Characterizing microservice dependency and performance:                                         as IEEE Transactions on Knowledge and Data En-
+      Alibaba trace analysis," in Proc. ACM Symp. Cloud Comput., 2021,                                               gineering, IEEE Transactions on Mobile Computing,
+      pp. 412­426.                                                                                                   ICML, NeurIPS, SIGKDD, UBICOMP, and INFO-
+                                                                                                                     COM.
+[31] N. Marwede, M. Rohr, A. van Hoorn, and W. Hasselbring, "Automatic
+      failure diagnosis support in distributed large-scale software systems based                                    Qi Wang received the BS degree from Shandong
+      on timing behavior anomaly correlation," in Proc. 13th Eur. Conf. Softw.                                       University. He is currently working toward the MD
+      Maintenance Reengineering, 2009, pp. 47­58.                                                                    degree with the School of Computer Science and
+                                                                                                                     Technology, Shandong University. His current re-
+[32] Y. Nie, N. H. Nguyen, P. Sinthong, and J. Kalagnanam, "A time series                                            search interests include time series and predictive
+      is worth 64 words: Long-term forecasting with transformers," 2022,                                             maintenance.
+      arXiv::2211.14730.
+                                                                                                                     Mingyi Li received the BS degree from Shandong
+[33] J. Noor, M. D. B. Faysal, M. D. S. Amin, B. Tabassum, T. R. Khan, and                                           University. She is currently working toward the PhD
+      T. Rahman, "Kubernetes application performance benchmarking on het-                                            degree with the School of Computer Science and
+      erogeneous CPU architecture: An experimental review," High-Confidence                                          Technology, Shandong University. Her research in-
+      Comput., vol. 5, no. 1, 2025, Art. no. 100276.                                                                 terests include distributed collaborative Learning and
+                                                                                                                     the theoretical optimization of distributed algorithms.
+[34] V. Popov, I. Vovk, V. Gogoryan, T. Sadekova, M. Kudinov, and J. Wei,
+      "Diffusion-based voice conversion with fast maximum likelihood sam-                                            Yuan Yuan received the BSc degrees from the
+      pling scheme," 2021, arXiv::2109.13821.                                                                        School of Mathematical Sciences, Shanxi Univer-
+                                                                                                                     sity, in 2016, and the PhD degree from the School
+[35] D. Roy et al., "Exploring LLM-based agents for root cause analysis," in                                         of Computer Science and Technology, Shandong
+      Proc. 32nd ACM Int. Conf. Found. Softw. Eng., 2024, pp. 208­219.                                               University, Qingdao, China, in 2021. She is cur-
+                                                                                                                     rently a postdoctoral fellow with the Shandong
+[36] K. Sarda et al., "ADARMA auto-detection and auto-remediation of mi-                                             University-Nanyang Technological University Inter-
+      croservice anomalies by leveraging large language models," in Proc. 33rd                                       national Joint Research Institute on Artificial Intelli-
+      Annu. Int. Conf. Comput. Sci. Softw. Eng., 2023, pp. 200­205.                                                  gence, Shandong University. Her research interests
+                                                                                                                     include distributed computing and distributed ma-
+[37] J. Soldani, D. A. Tamburri, and W.-J. Van Den Heuvel, "The pains and                                            chine learning.
+      gains of microservices: A systematic grey literature review," J. Syst. Softw.,
+      vol. 146, pp. 215­232, 2018.
+
+[38] L. Song, Y. Han, Y. Guo, and C. Cai, "IDL-LTSOJ: Research and imple-
+      mentation of an intelligent online judge system utilizing DNN for defect lo-
+      calization," High-Confidence Comput., vol. 5, no. 2, 2025, Art. no. 100268.
+
+[39] A. Vaswani, "Attention is all you need," in Proc. Adv. Neural Inf. Process.
+      Syst., 2017, pp. 6000­6010.
+
+[40] H. Wang, S. Feng, T. He, Z. Tan, X. Han, and Y. Tsvetkov, "Can language
+      models solve graph problems in natural language?," in Proc. Adv. Neural
+      Inf. Process. Syst., 2023, pp. 30840­30861.
+
+[41] Z. Wang et al., "RCAgent: Cloud root cause analysis by autonomous agents
+      with tool-augmented large language models," in Proc. 33rd ACM Int. Conf.
+      Inf. Knowl. Manage., 2024, pp. 4966­4974.
+
+[42] H. Wu, T. Hu, Y. Liu, H. Zhou, J. Wang, and M. Long, "TimesNet:
+      Temporal 2D-variation modeling for general time series analysis," 2022,
+      arXiv::2210.02186.
+
+[43] M. Yang and M. Huang, "An microservices-based openstack monitoring
+      tool," in Proc. IEEE 10th Int. Conf. Softw. Eng. Service Sci., 2019,
+      pp. 706­709.
+
+[44] Z. Yao et al., "Chain-of-event: Interpretable root cause analysis for
+      microservices through automatically learning weighted event causal
+      graph," in Proc. 32nd ACM Int. Conf. Found. Softw. Eng., 2024,
+      pp. 50­61.
+
+[45] D. Yu et al., "Trustworthy decentralized collaborative learning for edge
+      intelligence: A survey," High-Confidence Comput., vol. 3, no. 3, 2023,
+      Art. no. 100150.
+
+      Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+ZHANG et al.: TAMO:FINE-GRAINED ROOT CAUSE ANALYSIS VIA TOOL-ASSISTED LLM AGENT                                                                           4233
+
+                               Mengbai Xiao received the PhD degree in computer         Dongxiao Yu received the BS degree from the School
+                               science from George Mason University, in 2018, and       of Mathematics, Shandong University, in 2006, and
+                               the MS degree in software engineering from the Uni-      the PhD degree from the Department of Computer
+                               versity of Science and Technology of China, in 2011.     Science, The University of Hong Kong, in 2014.
+                               He is a professor with the School of Computer Science    He became an associate professor with the School
+                               and Technology, Shandong University, China. He was       of Computer Science and Technology, Huazhong
+                               a postdoctoral researcher with the HPCS Lab, The         University of Science and Technology, in 2016. He
+                               Ohio State University. His research interests include    is currently a professor with the School of Com-
+                               multimedia systems, parallel and distributed systems.    puter Science and Technology, Shandong University.
+                               He has published papers in prestigious conferences       His research interests include edge intelligence, dis-
+                               such as USENIX ATC, ACM Multimedia, IEEE                 tributed computing and data mining.
+ICDE, IEEE ICDCS, IEEE INFOCOM.
+
+                               Fuzhen Zhuang received the PhD degrees from
+                               the Institute of Computing Technology, Chinese
+                               Academy of Sciences, Beijing, China, in 2011. He
+                               is currently a full professor with the Institute of Ar-
+                               tificial Intelligence, Beihang University. He has pub-
+                               lished more than 150 papers in some prestigious refer-
+                               eed journals and conference proceedings such as Na-
+                               ture Comunications, IEEE Transactions on Knowl-
+                               edge and Data Engineering, IEEE Transactions on
+                               Cybernetics, IEEE Transactions on Neural Networks
+                               and Learning Systems, the ACM Transactions on
+Knowledge Discovery from Data, the ACM Transactions on Intelligent Systems
+and Technology, Information Sciences, Neural Networks, SIGKDD, IJCAI,
+AAAI, TheWebConf, ACL, SIGIR, ICDE, ACM CIKM, ACM WSDM, SIAM
+SDM, and IEEE ICDM. His research interests include transfer learning, machine
+learning, data mining, multitask learning, knowledge graph and recommendation
+systems. He is a senior member of CCF. He was the recipient of the Distinguished
+Dissertation Award of CAAI, in 2013.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 14,2026 at 11:35:12 UTC from IEEE Xplore. Restrictions apply.
+

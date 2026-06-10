@@ -1,0 +1,877 @@
+ deTector: a Topology-aware Monitoring System
+                for Data Center Networks
+
+Yanghua Peng, The University of Hong Kong; Ji Yang, Xi'an Jiaotong University; Chuan Wu,
+    The University of Hong Kong; Chuanxiong Guo, Microsoft Research; Chengchen Hu,
+                  Xi'an Jiaotong University; Zongpeng Li, University of Calgary
+
+                https://www.usenix.org/conference/atc17/technical-sessions/presentation/peng
+
+             This paper is included in the Proceedings of the
+     2017 USENIX Annual Technical Conference (USENIX ATC '17).
+
+                                July 12­14, 2017 · Santa Clara, CA, USA
+
+                                                   ISBN 978-1-931971-38-6
+
+                                                          Open access to the Proceedings of the
+                                                       2017 USENIX Annual Technical Conference
+
+                                                                   is sponsored by USENIX.
+deTector: a Topology-aware Monitoring System for Data Center Networks
+
+         Yanghua Peng                    Ji Yang                         Chuan Wu
+The University of Hong Kong   Xi'an Jiaotong University       The University of Hong Kong
+
+          Chuanxiong Guo           Chengchen Hu                    Zongpeng Li
+         Microsoft Research  Xi'an Jiaotong University        University of Calgary
+
+Abstract                                                      high quality of service (QoS) for users (e.g., no more
+                                                              than a few minutes of downtime per month [21]) and to
+Troubleshooting network performance issues is a chal-         increase revenue for operators.
+lenging task especially in large-scale data center net-
+works. This paper presents deTector, a network mon-              Rapid failure recovery is not possible without a good
+itoring system that is able to detect and localize net-       network monitoring system. There have been a number
+work failures (manifested mainly by packet losses) ac-        of systems proposed in the past few years [36, 26, 37,
+curately in near real time while minimizing the moni-         48]. Several limitations still exist in these systems that
+toring overhead. deTector achieves this goal by tightly       prohibit fast failure detection and localization.
+coupling detection and localization and carefully select-
+ing probe paths so that packet losses can be localized           First, existing monitoring systems may fail to detect
+only according to end-to-end observations without the         one type of failures or another. Traditional passive mon-
+help of additional tools (e.g., tracert). In particular, we   itoring approaches, such as querying the device counter
+quantify the desirable properties of the matrix of probe      via SNMP or retrieving information via device CLI when
+paths, i.e., coverage and identifiability, and leverage an    users have perceived some issues, can detect clean fail-
+efficient greedy algorithm with a good approximation ra-      ures such as link down, line card malfunctions. How-
+tio and fast speed to select probe paths. We also propose     ever, gray failures may occur, i.e., faults not detected or
+a loss localization method according to loss patterns in      ignored by the device, or malfunctioning not properly re-
+a data center network. Our algorithm analysis, experi-        ported by the device due to some bugs [37]. Active mon-
+mental evaluation on a Fattree testbed and supplementary      itoring systems (e.g., Pingmesh [26], NetNORAD [37])
+large-scale simulation validate the scalability, feasibility  can detect such failures by sending end-to-end probes,
+and effectiveness of deTector.                                but they may fail to capture failures that cause low rate
+                                                              losses, due to ECMP in data center (§2).
+1 Introduction
+                                                                 Second, probe systems such as Pingmesh and NetNO-
+A variety of services are hosted in large-scale data cen-     RAD inject probes between each pair of servers with-
+ters today, e.g., search engines, social networks and file    out selection, which may introduce too much bandwidth
+sharing. To support these services with high quality, data    overhead. In addition, they typically treat the whole
+center networks (DCNs) are carefully designed to effi-        DCN as a black box, and hence require many probes to
+ciently connect thousands of network devices together,        cover all parallel paths between any server pair with high
+e.g., a 64-ary Fattree [9] DCN has more than 60,000           probability.
+servers and 5,000 switches. However, due to the large
+network scale, frequent upgrades and management com-             Third, failures in the network can be reported in these
+plexity, failures in DCNs are the norm rather than the        active monitoring systems, but the exact failure locations
+exception [21], such as routing misconfigurations, link       cannot be pinpointed automatically. The network opera-
+flaps, etc. Among these failures, those leading to user-      tor typically learns a suspected source-destination server
+perceived performance issues (e.g., packet losses, latency    pair once packet loss happens. Then she/he needs to re-
+spikes) are among the first priority to be detected and       sort to additional tools such as tracert to verify the issue
+eliminated promptly [27, 26, 21], in order to maintain        and locate the faulty spot. However, it may be difficult
+                                                              to play back the issues due to transient failures. Hence
+                                                              this diagnosis approach (i.e., separation of detection and
+                                                              localization) may take several hours or even days to pin-
+                                                              point the fault spot [21], yet ideally the failures should
+
+USENIX Association                                            2017 USENIX Annual Technical Conference 55
+be repaired as fast as possible before users complain.         tor achieves greater than 98% accuracy in failure local-
+                                                               ization with a less than 1% false positive ratio for most
+   A desirable monitoring system in a DCN should meet          failures in large-scale DCNs (§6). We have open sourced
+three objectives: exhaustive failure detection (i.e., detect-  deTector [6].
+ing as many types of losses as possible), low overhead
+and real-time failure localization. In this paper, we seek     2 Motivation
+to investigate the following question: if we are aware of
+the network topology of a DCN, can we design a much            DCNs are usually multi-stage Clos networks with multi-
+better network monitoring system that achieves all these       ple paths between commodity servers for load balancing
+goals? Our answer is deTector, a topology-aware net-           and fault tolerance [9, 22, 26, 45]. Each DCN has its
+work monitoring system that we design, implement and           favorable routing protocols for path selection. For exam-
+evaluate following the three design objectives. The secret     ple, in a Fattree topology [9] and a VL2 topology [22],
+weapon of deTector is a carefully designed probe matrix        the shortest paths between any two ToRs are typically
+(§4), which achieves good link coverage, identifiability       used in practice [30]. We describe how existing mon-
+and evenness. deTector is designed to detect and localize      itoring systems fall short in achieving the three design
+network failures manifested by user-perceptible perfor-        objectives. Table 1 shows detailed comparison among
+mance problems such as packet losses and latency spikes        deTector and the existing systems.
+in large-scale data centers. We mainly focus on packet
+loss in this paper, but deTector can also handle latency          The passive approach stores packet statistics on switch
+issues by treating a round trip time (RTT) larger than a       counters, which are polled from SNMP or CLI periodi-
+threshold as a packet loss. Throughout the paper, we use       cally. In Fig. 1, if link AB is down, the switch counters
+"failure localization", "fault localization" and "loss lo-     will show a lot of packet losses. However, if the fail-
+calization" interchangeably. Specifically, we make the         ure is a gray failure rather than link down, it may go
+following contributions in developing deTector.                undetected. For example, when silent packet drops oc-
+                                                               cur, the switch do not show any packet drop hints (e.g.,
+     As compared to the existing active monitoring sys-        syslog errors) due to various reasons (e.g., ASIC deficit),
+tems adopting end-to-end probes (e.g., Pingmesh [26],          and hence SNMP data may not be fully trustworthy [26].
+NetNORAD [37]), we treat each switch instead of the            Furthermore, switches counters can be noisy, such that
+whole network as a blackbox, i.e., our system requires         problems identified by this approach may or may not lead
+the knowledge of the network topology and routing pro-         to end-to-end delay or loss perceived by users.
+tocols in a DCN (i.e., topology-aware) and we use source
+routing to control the probing path. In order to achieve          Pingmesh and NetNORAD adopt an end-to-end prob-
+real-time failure localization, we couple detection and lo-    ing approach to measure network latency and packet loss.
+calization closely and only rely on end-to-end measure-        Pingmesh selects probe paths by constructing two com-
+ments to localize failures without the help of other tools     plete graphs within a DCN: one includes all servers under
+(e.g., fbtracert [3]). To make it possible, we quantify        the same ToR switch (i.e., the switch in the edge layer in
+several desirable properties of probe matrix (e.g., iden-      Fig. 1) and the other spans all ToR switches. NetNORAD
+tifiability) and propose a greedy algorithm to minimize        is similar to Pingmesh but places pingers in a few pods
+probe cost. To address the scalability issue in DCNs, we       instead of all servers. Their approaches simplify the de-
+apply several optimization heuristics and exploit charac-      sign but bring quite significant overhead (§6). Although
+teristics of the DCN topology to accelerate path compu-        gray failures can be captured, it is difficult to detect fail-
+tation (§4).                                                   ures causing low rate losses (e.g., 1%) of a link, when
+                                                               ECMP is adopted in the DCN: there are many paths be-
+     We modify a failure localization algorithm based
+on packet loss characteristics in large-scale data centers.    Figure 1: A 4-radix Fattree topology: failure on link AB
+Compared to the existing algorithms, our algorithm runs        can be detected by sending probes from s1 to s3.
+within seconds and achieves higher accuracy and lower
+false positive rate (§5).
+
+      We implement and evaluate our system on a 4-
+ary Fattree testbed built with 20 switches. The experi-
+ments show that deTector is practically deployable and
+can accurately localize failures in near real time with
+less probe overhead, e.g., for 98% accuracy, deTector re-
+quires 3.9x and 1.9x times fewer probes than Pingmesh
+and NetNORAD while localizing failures 30 seconds in
+advance without the use of other loss localization tools.
+Our supplementary simulation further shows that deTec-
+
+56 2017 USENIX Annual Technical Conference                     USENIX Association
+               Table 1: Comparison among deTector and existing representative monitoring systems
+
+  SNMP/CLI     Gray failures  Low rate loss   Failure localization  Transient failures   Timeliness              Overhead
+Pingmesh [26]        No             No                 Yes                  Yes            minutes           switch resources
+NetNORAD[3]         Yes             No                                      No             minutes
+                    Yes             No       No, need Netbouncer            No             minutes              many probes
+    deTector        Yes            Yes        No, need fbtracert            Yes                         many probes, switch CPU
+                                                       Yes                              near real-time
+                                                                                                              minimal probes
+
+tween a pair of servers, low-rate losses on a particular     ping configuration (§6.1). The probe paths from a ToR
+link may not affect much the overall end-to-end loss rate    switch to different destinations are distributed among
+between the two servers.                                     pinglists of pingers under the ToR switch, with each path
+                                                             distributed to at least 2 pingers for fault tolerance. In
+   The exact location of losses cannot be pinpointed us-     this way, in case that one pinger is down, other pingers
+ing Pingmesh or NetNORAD, since they do not know             in the same rack can still probe the paths, avoiding any
+which paths the probes take (e.g., due to ECMP). There-      large drop in link coverage. To detect failure on links
+fore, other tools such as Netbouncer [4] and fbtracert [3]   connecting servers and the respective ToRs, pingers are
+are needed, which send additional probes to play back the    also responsible for probing other servers under the same
+losses. These post-alarm tools may fail to pinpoint tran-    ToR. The number of probe paths for each pinger is no
+sient failures, those caused by transient bit errors, non-   more than a hundred even for a large DCN (§4.4). The
+atomic rule updates or network upgrade (e.g., a transient    probe packets are sent over UDP. Though TCP is used to
+inconsistency between the link configuration and rout-       carry most traffic in a DCN, the DCN does not differenti-
+ing information [21]). To pinpoint such failures, close      ate TCP and UDP traffic (e.g., the forwarding behavior)
+coupling of detection and localization is required, so that  in the vast majority of cases [37, 26], and hence UDP
+losses are localized only according to detection data, in-   probes can also manifest network performance. When a
+stead of additional probes after detection alarms. Such      pinger detects a probe loss, it confirms the loss pattern
+coupling further enables near real-time fault localization.  by sending two probe packets of the same content addi-
+                                                             tionally.
+3 System Design
+                                                                Responder. The responder is a lightweight module
+3.1 Architecture                                             running on all servers. Upon receiving a probe packet,
+                                                             the responder echoes it back. A responder does not retain
+deTector includes four loosely coupled components: a         any states and all probing results are logged by pingers.
+controller, a diagnoser, pingers and responders, as de-
+picted in Fig. 2.                                               Diagnoser. Each pinger records packet loss informa-
+                                                             tion and sends it to the diagnoser for loss localization.
+                                                             These logs are saved into a database for real-time anal-
+                                                             ysis and later queries. The diagnoser runs the PLL al-
+                                                             gorithm (§5) to pinpoint packet losses and estimates the
+                                                             loss rates of suspected links.
+
+                                                                For the controller and the diagnoser to be fault-tolerant
+                                                             and scalable, we can use existing solutions (e.g., Soft-
+                                                             ware Load-Balancer [41, 26]).
+
+                Figure 2: System architecture                3.2 Workflow Overview
+
+   Controller. The logical controller periodically con-      deTector works in three steps in cycles: path computa-
+structs the probe matrix indicating the paths for sending    tion, network probing and loss localization.
+probes (see §4 for details). We mainly focus on failure lo-
+calization on links inter-connecting switches, as the fault     Path computation. At the beginning of each cycle,
+on a link connecting a server with a ToR switch can be       the controller reads the data center topology and server
+easily identified as discussed in the next paragraph. The    health from data center management service (e.g., [31]),
+probe matrix indicates paths between ToRs. Since we do       and selects the minimal number of probe paths (§4). The
+not rely on ToRs with ping capability, probes are sent by    controller then selects pingers in each ToR, constructs
+2­4 selected servers (pingers) under each ToR.               and dispatches the pinglists to them.
+
+   Pinger. Each pinger receives the pinglist from the con-      Network probing. Next, probe packets are sent along
+troller, which contains server targets, probe format and     the specified paths across the DCN. Since data center
+                                                             usually adopts ECMP for load balancing, we have to
+                                                             use source routing to control the path traveled by each
+                                                             probe packet, which can be implemented using various
+
+USENIX Association                                                  2017 USENIX Annual Technical Conference 57
+methods.1 A general and feasible solution is to employ                  l1 l2 l3    l1 l2 l3 l12 l13 l23 
+packet encapsulation and decapsulation to create end-to-               p1 1 1 0    1101 1 1
+end tunnels, though it may cause encapsulating packets
+twice in virtualized networks created by VXLAN [1] or                  R = p2  1 0 1   R' =  1 0 1 1 1 1 
+NVGRE [2]. Take the Fattree network in Fig. 1 as an
+example: fixing a core switch, there is only one path be-              p3 0 0 1    0010 1 1
+tween two inter-pod servers; we can use IP-in-IP encap-
+sulation to wrap the probe on a server; after the packet ar-           Figure 3: Extend routing matrix with virtual links
+rives at the core switch, the outer header is removed and
+the packet is routed to the real destination. Such a source            Problem 1 Given a DCN routing matrix R, select a set
+routing mechanism incurs little overhead on servers and                of paths to construct a probe matrix P, such that P si-
+core switches.                                                         multaneously (1) minimizes the number of paths, and
+                                                                       achieves (2) -coverage and (3)  -identifiability.
+   Loss localization. The probe loss measurements are
+aggregated and analyzed by our loss localization algo-                    Minimizing the number of probe paths is desirable for
+rithm (§5) on the diagnoser. We pinpoint the faulty links,             minimizing network bandwidth consumption and anal-
+estimate the loss rates, and send alerts to the network op-            ysis overhead, such that we may finish probing and di-
+erator for further action (e.g., examining switch logs).               agnosing the entire DCN in merely a few minutes. Un-
+                                                                       der the same probing bandwidth budget, it allows each
+4 Probe Matrix Design                                                  pinger to probe the same set of paths more frequently.
+
+The main limitation of existing monitoring systems is                     -coverage requires that each link is covered by at
+that the probe path selection is far from optimum, such                least  paths in the probe matrix. Covering a link multi-
+that not enough useful information can be collected and                ple times brings higher statistical accuracy for loss detec-
+additional probes are needed to reproduce losses for lo-               tion, as well as better resilience to pinger failures (since a
+calization. In this section, we elaborate how we carefully             link is more likely to be covered by probes from multiple
+select probe paths to overcome such a limitation.                      pingers).
+
+4.1 Problem                                                                -identifiability states that the simultaneous failures of
+                                                                       any (no more than)  links in the DCN can be localized
+Consider a data center network graph G = (V, E), where                 correctly. For the routing matrix in Fig. 3, suppose we
+V is the set of switches and E is the set of links. R is the           select p1 and p2 to constitute the probe matrix, i.e., the
+m × n routing matrix defined by                                        probe matrix contains the first two rows of R. If 2 or
+                                                                       more links fail simultaneously, the faulty links cannot be
+Ri, j =  1  if link j is on path i                                     correctly identified, as the observation from the end is
+         0  otherwise                                                  the same, i.e., packet losses are observed on both paths.
+                                                                       On the other hand, if only one link is faulty, the bad link
+where m is the number of paths and n = |E| is the num-                 can be identified effectively: losses are observed on both
+ber of links. The possible paths and the routing matrix                paths, p1, or p2 if link 1, 2, or 3 is faulty, respectively.
+are decided by the routing protocols employed in the data              Therefore, the probe matrix achieves 1-identifiability, but
+center, e.g., ECMP is typically used to exploit k2/4 paral-            not 2 or higher identifiability. Better identifiability con-
+lel paths between any two ToRs in a k-ary Fattree. Fig. 3              tributes to higher accuracy of loss localization.
+gives a routing matrix R with 3 paths and 3 links. Note
+that each link in a DCN is typically bi-directional. Once                 We find that Problem 1 is NP-hard for general DCNs
+we select a path from server s1 to server s2 and send a                as the Minimum Set Cover Problem is a special case of
+probe, the reverse path from s2 to s1 is automatically se-             the problem. We hence resort to an approximation algo-
+lected, since the response packet can probe faults along               rithm to compute the probing path, which is at the heart
+the reverse direction. When we identify that link AB has               of deTector.
+failed, it implies that the failure may lie in either direc-
+tion of the link, switch A, or switch B.                               4.2 PMC Algorithm
+
+    1Source routing protocols have been designed in some DCNs like     We extend a well-known greedy algorithm [13] for con-
+BCube [24] and DCell [25]; [30, 32] introduce other solutions for ex-  structing a probe matrix achieving 1-identifiability to one
+plicit path control.                                                   achieving  -identifiability, as well as -coverage using
+                                                                       a minimal number of probe paths.
+
+                                                                          In a probe matrix, a link belongs to a set of paths. To
+                                                                       achieve 1-identifiability, the path sets of different links
+                                                                       should all be different, so that losses can be observed on
+                                                                       a particular set of paths to identify the faulty link. Recall
+                                                                       that the set of links in our DCN is E. Once we select
+                                                                       a path from the set of all feasible paths decided by the
+
+58 2017 USENIX Annual Technical Conference                                         USENIX Association
+routing matrix based on some criterion, it splits E into             Algorithm 1 Probe Matrix Construction (PMC) Algo-
+two subsets E1 and E2, containing links on the selected              rithm
+path and the other links, respectively. If we do not ob-
+serve any packet loss on this path, it implies that all links        Require: R, , 
+in E1 are good; otherwise, there must be at least one bad
+link in E1. Similarly, we select another path to further             1: Initialize w, score to 0, setnum to 1, sel paths to 0/
+split E1 and E2 into smaller subsets, and repeat this pro-
+cedure. Eventually if we can obtain subsets each con-                2: R'  LINKOR(R,  )
+taining only one link, then the probe matrix constructed
+using the selected paths achieves 1-identifiability (since           3: paths  all paths in R', physlinks  E
+the set of paths traversing each link is unique); other-
+wise, there does not exist a 1-identifiable probe matrix in          4: while (setnum = |E| physlinks = 0/ ) && paths = 0/
+the DCN. Throughout the process, if we always select a
+path whose links are present in the largest number of link                do
+sets to further split the link sets as much as possible, we
+will end up with the minimal number of paths needed.                 5: for path  paths do
+
+   To achieve  -identifiability, we expand the DCN                   6:         update score[path] according to (1)
+graph G with "virtual links". A virtual link is a com-
+bination of multiple physical links, and the set of paths a          7: path  argminpath paths score[path ]
+virtual link belongs to can be computed by "OR"-ing to-              8: sel paths  sel paths  {path}
+gether the paths including the individual links [13]. For
+the example in Fig. 3, the original routing matrix R is              9: paths  paths/{path}
+extended to R' with three additional virtual links l12, l13
+and l23 added; the column corresponding to the virtual               10: for physlink on path do
+link l12 can be computed by "OR"-ing the two columns
+corresponding to links l1 and l2. For  -identifiability,             11:        w[physlink]  w[physlink] + 1
+
+  C(|E|, i) virtual links should be added in the DCN                 12:        if w[physlink] >  then
+
+2i                                                                   13:        physlinks  physlinks/{physlink}
+
+graph (routing matrix), corresponding to all combina-                14: update setnum as the total number of link sets
+tions of 2 to  links in the original graph. Then we can                  after split by path
+run the above algorithm for constructing 1-identifiable
+matrix based on the new routing matrix, and the result-              15: return probe matrix constructed by paths in sel paths
+ing probe matrix achieves  -identifiability.                             (retaining only physical links on the paths)
+
+   The probe matrix does not achieve even path coverage              in the above procedure. We strive to achieve better even-
+among the links yet. For example, for a 1-identifiable               ness among the links while guaranteeing -coverage, by
+probe matrix constructed on a 64-ary Fattree, the gap                always selecting a path with the lowest score.
+between the maximal and minimal numbers of probing
+paths passing through any two links can be as large as                  Our Probe Matrix Construction algorithm, PMC, is
+188. To achieve better evenness (i.e., spreading paths and           summarized in Alg. 1. We first reduce the problem of
+thus probe overhead evenly among the physical links),                constructing a  -identifiable matrix to one constructing
+we introduce a link weight w[link], denoting the num-                1-identifiable matrix, by adding virtual links to the orig-
+ber of paths that the link resides on, and ensure that it is         inal routing matrix of the DCN graph (line 2, where
+no smaller than  for any physical link. We also define               LINKOR denotes the method for extending routing ma-
+a score for each (extended) path, i.e., the path includes            trix discussed above). Then in each iteration we update
+virtual links from the extended routing matrix R':                   the score of each (extended) path (lines 5-6) and select
+                                                                     a path which has the minimal score among all candi-
+ score(path) =  w[link] - # of link sets on path                     date paths (lines 7-8). We remove the selected path from
+                          l ink pat h                                the candidate path set (line 9), and update the weight of
+                                                                (1)  physical links (w[physlink]) on the selected path (lines
+                                                                     10-11) and the total number of link sets that the already
+Here the link sets are the split link sets produced by the           selected paths can split into (line 14, which corresponds
+procedure above. We say that a link set is on a path if the          to the procedure discussed in the second paragraph of
+link set contains at least one (physical or virtual) link of         this subsection). If the number of paths that cover one
+the path. Thus, a lower score indicates that the links on            (physical) link exceeds , we remove the link from the
+the path are not covered much by paths already selected              set of all links (line 12-13). The loop stops when the
+and/or more link sets can be split if the path is selected           probe matrix achieves -coverage (i.e., the set physlinks
+                                                                     is empty) and  -identifiability (i.e., the number of link
+                                                                     sets split equals the number of links), or there are no
+                                                                     more candidate paths (i.e., the set paths is empty).
+
+                                                                     Theorem 1  The  PMC  algorithm  achieves  (1 -  1  )  ap-
+                                                                                                                     e
+
+                                                                     proximation of the optimum in terms of the total number
+
+                                                                     of probe paths selected, where e is natural logarithm.
+
+                                                                        We can prove Theorem 1 by showing that the score
+                                                                     of a path set is monotone, submodular and non-negative.
+
+USENIX Association                                                            2017 USENIX Annual Technical Conference 59
+The detailed proof is in the technical report [7]. In prac-       Observation 3 The DCN topology is typically symmet-
+                                                                  ric.
+tice, the PMC algorithm performs much better than the
+                                                                  Due to symmetry, when a path is selected, all its topo-
+(1 -  1  )   0.63  approximation  ratio  (§4.4).  The  issue  of  logically isomorphic paths can be selected. For example
+      e                                                           in Fig. 1, if the dashed green path spanning Pod 1 and
+this algorithm, however, is the computation time. The             Pod 2 is selected, then the dashed purple path spanning
+                                                                  Pod 3 and Pod 4 may be a good choice too. This helps us
+time complexity of the algorithm is O(m2), where m is             reduce the scale of the problem since the routing matrix
+                                                                  R can be reduced to a smaller matrix by excluding paths
+the number of paths, since in the worst case we may up-           that are topologically isomorphic to other paths. For ex-
+                                                                  ample, if the green path is in the matrix, we do not need
+date the scores of all paths in each iteration and end up         to include the purple path. For this purpose, we first need
+                                                                  to compute the symmetric components in a DCN graph.
+with selecting all paths. In a 64-radix Fattree, there are        There are many fast algorithms available for symmetry
+                                                                  discovery [17, 15], e.g., O2 [15] can finish computation
+about 4.3 × 109 desirable paths among ToRs. As we will            within 5 seconds for a Fattree(100) DCN, and we only
+                                                                  need to precompute it once for a DCN.
+see in §4.4, the algorithm is still too slow for any data
+                                                                  4.4 Performance
+center at a reasonable scale, and we adopt a number of
+                                                                  We run our PMC algorithm on a Dell PowerEdge R430
+optimizations to further speed it up.                             rack server with 10 Intel Xeon E5-2650 CPUs and 48GB
+                                                                  memory, to test its running time and number of paths se-
+4.3 Algorithm Speedup                                             lected. We compare results on three well-known DCNs,
+                                                                  Fattree [9], VL2 [22] and BCube [24].2
+To speed up the PMC algorithm, we apply several opti-
+mizations based on the following three observations.                 Running time. Table 2 shows the algorithm run-
+                                                                  ning time for constructing a probe matrix achieving 2-
+Observation 1 Problem 1 can be divided into a series of           coverage and 1-identifiability. The strawman approach is
+subproblems.                                                      our PMC algorithm without any optimizations. The last
+                                                                  three columns contain results when the respective opti-
+We can construct a bipartite graph according to the rout-         mization is in place (in addition to the previous one(s)).
+ing matrix: one partition corresponds to paths and the            The results show that PMC can efficiently select probe
+other consists of links; an edge exists between a path            paths for very large DCNs. Specifically, without algo-
+node and a link node if the link is on the path. We observe       rithm speedup, the computation time of PMC can be
+that if the routing matrix can be partitioned into sets of        larger than 24 hours; after each optimization, the time de-
+paths with no links in common, then the problem can be            creases significantly and we can compute the probe ma-
+divided into independent subproblems. For example, in             trix for Fattree(72), VL2(140,120,100) and BCube(8,4)
+Fig. 1, paths traversing the red link have no link overlap-       within 18 seconds, 86 seconds and 70 seconds, respec-
+ping with paths traversing the blue link. Therefore, the          tively. We note that the running time in case of problem
+bipartite graph can typically be divided into connected           decomposition for VL2 and BCube is a bit longer than
+subgraphs and each subgraph represents a smaller rout-            that of strawman. This is because decomposition does
+ing matrix and hence a subproblem. Finding connected              not apply to the two DCN topologies, but we need extra
+subgraphs can be done in linear time by traversing the            time to decide whether the matrix is decomposable.
+bipartite graph once. Then the PMC algorithm can be
+applied to the subproblems in parallel.                              Path number. Table 3 shows the number of selected
+                                                                  paths with different  and  in different DCNs. Com-
+Observation 2 The score of each path is non-decreasing            pared with the number of original paths in DCNs, PMC
+over all iterations.                                              only selects a small percentage of paths. We can prove
+                                                                  that the least number of paths for achieving 1-coverage
+It can be proved that the score of a path is non-decreasing       and 1-identifiability is k3/5 for any k-ary Fattree (Ap-
+(Appendix A in [7]). Inspired by the CELF algorithm for           pendix B in [7]). Thus, a Fattree(64) DCN needs at least
+outbreak detection in networks [38], we adopt a strategy          52428 paths and our algorithm selects slightly more, i.e.,
+called lazy update which defers the update of a path score
+as much as possible even though we know the score is                  2BCube is a server centric architecture and we treat servers as
+outdated. Specifically, we maintain a min-heap for all            switches to run our algorithm.
+paths with scores as the keys and only update the score
+of a path when the path is at the top of the heap. After
+score update, if the path still stays at the top of the heap,
+i.e., the path has the minimal score among all available
+paths, we will select the path as a probe path, even though
+some path scores have yet to be updated. The correctness
+of this heuristic is guaranteed by submodularity of the
+score of a path set: the marginal gain provided by a path
+selected in the current iteration can not be larger than that
+provided by the path in the previous iteration.
+
+60 2017 USENIX Annual Technical Conference                        USENIX Association
+                  Table 2: Algorithm running time (seconds) with  = 2,  = 1 in different DCNs
+
+       DCNs       # of nodes      # of links  # of original paths  Strawman    Decomposition     Lazy update    Symmetry reduction
+
+    Fattree(12)           612          1296               184,032    231.458              5.216          0.506                    0.126
+    Fattree(24)        4,176         10,368           11,902,464       > 24h          1381.226         23.254                     0.280
+    Fattree(72)       99,792       279,936        8,703,770,112        > 24h                            > 24h                   17.054
+ VL2(20, 12, 20)       1,282                                          22.030             > 24h                                    0.253
+ VL2(40, 24, 40)       9,884          1,440                70,800                        23.126           0.77                    1.404
+VL2(140,120,100)    424,390          10,560             4,588,800  7387.412           7470.476         39.028                   85.567
+   BCube(4, 2)                     436,800        4,938,024,000        > 24h              >24h          >24h                      0.117
+   BCube(8, 2)            112                                           4.871             4.936          0.227                    0.220
+   BCube(8, 4)            704           192                12,096                     4390.168           9.854                  69.778
+                      53,248          1,536               784,896  4050.776              > 24h          > 24h
+                                   163,840        5,368,545,280        > 24h
+
+Table 3: Number of selected paths with different (, )              responders (e.g., the server is down or was rebooting dur-
+                                                                   ing probing, thus causing many false alarms [37]). Such
+      DCNs        Original paths  Selected paths with (,  )        outliers can be identified by keeping track of the status
+                                                                   of servers using a watchdog service. In addition, a link
+   Fattree(32)       66,977,792   (1, 0) (1, 1)       (3, 2)       normally has a regular low loss rate, e.g., 10-4­10-5,
+   Fattree(64)    4,292,870,144                                    due to transient congestion, bit errors, which should not
+VL2(72,48,40)                      4,096       7,680   12,288      be considered as failures [26]. To exclude such nor-
+VL2(128,96,80)      107,371,008   32,768      61,440   98,304      mal cases, we filter out paths with extremely low packet
+  BCube (8,2)     2,415,132,672                                    loss rates by setting a threshold on the number of packet
+  BCube (8,4)                        864       1,440     2,640     losses in a period of time or on packet loss ratio (e.g.,
+                         784,896   3,072       5,760     9,216     10-3 [26, 21]).3 After pre-processing, the loss data that
+                  5,368,545,280    1,712       2,016     2,832     remain (in the form of (path, number o f losses)) are
+                                  49,152      70,572  119,556      likely manifest of network failures rather than noises.
+
+61440 paths. This implies that pingers under each se-              5.2 Problem
+lected ToR in the Fattree are only responsible for probing
+about 60 paths, much fewer than that of Pingmesh (about            Our fault localization problem is: given end-to-end
+2000-5000 paths). We also find that VL2 requires much              packet loss observations, find the smallest set of faulty
+fewer paths than Fattree and BCube. This is because VL2            links that best explains the observations. This problem is
+has a much smaller number of links between switches                NP-hard as it can be reduced to the NP-complete Min-
+(12288 links in VL2(128, 96,80)), as compared to Fat-              imum Hitting Set Problem [18]. Besides, we face two
+tree (131072 links in Fattree(64)) and BCube (163840               challenges not existed in previous work:
+links in BCube(8,4)).
+                                                                      Much larger problem scale. Our study focuses
+   Note that the number of selected path may change                on large-scale DCN networks, different from smaller
+when the third optimization, based on topology symme-              networks investigated in the existing loss localization
+try, is in place. Our evaluation shows that the number of          work [10, 18, 42]. At our problem scale, the existing
+selected paths with symmetry reduction is very similar to          algorithms are not fast enough (taking tens of seconds or
+that without symmetry reduction. This is consistent with           even minutes) for real-time loss localization.
+the result in [30], and we hence omit the analysis.
+                                                                      Different loss patterns. Network failures are mainly
+   Results for   3. The probe matrices we constructed              exhibited as two kinds of packet losses: full packet loss
+above achieve at most 2-identifiability. For   3, the              and partial packet loss, meaning that all or part of the
+computation of PMC is not efficient in large DCNs. For             packets traversing a link are dropped. Existing tomog-
+the example of a 48-ary Fattree, computing a probe ma-             raphy techniques assume that if all links on a path are
+trix achieving 3-identifiability requires at least 24 hours,       good, then the path is good [19]. This is not true in case
+even when we apply all speedup optimizations in §4.3.              of partial packet loss in data centers, e.g., packet black-
+The fundamental reason is that the routing matrix R be-            hole may lead to losses on a link only for a subset of
+comes much larger when the number of column increases              paths using that link.
+
+from n to  C(n, i), by adding virtual links. However,
+               1i
+
+surprisingly, we find that 2-identifiability is enough for
+loss localization in DCNs, as we will see in §6.4.
+
+5 Loss Localization                                                5.3 PLL Algorithm
+
+5.1 Data Pre-processing                                            Based on the Tomo algorithm in [18], we design an effi-
+                                                                   cient Packet Loss Localization algorithm, PLL, to local-
+After collecting the probe data, the first step is to pre-
+process the data, removing outliers and normal cases.                  3To avoid inaccuracy of the threshold approach, we can use statis-
+Severe packet losses could be caused by bad pingers and            tical hypothesis testing to look at loss rates over time for noisy data
+                                                                   filtering [27].
+
+USENIX Association                                                             2017 USENIX Annual Technical Conference 61
+ize packet losses in DCNs (see [7] for more details). The                The computed probe matrix is divided into XML pinglist
+basic idea of PLL is as follows.                                         files for dispatching to pingers. A pinglist file contains
+                                                                         file version, the pinger's IP address, IP addresses of re-
+   Step 1: Divide the problem into a series of subprob-                  sponders, transport port numbers, the packet-sending in-
+lems, by decomposing the probe matrix following the                      terval and IP addresses of core switches. Our measure-
+same steps discussed for decomposing the routing matrix                  ment shows that the controller can handle 4473 pinglist
+in §4.3. For each subproblem, run the following steps.                   requests per second on average with maximal bandwidth
+                                                                         consumption 688.56Mb/s using one core. Since pingers
+   Step 2: If all probe paths traversing a link experience               are deployed on a small number of servers (about 10%
+no packet loss, we exclude the link. For the remaining                   among all servers), the controller can support more than
+links, we calculate a hit ratio for each link, i.e., the ratio           100,000 pingers by slightly randomizing the time when
+of the number of observed lossy paths through the link                   pingers request for pinglists in each cycle.
+over the number of all probe paths using the link [34].
+                                                                            Each pinger implements a communication module and
+   Step 3: We compute a score for each link as the num-                  a probing module. The communication module is re-
+ber of lost packets that the link can explain, i.e., if a link           sponsible for connections with the controller and the di-
+lies in the packet path, we say the link can explain the                 agnoser. It fetches the pinglist file from the controller
+packet loss.                                                             by an HTTP GET request in every cycle (i.e., 10 min-
+                                                                         utes). The probing module generates probe packets ac-
+   Step 4: Among those links whose hit ratios are larger                 cording to the pinglist and encapsulates them by IP-in-IP
+than a preset threshold, we greedily select the link with                (§3.1). In our experiments, a pinger loops over a range
+the maximal score and remove those losses this link can                  of ports for each path, and emits several packets for ev-
+explain.                                                                 ery port. Each probe packet has an average size of 850
+                                                                         Bytes, carrying a specified DSCP value in the IP header
+   Step 5: Repeat Step 3 and Step 4 until no loss remains                to test different QoS classes [12]. If there is no response
+unexplained.                                                             for a probe within 100ms, we mark it as a loss. A pinger
+                                                                         repeatedly sends packets by looping through the paths in
+   PLL differs from Tomo mainly in handling partial                      the pinglist for multiple times (for statistical accuracy),
+packet losses, i.e., we use a hit ratio threshold to filter              at the rate of 10 packets per second. Every 30 seconds,
+suspected links. Setting the threshold requires network                  the pinger aggregates the probing results (i.e., the number
+operator's experience and, if possible, by learning from                 of packet losses and the number of packets sent on each
+real loss data. The analysis on setting this threshold is                probe path) into an XML file and sends it to the diagnoser
+presented in [7] due to space constraint and we set it to                by an HTTP POST request. The responder module runs
+0.6 by default in our experiments.                                       in the userspace of all servers, which listens to a particu-
+                                                                         lar port, and upon packet arrival, it adds a timestamp and
+   We have compared performance of PLL and other ex-                     sends the packet back. The pinger and responder incur
+isting loss localization methods (e.g., Tomo, SCORE [34]                 little overhead on servers, as we will see in §6.3.
+and OMP [42]), and present the results in [7]. The results
+show that given the same probe matrix, PLL achieves 2%                      The diagnoser is a Web server module running on the
+higher accuracy (defined as true positive ratio, i.e., the               same server where the controller is in our experiments. It
+percentage of bad links correctly identified as bad over                 runs the PLL algorithm for fault localization once every
+all truly bad links), 2% lower false positive ratio (i.e.,               half a minute, using collected probe results in the past
+the percentage of good links incorrectly identified as bad               30 seconds. Given the limited number of servers in our
+over all correctly and incorrectly identified links), and                testbed, we run a virtual machine to emulate a server.
+is an order of magnitude faster (e.g., localizing failures
+within 1 second in a large DCN with 82944 links) than                    6.2 Experiment Setup
+the other algorithms.
+                                                                         We build a 4-ary Fattree testbed with 20 ONetSwitch [5,
+6 Implementation and Evaluation                                          29, 28], each equipped with FPGA-based hardware re-
+                                                                         configurable dataplane, four 1GbE ports and one ded-
+6.1 Implementation                                                       icated management port. Though we do not require
+                                                                         programmable switches in deTector, employing SDN
+We run the controller on one Dell server (or it can run in               switches facilitates our emulation of various failure cases
+a distributed fashion over multiple servers for large-scale              that may happen in a real-world DCN. Specifically, we
+networks). A watchdog service also runs on the server                    categorize all losses into three types:
+for monitoring the health of other servers and removing
+bad ones. The controller runs the PMC algorithm to re-                   it does not affect symmetry computation which only pre-runs once on
+compute the probe matrix every 10 minutes, based on the                  the original DCN topology.
+current network topology from the watchdog service.4
+
+    4Once a link or a switch has failed, we remove related link(s) from
+the routing matrix to avoid selecting bad paths for probing. Note that
+
+62 2017 USENIX Annual Technical Conference                               USENIX Association
+   Full packet loss. We install OpenFlow rules with high            (a) Performance of PLL (b) CPU, memory and band-
+priority to drop all packets coming from a particular port,                                          width overhead on pingers
+to emulate a faulty link with full packet loss. To emulate
+a switch down case, we install rules to drop all packets at       (c) RTT of workload traffic (d) Jitter of workload traffic
+the switch.
+                                                                      Figure 4: Sensitivity test of sending frequency
+   Deterministic partial loss. Packets with certain fea-
+tures (e.g., specific IPs, port numbers) may be dropped         tio (Fig. 4(a)), but causes higher CPU utilization and
+on a link deterministically, e.g., in case of packet black-     bandwidth consumption on pingers (Fig. 4(b)) as well
+hole or misconfigured routing rules. To emulate such            as slightly larger fluctuation of the RTT (Fig. 4(c)) and
+failures, we install rules on the switches to match and         jitter (Fig. 4(d)) experienced by the workload. We find
+drop packets with certain headers.                              that 10­15 probes per second is good enough since we
+                                                                can still achieve higher than 95% accuracy and a lower
+   Random partial loss. Sometimes packets on a link             than 3% false positive ratio, while only consuming about
+are dropped randomly, as caused by bit flips, CRC er-           100Kbps bandwidth, 0.4% CPU and 13MB memory on
+rors, buffer overflow, etc. SDN switches do not support         each pinger. Besides, it does not introduce apparent de-
+random packet dropping. To emulate such losses, we in-          lay and jitter variations for workload traffic. Note that the
+stall rules on the switches to redirect all packets on an       overhead of a responder is much smaller than a pinger
+emulated bad link to the SDN controller, and the SDN            because it resumes fewer tasks (e.g., no communication
+controller drops the received packets with certain proba-       with the controller and the diagnoser), and hence the re-
+bility, following the pattern extracted from [12].              sults are omitted.5 In all our experiments, the pinger
+                                                                sends 10 packets per second by default (i.e., the red
+   Due to no access to loss data in real-world data centers,    square in Fig. 4).
+we produce the above loss types according to the failure
+measurements in [20] and traffic measurements in [12].             We then compare the accuracy, false positive ratio and
+Specifically, we set parameters such as link vs. switch         overhead among deTector, Pingmesh and NetNORAD.
+failure percentage, link loss rates (ranging from 10-4 to       Since Pingmesh can not localize failures by itself, once it
+1), failure probabilities for switches in different tiers, all  detects a suspected source-destination server pair, we use
+based on the above measurements. The loss distribu-             Netbouncer [4] to go through all possible paths between
+tion for links in different tiers is extracted from Fig. 3      this server pair for loss localization. As for NetNORAD,
+in [12]. Aside from deTector, we also implement the             similarly, we use fbtracert [3] to probe all possible paths
+probing modules of Pingmesh and NetNORAD on our                 between the suspected server pair. The interval of loss
+testbed for performance comparison, as well as their fail-      data collection is 30 seconds for three systems.
+ure localization tools, Netbouncer and fbtracert. Since
+we do not know some of their implementation details                Fig. 5 shows the comparison when one failure is emu-
+(e.g., how data pre-processing is done), we implement           lated in the testbed (the failure is randomly picked as in
+those details in the same way across all three systems.         the previous experiment). The number of (ping and re-
+                                                                ply) probes in the figure includes probes sent for detec-
+6.3 Performance                                                 tion and probes for localization (if any) in each minute
+                                                                of the experiment. More probes indicate not only more
+We first investigate how probing itself affects the whole
+DCN. We use realistic packet traces (including informa-             5Even when we place the pinger and responder on the same server,
+tion such as packet header, timestamp) from a univer-           the overhead is negligible.
+sity data center [11] (mostly HTTP flows) to generate
+workload traffic in our testbed, where each server con-
+tinuously replays flows based on the packet traces and
+sends them to a random receiver. We evaluate how our
+probing frequency (i.e., the number of probes a pinger
+sends per second) affects the performance of the PLL al-
+gorithm, the overhead on the pinger, and RTT and jitter
+experienced by the workload traffic. In each minute of
+our experiment, we emulate a failure randomly picked
+among the three types of failures, with the failed switches
+or links randomly picked in the DCN. We run our exper-
+iment for 2000 minutes and obtain the average results.
+
+   Fig. 4 shows that a higher probe sending frequency
+leads to a higher accuracy and a lower false positive ra-
+
+USENIX Association                                              2017 USENIX Annual Technical Conference 63
+                                                             Table 4: Accuracy in a 18-radix Fattree, with probe ma-
+                                                             trices of different levels of coverage and identifiability
+
+                                                             (,  )   # of paths     Accuracy (%) with # of failed links
+
+                                                             (1, 0)     729      1      5      10     20     50
+                                                             (2, 0)    1485
+                                                             (3, 0)    2187      30.56  30.87  30.30  30.26  29.19
+                                                             (1, 1)    1269      58.43  57.43  57.08  56.81  57.11
+                                                             (1, 2)    1512      68.22  70.61  69.89  70.40  70.14
+                                                             (1, 3)    2349      94.74  93.37  94.21  93.43  90.29
+                                                                                 99.26  99.06  99.02  98.77  95.92
+                                                                                 99.63  99.63  99.67  99.62  98.07
+
+Figure 5: Accuracy and false positives of three monitor-     trix influences the accuracy of our failure localization,
+ing systems with different number of probes per minute       when running deTector in larger Fattree networks.
+
+  Figure 6: Results comparison with multiple failures           We first vary  and  for probe matrix construction
+                                                             in an 18-radix Fattree. Table 4 shows that higher cov-
+bandwidth consumption, but also higher CPU and mem-          erage and higher identifiability lead to higher accuracy,
+ory usage. For deTector, we use a probe matrix with 1-       while the overhead (i.e., the number of selected paths)
+identifiability and 3-coverage (since it is impossible to    does not increase much. Also, we find that identifiability
+achieve 2-identifiability in a 4-ary Fattree). As we can     is more effective and desirable than coverage for failure
+see, deTector achieves high accuracy and a low false pos-    localization, since a 1-identifiability matrix increases the
+itive ratio with a much smaller number of probes, be-        accuracy a lot (from one with 0-identifiability guarantee),
+cause deTector covers more types of losses (e.g., low rate   with much less overhead than a 3-coverage probe matrix.
+loss) and takes carefully planned paths. For instance, to
+achieve 98% accuracy and 1% false positives, deTector,          Note that further increasing the level of identifiability
+NetNORAD and Pingmesh need to send 7200, 20700               for  > 1 does not increase the accuracy much, and probe
+and 35100 probes per minute, respectively. When the          matrices achieving 1-identifiability can already lead to
+probe overhead is same (same number of probes sent per       higher than 90% accuracy. According to the measure-
+minute), the accuracy and false positive ratio achieved      ments in [12], less than 10% failure events (failures oc-
+by deTector is better than those of NetNROAD; as com-        curring concurrently) contain more than four failures and
+pared to Pingmesh, the accuracy of deTector is much bet-     less than 1% failure events contain more than 20 failures.
+ter, while the false positive ratio of Pingmesh is slightly  This implies that a probe matrix with 1-identifiability
+smaller sometimes, since it possibly probes all paths.       can guarantee higher than 93% accuracy for 90% fail-
+                                                             ure events and 2-identifiability provides a 98% accuracy
+   Fig. 6 further shows the accuracy and false positive      for 99% failure events.
+ratio with multiple failures, when the probe overhead is
+fixed to be the same, i.e., 5850 probes per minute. de-         The result is surprising but reasonable: Since we use
+Tector always achieves much better performance than          a number of optimizations (§4.3) to reduce the size of
+Pingmesh and NetNORAD. Note that deTector also de-           the routing matrix, the PMC algorithm in fact achieves
+tects and localizes failures much faster than NetNORAD        -identifiability (where  is larger than  used in
+and Pingmesh (30 seconds in advance in our experi-           the algorithm) for the whole probe matrix, rather than
+ments), because deTector does not need any other diag-        -identifiability computed for each small probe matrix
+nosis tools to send an additional round of probes for loss   (corresponding to a small network topology). Therefore,
+localization, while others do.                               deTector may fail to localize all failures only if more
+                                                             than  failures appear in a small topology, which occurs
+6.4 Simulation                                               with relatively low probability. This shows that using a
+                                                             probe matrix with a low level of identifiability guaran-
+We supplement our experimental evaluation with simula-       tee is good enough to identify a much larger number of
+tions, to investigate how identifiability of the probe ma-   concurrent failures.
+
+                                                                In addition, by examining the failure events that deTec-
+                                                             tor fails to localize with a low identifiability probe ma-
+                                                             trix but can identify using a high identifiability matrix,
+                                                             we find that higher identifiability achieves better results
+                                                             only when the number of simultaneously failed links is
+                                                             very large. Such a failure event with many concurrent
+                                                             link failures is usually triggered by a common bug in
+                                                             practice (e.g., 180 links fail simultaneously due to sched-
+                                                             uled maintenance to multiple aggregation switches [20]),
+
+64 2017 USENIX Annual Technical Conference                                                     USENIX Association
+Table 5: Fault localization performance with probe ma-         ing those paths computed by the PMC algorithm need
+trix of 2-identifiability in a 48-ary Fattree                  to carry routing information in the packet headers.
+
+ # of failed links    1      5     10     20     50            8 Related Work
+  Accuracy (%)      98.95  98.99  98.98  98.93  98.87
+False positive (%)  0.01   0.02   0.02   0.02   0.02           Probe design. Many existing work (e.g., [14, 18, 43, 33,
+False negative (%)  1.05   1.01   1.02   1.07   1.13           27]) exploit logs on switches, or utilize multicast or net-
+                                                               work coding for network probing. Instead, we treat each
+and thus those faulty links are spatially clustered. In such   switch as a blackbox, and adopt a topology-aware end-
+cases, operators can locate the failure spot effectively ac-   to-end probing approach. Some studies [16, 40, 23] es-
+cording to the positions of most failed links.                 timate loss rates of all links, while we aim at identifying
+                                                               bad links (i.e., failure spots). Zeng et al. [48] and Nico-
+   We further examine the fault localization accuracy,         las et al. [23] propose monitoring solutions for backbone
+false positive and false negative (bad links incorrectly       networks that do not apply in DCNs due to scalability,
+identified as good) ratios achieved using a probe matrix       and the main difference lies in probe matrix design.
+of 2-identifiability in a 48-ary Fattree. Table 5 shows that   Fault localization. Our goal of accurately identify-
+the false positive and false negative ratios remain in a       ing faulty links falls squarely in the area of binary net-
+very low level. In particular, the false positive rate is ex-  work tomography. Tomography algorithms such as Sher-
+tremely low (< 1%), which is desirable in practice [18].       lock [10], Tomo [18], GREEDY [35], SCORE [34] and
+                                                               OMP [42] do not work well for DCNs due to their prob-
+   The false negatives are mainly caused by losses of ex-      lem scales and loss characteristics. Our PLL algorithm is
+tremely low loss rate and intermittent losses which may        built on these work and conquers their limitations.
+happen at longer intervals (than 1 minute) [23]. Since it      DCN monitoring. Our work mainly differs from ex-
+takes longer time to expose these losses, we can further       isting monitoring systems such as Pingmesh [26] and
+reduce false negatives by examining loss measurements          NetNORAD [37] in the design of probe matrix. We
+in larger time windows, e.g., 10 minutes.                      argue that loss detection and localization must be cou-
+                                                               pled together to localize more failures (e.g., transient fail-
+7 Discussions                                                  ures) in real time with low overhead. Carefully designed
+                                                               probe matrix is the key to achieve them. LossRadar [39]
+Packet entropy. deTector tries to increase packet en-          is a switch-based solution but it requires programmable
+tropy (i.e., different packet patterns) by varying IP ad-      switches. Dapper [44] and Zipkin [8] are distributed trac-
+dresses, port numbers and DSCP values, to cover as             ing systems to gather timing data for root-cause analysis.
+many failures as possible. However, our implementa-
+tion uses IP-in-IP encapsulation for source routing, and       9 Conclusion
+hence the range of destination IP addresses is somewhat
+limited. In addition, since we use UDP for network             deTector is a real-time, low-overhead and high-accuracy
+probing, deTector may not be able to detect failures re-       monitoring system for large-scale data center networks.
+lated to other protocols, e.g., misconfigured TCP param-       At its core is a carefully designed probe matrix, con-
+eters [26]. Adopting other source routing solutions and        structed by a scalable greedy path selection algorithm
+adding more protocols to increase packet entropy are part      with minimized probe overhead. We also design an ef-
+of our future work.                                            ficient failure localization algorithm according to differ-
+Loss diagnosis. While deTector can localize where              ent patterns of packet losses. Our analysis, testbed ex-
+packet drops occur, it does not know what causes the           periments and large-scale simulations show that deTec-
+drops, e.g., software bugs, misconfigured rules or bursty      tor is highly scalable, practically deployable with low
+traffic. This is a common deficiency of existing monitor-      overhead, and can localize failures with high accuracy
+ing systems, since network diagnosis is rather complex.        in near real time.
+However, it is possible to distinguish full losses, deter-
+ministic partial losses, random partial losses and losses      Acknowledgments We thank Xiaowei Wu for his help
+due to congestion, to narrow down the diagnosis scope          with algorithm design. This work was supported by Na-
+(e.g., using machine learning approaches), since they ex-      tional Key Research and Development Program of China
+hibit different loss characteristics. We consider this as a    2016YFB0800101, NSFC 61672425, NSFC 61628209,
+promising future direction to explore.                         and Hong Kong RGC grants HKU 718513, 17204715,
+Beyond deTector. As opposed to probe-based solutions           17225516, C7036-15G (CRF).
+like deTector, there are some recent efforts on embedding
+metadata in the packet header to trace packet path for net-
+work debugging (e.g., CherryPick [46], PathDump [47]).
+Our technique can be applied to reduce the overhead in-
+volved in these approaches, i.e., only packets travers-
+
+USENIX Association                                             2017 USENIX Annual Technical Conference 65
+References                                                  [16] CHEN, Y., BINDEL, D., SONG, H., AND KATZ,
+                                                                  R. H. An algebraic approach to practical and scal-
+[1] VXLAN. https://tools.ietf.org/html/                           able overlay network monitoring. In Proc. of ACM
+     rfc7348, 2014.                                               SIGCOMM (2004).
+
+[2] NVGRE. https://tools.ietf.org/html/                     [17] DARGA, P. T., SAKALLAH, K. A., AND
+     rfc7637, 2015.                                               MARKOV, I. L. Faster symmetry discovery using
+                                                                  sparsity of symmetries. In Proc. of the 45th Annual
+[3] Fbtracert. https://github.com/facebook/                       Design Automation Conference (DAC) (2008).
+     fbtracert, 2016.
+                                                            [18] DHAMDHERE, A., TEIXEIRA, R., DOVROLIS, C.,
+[4] Microsoft Netbouncer. https://www.youtube.                    AND DIOT, C. Netdiagnoser: Troubleshooting net-
+     com/watch?v=nfEOEKlInK8, 2016.                               work unreachabilities using end-to-end probes and
+                                                                  routing data. In Proc. of the 3rd ACM International
+[5] ONetSwitch. http://www.onetswitch.org/                        Conference on emerging Networking EXperiments
+     index, 2016.                                                 and Technologies (CoNEXT) (2007).
+
+[6] deTector project.  https://github.com/                  [19] DUFFIELD, N. Network tomography of binary
+                                                                  network performance characteristics. IEEE Trans-
+yhpeng-git/deTector, 2017.                                        actions on Information Theory 52, 12 (November
+                                                                  2006), 5373­5388.
+[7] deTector technical report. https://github.
+     com/yhpeng-git/deTector/blob/master/                   [20] GILL, P., JAIN, N., AND NAGAPPAN, N. Under-
+     documentation/technical_report.pdf,                          standing network failures in data centers: measure-
+     2017.                                                        ment, analysis, and implications. In Proc. of ACM
+                                                                  SIGCOMM (2011).
+[8] Zipkin. http://zipkin.io, 2017.
+                                                            [21] GOVINDAN, R., MINEI, I., KALLAHALLA, M.,
+[9] AL-FARES, M., LOUKISSAS, A., AND VAHDAT,                      KOLEY, B., AND VAHDAT, A. Evolve or die:
+     A. A scalable, commodity data center network ar-             High-availability design principles drawn from
+     chitecture. In Proc. of ACM SIGCOMM (2008).                  Google's network infrastructure. In Proc. of ACM
+                                                                  SIGCOMM (2016).
+[10] BAHL, P., CHANDRA, R., GREENBERG, A.,
+      KANDULA, S., MALTZ, D. A., AND ZHANG,                 [22] GREENBERG, A., HAMILTON, J. R., JAIN, N.,
+      M. Towards highly reliable enterprise network ser-          KANDULA, S., KIM, C., LAHIRI, P., MALTZ,
+      vices via inference of multi-level dependencies. In         D. A., PATEL, P., AND SENGUPTA, S. VL2:
+      Proc. of ACM SIGCOMM (2007).                                a scalable and flexible data center network. In
+                                                                  Proc. of ACM SIGCOMM (2009).
+[11] BENSON, T. Data set for IMC 2010 data cen-
+      ter measurement. http://pages.cs.wisc.edu/            [23] GUILBAUD, N., AND CARTLIDGE, R. Localizing
+      ~tbenson/IMC10_Data.html, 2010.                             packet loss in a large complex network. https:
+                                                                  //www.nanog.org/meetings/nanog57/
+[12] BENSON, T., ANAND, A., AKELLA, A., AND                       presentations/Tuesday/tues.general.
+      ZHANG, M. Understanding data center traffic char-           GuilbaudCartlidge.Topology.7.pdf, 2013.
+      acteristics. In Proc. of ACM SIGCOMM (2010).
+                                                            [24] GUO, C., LU, G., LI, D., WU, H., ZHANG,
+[13] BRODIE, M., RISH, I., AND MA, S. Optimizing                  X., SHI, Y., TIAN, C., ZHANG, Y., AND LU, S.
+      probe selection for fault localization. In Proc. of         BCube: a high performance, server-centric network
+      the 12th International Workshop on Distributed              architecture for modular data centers. In Proc. of
+      Systems: Operations and Management (DSOM)                   ACM SIGCOMM (2009).
+      (2001).
+                                                            [25] GUO, C., WU, H., TAN, K., SHI, L., ZHANG, Y.,
+[14] CASTRO, R., COATES, M., LIANG, G., NOWAK,                    AND LU, S. DCell: a scalable and fault-tolerant
+      R., AND YU, B. Network tomography: recent de-               network structure for data centers. In Proc. of ACM
+      velopments. Statistical Science 19, 3 (2004), 499­          SIGCOMM (2008).
+      517.
+
+[15] CHEN, K., GUO, C., WU, H., YUAN, J., FENG,
+      Z., CHEN, Y., LU, S., AND WU, W. Generic and
+      automatic address configuration for data center net-
+      works. In Proc. of ACM SIGCOMM (2010).
+
+66 2017 USENIX Annual Technical Conference                  USENIX Association
+[26] GUO, C., YUAN, L., XIANG, D., DANG, Y.,                [36] LAPUKHOV, P.  Configuring IPSLA.
+      HUANG, R., MALTZ, D., LIU, Z., WANG, V.,
+      PANG, B., CHEN, H., ET AL. Pingmesh: A                http://www.cisco.com/c/en/us/td/docs/
+      large-scale system for data center network latency
+      measurement and analysis. In Proc. of ACM SIG-        switches/lan/catalyst4500/12-2/44sg/
+      COMM, 2015.
+                                                            configuration/guide/Wrapper-44SG/
+[27] HERODOTOU, H., DING, B., BALAKRISHNAN,
+      S., OUTHRED, G., AND FITTER, P. Scalable near         swipsla.html.
+      real-time failure localization of data center net-
+      works. In Proc. of the 20th ACM International Con-    [37] LAPUKHOV, P. Network debugging at scale.
+      ference on Knowledge Discovery and Data Mining              https://www.nanog.org/sites/default/
+      (SIGKDD) (2014).                                            files/Lapukhov_Move_Fast_Unbreak.pdf,
+                                                                  2016.
+[28] HU, C., YANG, J., GONG, Z., DENG, S., AND
+      ZHAO, H. DesktopDC: setting all programmable          [38] LESKOVEC, J., KRAUSE, A., GUESTRIN,
+      data center networking testbed on desk. ACM SIG-            C., FALOUTSOS, C., VANBRIESEN, J., AND
+      COMM Computer Communication Review 44, 4                    GLANCE, N. Cost-effective outbreak detection in
+      (2015), 593­594.                                            networks. In Proc. of the 13th ACM International
+                                                                  Conference on Knowledge Discovery and Data
+[29] HU, C., YANG, J., ZHAO, H., AND LU, J. De-                   Mining (SIGKDD) (2007).
+      sign of all programmable innovation platform for
+      software defined networking. In In Proc. of the 4th   [39] LIU´ , Y., MIAO, R., KIM, C., AND YUU´ , M. Loss-
+      Open Networking Summit (ONS) (2014).                        Radar: Fast detection of lost packets in data center
+                                                                  networks. In Proc. of the 12th ACM International
+[30] HU, S., CHEN, K., WU, H., BAI, W., LAN, C.,                  Conference on emerging Networking EXperiments
+      WANG, H., ZHAO, H., AND GUO, C. Explicit path               and Technologies (CoNEXT) (2016).
+      control in commodity data centers: Design and ap-
+      plications. In Proc. of the 12th USENIX Symposium     [40] MA, L., HE, T., LEUNG, K. K., TOWSLEY, D.,
+      on Networked Systems Design and Implementation              AND SWAMI, A. Efficient identification of additive
+      (NSDI) (2015).                                              link metrics via network tomography. In Proc. of
+                                                                  the 33rd IEEE International Conference on Dis-
+[31] ISARD, M. Autopilot: automatic data center man-              tributed Computing Systems (ICDCS) (2013).
+      agement. ACM SIGOPS Operating Systems Review
+      41, 2 (April 2007), 60­67.                            [41] PATEL, P., BANSAL, D., YUAN, L., MURTHY, A.,
+                                                                  GREENBERG, A., MALTZ, D. A., KERN, R., KU-
+[32] JYOTHI, S. A., DONG, M., AND GODFREY, P.                     MAR, H., ZIKOS, M., WU, H., ET AL. Ananta:
+      Towards a flexible data center fabric with source           cloud scale load balancing. In Proc. of ACM SIG-
+      routing. In Proc. of the 1st ACM SIGCOMM Sym-               COMM (2013).
+      posium on Software Defined Networking Research
+      (SOSR) (2015).                                        [42] PATI, Y. C., REZAIIFAR, R., AND KRISH-
+                                                                  NAPRASAD, P. Orthogonal matching pursuit: Re-
+[33] KANDULA, S., MAHAJAN, R., VERKAIK, P.,                       cursive function approximation with applications to
+      AGARWAL, S., PADHYE, J., AND BAHL, P. De-                   wavelet decomposition. In Proc. of the 27th Asilo-
+      tailed diagnosis in enterprise networks. In Proc. of        mar Conference on Signals, Systems and Comput-
+      ACM SIGCOMM (2009).                                         ers (ACSSC) (1993).
+
+[34] KOMPELLA, R. R., YATES, J., GREENBERG, A.,             [43] SHARMA, G., JAGGI, S., AND DEY, B. Net-
+      AND SNOEREN, A. C. IP fault localization via risk           work tomography via network coding. In Proc. of
+      modeling. In Proc. of the 2nd USENIX Symposium              the 3rd Information Theory and Applications Work-
+      on Networked Systems Design and Implementation              shop (ITA) (2008).
+      (NSDI) (2005).
+                                                            [44] SIGELMAN, B. H., BARROSO, L. A., BURROWS,
+[35] KOMPELLA, R. R., YATES, J., GREENBERG, A.,                   M., STEPHENSON, P., PLAKAL, M., BEAVER,
+      AND SNOEREN, A. C. Detection and localization               D., JASPAN, S., AND SHANBHAG, C. Dapper,
+      of network black holes. In Proc. of IEEE INFO-              a large-scale distributed systems tracing infrastruc-
+      COM (2007).                                                 ture. Tech. rep., Google, Inc., 2010.
+
+                                                            [45] SINGH, A., ONG, J., AGARWAL, A., ANDERSON,
+                                                                  G., ARMISTEAD, A., BANNON, R., BOVING,
+                                                                  S., DESAI, G., FELDERMAN, B., GERMANO, P.,
+
+USENIX Association                                          2017 USENIX Annual Technical Conference 67
+      ET AL. Jupiter rising: A decade of Clos topolo-
+      gies and centralized control in Google's datacenter
+      network. In Proc. of ACM SIGCOMM (2015).
+
+[46] TAMMANA, P., AGARWAL, R., AND LEE, M.
+      Cherrypick: Tracing packet trajectory in software-
+      defined datacenter networks. In Proc. of the 1st
+      ACM SIGCOMM Symposium on Software Defined
+      Networking Research (SOSR) (2015).
+
+[47] TAMMANA, P., AGARWAL, R., AND LEE, M.
+      Simplifying datacenter network debugging with
+      pathdump. In Proc. of the 12th USENIX Symposium
+      on Operating Systems Design and Implementation
+      (OSDI) (2016).
+
+[48] ZENG, H., MAHAJAN, R., MCKEOWN, N.,
+      VARGHESE, G., YUAN, L., AND ZHANG, M.
+      Measuring and troubleshooting large operational
+      multipath networks with gray box testing, msr-tr-
+      2015-55. Tech. rep., 2015.
+
+68 2017 USENIX Annual Technical Conference                 USENIX Association
+

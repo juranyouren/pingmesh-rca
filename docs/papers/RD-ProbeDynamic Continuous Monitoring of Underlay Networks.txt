@@ -1,0 +1,1378 @@
+RD-Probe: Scalable Monitoring With Sufficient Coverage In
+                   Complex Datacenter Networks
+
+         Rui Ding1 Xunpeng Liu1 Shibo Yang1 Qun Huang1
+        Baoshu Xie2 Ronghua Sun2 Zhi Zhang2 Bolong Cui2
+1School of Computer Science, Peking University 2Huawei Technologies
+
+ABSTRACT                                                                                            physical components in the underlay network [54, 57, 76]. Other-
+                                                                                                    wise, with insufficient coverage, monitoring blind spots will emerge
+Ensuring service availability in large-scale datacenters hinges on                                  [57]. They cause diagnostic tools [19, 37, 72] to overlook potential
+network monitoring. For monitoring quality, it is essential to attain                               failures, leading to degraded quality of service and eventual rev-
+sufficient coverage of all physical components. However, given the                                  enue loss. Indeed, analysis of our production network reveals that
+ever-evolving complexity of industrial environments, even mea-                                      insufficient coverage on Layer 2 is the culprit for many missed
+suring coverage metrics becomes challenging, let alone attaining                                    failures and their prolonged MTTRs (mean-time-to-repair) (§2.2).
+sufficient coverage. In fact, insufficient coverage widely existed in
+our production datacenters and caused many missed failures.                                            However, achieving sufficient coverage on Layer 2 is challenging
+                                                                                                    within the production monitoring architecture. Three factors from
+   To address this, we design RD-Probe, an industrial monitoring                                    industrial practices contribute to the challenges.
+system with coverage and scalability guarantees. Specifically, it first                             (1) Virtualization techniques are broadly utilized in the infrastructure
+constructs a network topology encoding the industrial complex-                                      to realize device flexibility and redundancy [1, 9, 56]. They abstract
+ity. Then, it combines Randomized and Deterministic methods to                                      low-level physical components. However, they also occlude these
+efficiently generate probe tasks that meet the coverage requirement.                                components from monitoring systems that run on higher layers,
+                                                                                                    making sufficient coverage on Layer 2 intractable.
+   We have deployed RD-Probe in three large production regions in                                   (2) Randomness techniques are widely adopted to pursue load bal-
+Huawei Cloud. Within the first month, RD-Probe improved cover-                                      ance. They introduce nondeterministic forwarding and routing
+age from 80.9% to 99.5% and unearthed several previously unnoticed                                  behaviors, causing unpredictable coverage variations. Derandom-
+issues while tolerating numerous faults. Large-scale simulation of                                  izing these techniques is challenging because the random seeds
+four industry solutions shows that RD-Probe is the only one achiev-                                 and secret keys used in their implementation are usually unknown
+ing both sufficient coverage and scalability in complex datacenter                                  from outside [36, 45, 76].
+networks. We plan to expand RD-Probe to other regions soon.                                         (3) Path explosion results from the rapidly increasing scales and
+                                                                                                    device redundancy. For example, AWS provides an estimate of
+CCS CONCEPTS                                                                                         (1087) for intra-region link-path combinations and  (10176) for
+                                                                                                    inter-region link-path combinations [18]. At this formidable scale,
+· Networks  Network measurement; Network monitoring.                                                any deployable solution must strive to balance the coverage level
+                                                                                                    and resource overhead.
+KEYWORDS
+                                                                                                       Unfortunately, existing solutions do not address sufficient Layer-
+Network measurement; Active monitoring; Datacenter networks                                         2 coverage. We classify these solutions into black-box and white-box
+                                                                                                    monitoring [34, 49]. Specifically, black-box monitoring examines
+ACM Reference Format:                                                                               externally visible switch information by injecting probe tasks. How-
+Rui Ding, Xunpeng Liu, Shibo Yang, Qun Huang, Baoshu Xie, Ronghua Sun,                              ever, they only consider Layer-3 interfaces [6, 54, 69], and hardly
+Zhi Zhang, and Bolong Cui. 2024. RD-Probe: Scalable Monitoring With Suf-                            extend to Layer 2 given the aforementioned complexity. White-
+ficient Coverage In Complex Datacenter Networks. In ACM SIGCOMM 2024                                box monitoring collects internal switch status (e.g., logs [24]) but
+Conference (ACM SIGCOMM '24), August 4­8, 2024, Sydney, NSW, Australia.                             depends on built-in monitoring capabilities, which do not cover
+ACM, New York, NY, USA, 16 pages. https://doi.org/10.1145/3651890.3672256                           all physical components like various switch cards. Therefore, we
+                                                                                                    consider white-box monitoring a good complement and focus on
+1 INTRODUCTION                                                                                      black-box monitoring in this paper.
+
+Network monitoring is vital for ensuring service availability in                                       With such research and industry landscape in mind, we ask
+datacenter infrastructures [4, 5, 8, 16, 30, 42, 43, 76, 83]. To enhance                            "Given the current complexity of datacenter networks, can we design
+monitoring effectiveness, we should attain sufficient coverage of all                               a monitoring system that guarantees sufficient coverage on Layer 2
+                                                                                                    without sacrificing scalability?" We give an affirmative answer by
+Qun Huang is the corresponding author.                                                              presenting RD-Probe, a deployed black-box system with explicit
+                                                                                                    coverage and scalability guarantees. It comprises two steps in se-
+Permission to make digital or hard copies of all or part of this work for personal or               quence to tackle challenges.
+classroom use is granted without fee provided that copies are not made or distributed               (1) Topology construction: A vanilla topology whose nodes and edges
+for profit or commercial advantage and that copies bear this notice and the full citation           have one-to-one mappings to Layer-3 switches and links cannot re-
+on the first page. Copyrights for components of this work owned by others than the                  flect infrastructure-level virtualization and randomness techniques.
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission
+and/or a fee. Request permissions from permissions@acm.org.
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+© 2024 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-0614-1/24/08
+https://doi.org/10.1145/3651890.3672256
+
+                                                                                               258
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                              Ding et al.
+
+Our idea is to leverage switch configurations to transform it into           Health info               Health    Statistics
+a de facto topology. Specifically, a configuration is formatted text                                    Check
+showing customized parameters of a technique. We parse config-                                                   Historical
+urations from bottom to top in network layers and modify the                                      Batched           data
+vanilla topology correspondingly. The eventual topology captures                                heartbeats
+low-level components and their expected networking behaviors.
+(2) Probe generation: Given the de facto topology, we generate probe            Task     Probe list   Data                   Offline   Statistics
+tasks satisfying coverage and scalability requirements. There is             Generation  Coverage    Storage                 Analysis        Application
+a natural trade-off: A higher coverage demands more probing re-
+sources, challenging the system's scalability. To satisfy these re-                 Probe list       Cold data
+quirements, we introduce a novel two-phase generation approach
+that combines randomized and deterministic methods. Specifically,            Probe       Probe data  Data        Hot data     Online   Statistics
+the randomized phase selects probe tasks with random sources and             Agent                                           Analysis
+destinations. It aims for an even coverage across switch compo-                                      Processing
+nents. Although it cannot guarantee sufficient coverage, it greatly
+reduces the planning complexity as most components will be cov-                                                Streaming Framework
+ered in this phase. Next, the deterministic phase complements the
+first phase to fulfill the coverage requirement. It selects tasks that       Figure 1: Monitoring architecture in Huawei Cloud's data-
+go through components demanding further coverage.
+                                                                             center networks.
+   We have deployed RD-Probe in three regions for over six months,
+each containing  (103) switches and  (104) links and adopting                (3) Data storage persists probing-related data, which include sys-
+various techniques. It fills in the coverage gap that widely existed         tem logs, switch configurations, and probe lists. It also batches
+in our datacenters. Furthermore, in the first month RD-Probe un-             heartbeats from agents and feeds them to the health check module.
+earthed several previously unnoticed issues that dragged down                (4) Probe agents periodically pull the latest probe list from the stor-
+network performance in the past. It has tolerated numerous faults            age, parsing task types and source and destination agents. They set
+that occurred during its launch and operation. We plan to replace            a unique identifier in the IP payload to distinguish probe packets
+our old black-box system with RD-Probe in other regions soon.                from others. The default probe frequency and duration are one
+                                                                             packet per second and three minutes, respectively, aligned with
+   We obtain insights into RD-Probe on even larger regions by con-           other industrial practices [54, 69].
+ducting simulation studies involving  (104) switches and  (105)              (5) Streaming framework processes agents' data. It has two submod-
+links. We further compare RD-Probe with four state-of-the-art solu-          ules. (i) The data processing submodule performs data cleansing,
+tions that also have large-scale deployment. We implement related            labeling, and simple calculations. It further distinguishes between
+techniques and inject equivalent behaviors into our simulator. More-         hot and cold data. (ii) The online analysis submodule analyzes hot
+over, we customize some minor logic of the compared solutions                data to address requests with real-time requirements.
+since they were designed with a clean-slate view of datacenters in           (6) Offline analysis extracts statistics from historical data, including
+mind. Results show that RD-Probe is the only solution fulfilling the         logs and heartbeats. It handles requests that tolerate longer delays.
+coverage and scalability requirements in complex datacenters.
+                                                                                All the data shown in Figure 1 are tagged with a monitoring
+2 BACKGROUND AND MOTIVATION                                                  epoch. This is because probe tasks are generated every epoch, and
+2.1 Monitoring Architecture in Production                                    agents only exercise current tasks till the end of an epoch. An epoch
+                                                                             spans three minutes by default, in alignment with the default probe
+Figure 1 shows the monitoring architecture in Huawei Cloud's                 duration. Previous industry solutions adopted basically the same
+datacenter networks, which host over  (105) switches and  (106)              epoch length [54, 69].
+servers. This architecture has six modules.
+(1) Task generation is in charge of generating probe tasks. It first         2.2 Coverage Requirement
+fetches information about switches, NICs, and configurations from
+CMDB (configuration management database). It then selects healthy            Meeting the coverage requirement is crucial within this monitoring
+probe agents based on the health information from the health check           architecture. We specify coverage requirements by deciding an
+module. A probe agent runs on a server. It executes and manages              appropriate granularity and the extent of sufficient coverage at
+all the probe tasks assigned to that server. Each probe task injects         this granularity. Next, we show how industrial complexity hinders
+synthetic traffic into the network by exercising one of ICMP, TCP,           achieving sufficient coverage. Finally, we present the consequences
+UDP, and IP-in-IP pings but is not limited to these. After exercising        of insufficient coverage observed in our datacenters.
+probe tasks, the module fetches coverage metrics from data storage.          Port-level coverage. We choose granularity on the port level in-
+(2) Health check discovers machines in a degraded state so that task         stead of the traditional interface level. Here, a port refers to a phys-
+generation will avoid the agents on them. It consumes two kinds of           ical Layer-2 port, which Layer-3 interfaces can build upon as the
+data: heartbeats sent from agents and historical statistics computed         destination or gateway of routing. The reason is two-fold. (i) Each
+by the offline analysis module.                                              port should be monitored as it has dedicated hardware resources
+                                                                             like NIC and buffer. If we overlook some ports, we will be doomed
+                                                                             to miss the runtime status of some switch components. (ii) Suffi-
+                                                                             cient monitoring of switch ports erases blind spots. Specifically,
+                                                                             by monitoring different ports on the same switch, we capture the
+                                                                             runtime status of switch fabrics; By monitoring directly connected
+                                                                             ports, we capture the runtime status of links. In contrast, we cannot
+                                                                             erase blind spots if we only cover Layer-3 interfaces. This is because
+                                                                             a Layer-3 interface can be a bundle of multiple Layer-2 ports. Some
+                                                                             member ports can still be unmonitored.
+
+                                                                        259
+RD-Probe: Scalable Monitoring With Sufficient Coverage In Complex Datacenter Networks  ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+   Convention. In this paper, a port and an interface always mean a                                                 Member switch
+Layer-2 and 3 component, respectively. Coverage refers to the port
+level unless otherwise stated.                                                                       LAG interface                          LAG
+Sufficient coverage. We require that an overwhelming majority of                                     LAG
+ports are sufficiently covered. We define this requirement formally                                  Member port    Stack cables   One logical switch
+as an ordered pair (, )  N × R(0,1) , meaning that the portion of
+Layer-2 ports covered by   different tasks is at least  (typically,                    (a) Link aggregation.        (b) Switch stacking.
+  [1, 5]). Next, sufficient coverage means   99% given the
+operators' desired , which indicates good enough coverage from                         ECMP group                   GE0/0/1 VRF 1 GE0/0/2
+our experience (§6). Note that requiring  = 1 is not pragmatic due                                                  1.254/16 (RIB 1) 100.1/16
+to two reasons. (i) Current industrial practices make the resource
+overhead for attaining  = 1 overly high. (ii) Operational benefits                     Member link                  GE0/0/3 VRF 2 GE0/0/4
+gained from strengthening   99% to  = 1 is only marginal (§6.3).                       (may comprise a LAG)         2.254/16 (RIB 2) 200.1/16
+Challenges. However, sufficient coverage faces two challenges
+that stem from industrial practices.                                                   (c) ECMP routing.            (d) Virtual routing and forwarding.
+· (C1) Complexity. Due to virtualization and randomness tech-
+niques, sufficient port-level coverage is much harder to achieve than                  Figure 2: Virtualization and randomness techniques.
+the interface-level one. Specifically, virtualization techniques pre-
+vent the monitoring architecture from seeing switch ports directly.                    Month MTTR Root Cause                       Details
+Randomness techniques induce unpredictable coverage variations
+across ports. We discuss four techniques adopted in our datacenters,           Nov./21 10.5 h Port flapping         One of the eight aggregated ports flapped
+which are also widely used in other long-running datacenters.
+(1) Link aggregation introduces Layer-2 virtualization and random-             Aug./22 15.7 h Chip error            Slot 4, Chip 1 malfunctioned on a core switch
+ness (Figure 2(a)). For virtualization, it bundles multiple ports into
+a logical interface called a link aggregation group (LAG). For ran-            Dec./22 41.5 h Chip error            VXLAN inner address overrode in LPU 1
+domness, it implements a Layer-2 hash to select a member port in
+the LAG to forward a packet. The concrete hash and forwarding                  Feb./23 3.5 h Chip error SerDes lane connected to Chip 1 of SFU 6 was down
+port are invisible from the upper layers, so monitoring systems can
+only determine the traversed LAG of a packet, but not the specific                     Table 1: Example failures overlooked due to insufficient cov-
+port. Therefore, link aggregation precludes the precise calculation                    erage (LPU: line processing unit, SFU: switch fabric unit).
+of port-level coverage. Moreover, switch vendors generally do not
+disclose the detailed hash and per-packet port selection within a                      and more switches and redundancies, two critical resources domi-
+LAG due to proprietary technology and security concerns.                               nate the overhead: probe volume and probe planning time. Thus, we
+(2) Switch stacking introduces Layer-2 virtualization (Figure 2(b)).                   use them to characterize scalability. Other resource consumption is
+It interconnects multiple physical switches with stack cables to                       minor in black-box monitoring (e.g., switch CPU utilization).
+form a logical switch. The stacked switch is multi-homed to other                      (1) Probe volume refers to the amount of probe data collected during
+devices (e.g., the gray switch), with all the connection links forming                 monitoring. It is proportional to the task number. A higher volume
+a LAG. Regarding port-level coverage, we must consider peer ports                      consumes more probing resources on agents and aggravates the
+connected via stack cables. These internal ports are invisible to                      data processing burden.
+Layer 3 or above.                                                                      (2) Probe planning time refers to the time spent on generating tasks.
+(3) Equal-cost multipath routing (ECMP) introduces Layer-3 random-                     It determines the delay from observing a change in the network
+ness (Figure 2(c)). Specifically, interfaces on a switch are assigned to               (e.g., physical rewiring or configuration update) until running new
+different ECMP groups. When an IP prefix matches an ECMP group,                        tasks. The ideal time should be within  (1) minutes for timeliness.
+a Layer-3 hash chooses one next hop (or member link) within the                        Consequence of insufficient coverage. Insufficient coverage en-
+group. The member link may comprise a LAG, so the final forward-                       tails unnoticed failures on the network side. We analyzed failure
+ing port is collectively determined on Layers 2 and 3. Switch vendors                  events in our production network over the past two years. We found
+typically provide white-box ECMP metrics up to the interface level.                    a typical troubleshooting pattern among the worst failures: Users
+(4) Virtual routing and forwarding (VRF) introduces Layer-3 virtual-                   complained about performance anomalies while our monitoring
+ization (Figure 2(d)). It creates multiple logically isolated switches                 systems raised no alarms. Then, engineers had to test devices on
+on a physical switch by assigning each interface to a VRF plane.                       the degraded path one by one and eventually narrowed down the
+Each plane has a separate routing information base (RIB), so it can-                   failure to a buggy port with insufficient coverage.
+not access other planes. VRF renders many seemingly connected
+paths (in the physical topology) invalid. It restricts the space of                       Table 1 shows four example events overlooked due to insuffi-
+probe tasks and hardens the achievement of sufficient coverage.                        cient coverage. They had notably long MTTRs ranging from several
+· (C2) Scalability. Maintaining scalability while fulfilling coverage                  hours to nearly two days. The datacenter only achieved a coverage
+requirements is difficult due to path explosion. As there are more                     of (1, 80.9%). All these failures occurred in the remaining 19.1% of
+                                                                                       ports. Take the port flapping failure for example. Only one port in
+                                                                                       an eight-port LAG alternated between up and down state every 30
+                                                                                       seconds. Although 12 probe tasks went through this LAG, none
+                                                                                       was hashed to the flapping port. Meanwhile, no white-box metrics
+                                                                                       (e.g., from SNMP, Syslog, and Netflow) showed anomalies. How-
+                                                                                       ever, improving this coverage is nontrivial. The datacenter ran a
+                                                                                       Pingmesh-like [30] system with three tasks between each pair of
+                                                                                       servers. If we increase it to four, some agents will overload and fail
+                                                                                       to work properly.
+
+                                                                          260
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                                  Ding et al.
+
+2.3 Limitations of Prior Systems                                                Network verification. It verifies whether the data and control
+                                                                                planes produce the expected behaviors or have the expected prop-
+Our datacenters have adopted numerous black-box, white-box, and                 erties [7, 75, 77­79, 82]. It typically aims at static properties of the
+verification tools. However, they did not address the challenges                network (e.g., compliance with policies and absence of misconfig-
+of sufficient coverage. The black-box tool we previously adopted                urations). In contrast, our work aims at dynamic and continuous
+was similar to Pingmesh [30]. The adopted white-box tools include               monitoring of the underlay network via black-box probing.
+SNMP [12], Syslog [24], NetFlow [13, 55], BGP monitoring protocol
+(BMP) [59], ERSPAN [21], and so on. The adopted verification tool               2.4 Design Specification of a New System
+is Batfish [10].
+Black-box monitoring. It treats switches as black boxes and only                Due to prior limitations, we have an urge to design a new black-box
+examines externally visible behaviors. The common practice is to                system to satisfy the coverage requirement. The new system should
+send probe packets from end hosts or vantage points [4, 5, 15, 16,              (i) fit into the existing monitoring architecture and (ii) address the
+42, 47, 76]. Since it offers the same perspective as users, we use              two challenges. We state its design specifications as follows.
+black-box metrics as our primary information to detect anomalies.               Input. It consists of the switch configurations (from CMDB) and
+                                                                                coverage requirement (, ) specified by operators. As configura-
+   Prior black-box methods cannot address the two challenges (§2.2).            tion updates are incremental, CMDB only notifies the system of
+(i) Their intended coverage is up to the interface level. Due to var-           the changes since the last epoch.
+ious low-level techniques, there is no direct way to extend their               Output. It is the complete probe list in the current epoch. Note
+coverage to the port level. Consequently, they cannot achieve suf-              that the task generation module does not have to generate all tasks
+ficient port-level coverage. (ii) They face scalability issues at to-           at once. It can extend existing tasks by appending new tasks to the
+day's scales. We give two examples. First, tomography solutions                 probe list. The only cost is that the appended tasks will run for less
+[6, 11, 14, 23, 25, 54, 64] search for a minimal set of paths that can          time (since they expire at the end of the epoch).
+infer the status of individual links. These paths often satisfy multi-          Assumptions. We make two mild assumptions about the target
+ple objectives like path independence and link identifiability. Even            datacenters, which are already satisfied in ours. (i) It has a multi-
+with heuristics, this process suffers from massive computation and              tier architecture. Specifically, each switch connects to devices in
+prolonged planning due to path explosion. Second, Pingmesh [30]                 the higher/lower/same layer via up/down/peer links without cross-
+and its descendant [69] send probes in a full-mesh manner, incur-               layer links. Numerous datacenter designs [27­29, 51] satisfy this
+ring prohibitive volume. Indeed, a recent report [57] by Microsoft              assumption. We also recognize the emergence of spineless datacen-
+itself indicates the scaling concern of Pingmesh.                               ters [33, 41], and we leave the extension to such architecture as our
+White-box monitoring. It exploits built-in features to observe                  future work. (ii) We assume that the combined effect of ECMP and
+switch internals. There are three directions: sampling, in-network              link aggregation control protocol (LACP) is that each flow will be
+telemetry (INT), and measurement. (i) Sampling-based methods pas-               hashed to one port in an ECMP group uniformly and independently
+sively sample traffic and analyze traffic correlations across switches          [70, 76, 80]. This encourages load balance. Operators have a natural
+[13, 17, 55, 58, 60, 61, 65, 73]. (ii) INT-based methods utilize switch         incentive to configure switches to approach this effect.
+programmability to tag packets with switch-local metrics, such as
+switch/link ID [32, 66­68], timestamps [8, 40], counters [53, 71],              3 RD-PROBE OVERVIEW
+and custom data [38, 84]. They collect metrics at edge routers or end
+hosts. (iii) Measurement-based methods utilize switch programma-                We propose RD-Probe, a complexity-aware and scalable monitoring
+bility to measure traffic statistics in the data plane [31, 50, 74]. They       system that guarantees sufficient coverage. As shown in Figure 3,
+use memory-efficient data structures like sketches [43, 44, 74, 81],            RD-Probe seamlessly integrates with the existing monitoring archi-
+hash tables [35, 48, 63], and ring buffers [39, 83].                            tecture. It only modifies the task generation and data processing
+                                                                                modules. Specifically, the task generation module constructs a de
+   Backed by other industrial guides [62], we only analyze white-               facto topology, which reflects low-level complexity and serves as
+box metrics to troubleshoot root causes when black-box metrics                  the base of probe generation. Then, probe generation fulfills cover-
+indicate network issues. Three reasons explain this choice. (i) White-          age and scalability requirements in two phases. The data processing
+box methods build on switches' built-in capabilities. It overlooks              module computes coverage counters, thereby providing feedback
+anomalies outside such capabilities, like NIC-related silent drops              to the generation module.
+and blackholes. It is also impractical to ask the switch manufac-               Topology construction (§4.1). To address (C1), RD-Probe encodes
+turer to expose the metrics of every component due to proprietary               complexities into a de facto topology, which can be vastly different
+and security concerns. (ii) White-box methods are more delicate                 from the physical topology. It is an attributed graph whose nodes
+and intrusive than black-box methods. Proper implementation and                 correspond to different routing planes on physical switches. Its
+verification are labor-intensive (e.g., special ASICs required by INT           links correspond to peer ports with direct physical connection. Its
+methods). Moreover, richer switch functionalities often correlate               attributes indicate possible choices of routing given certain net-
+with decreased reliability [2, 26]. (iii) White-box metrics come in             work prefixes. To obtain such a topology, we start with a vanilla
+large volumes. Processing them and resolving inconsistency (which               one whose nodes and links match the Layer-3 topology. We incre-
+arises from noise in switch counters and various delays) incur a                mentally modify it by translating related switch configurations into
+high overhead [62]. While exporting only coarse-grained or aggre-               equivalent graph operations from bottom to top.
+gated metrics reduces this overhead, it does so at the cost of losing
+low-level coverage and missing abnormal events.
+
+                                                                           261
+RD-Probe: Scalable Monitoring With Sufficient Coverage In Complex Datacenter Networks  ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+Task Generation                      Switch                                            packets based on the identifier in the IP payload (§2.1). They mirror
+    (1) Topology Construction    configurations                                        the matched packets to the data processing module. The mirrored
+                                                                                       packets contain information about the interfaces they go through.
+ De facto Topology                                                                     Thus, the computation logic simply increments the counter of an
+                                                                                       interface once it sees a new task through it. This match-and-mirror
+       Probe Generation           Coverage                                             function is widely available in commodity datacenter switches [85],
+                                 requirement                                           e.g., ERSPAN [21].
+                                                                                       Workflow. RD-Probe has five steps in sequence during one epoch
+               (2) Phase I.               Data Processing                              (Figure 3). Previous black-box systems also work in epochs [30, 69].
+       Randomized Generation     Layer-3                                               (1) Topology construction (§4.1): It transforms the vanilla topology
+                                                                                       directly seen by the monitoring system into the de facto topology
+              (5) Phase II.      cvrg cnts (4) Coverage                                using switch configurations.
+       Deterministic Generation                                                        (2) Randomized generation (§4.2): Based on the input, it selects a
+                                               Computation                             proper number of random Phase-I tasks and dispatches them to
+                                                                                       agents. Tasks are active until the epoch's end.
+Phase-I Phase-II                 (3) Packet mirroring                                  (3) Packet mirroring: Switches match and mirror probe packets to
+                                                                                       the data processing module, where the coverage computation logic
+tasks       tasks                                                                      maintains the Layer-3 coverage counters.
+                                                                                       (4) Coverage computation: It listens for the mirrored packets and
+Src agents         Switches      Dst agents                                            obtains the interfaces they go through. It then increments the asso-
+                                                                                       ciated counters on seeing packets from new tasks and persists the
+       Figure 3: RD-Probe's design.                                                    updated counters to storage.
+                                                                                       (5) Deterministic generation (§4.3): Phase II reads the current cover-
+   Previous solutions only use the vanilla topology as the base of                     age counters after a fixed amount of time since the epoch begins
+probe generation. This is fine for simple datacenters that avoid low-                  (e.g., 20s). It then decides which interfaces are still under-covered
+level virtualization and randomness techniques. In such datacenters,                   and finds additional tasks to boost their coverage. These tasks are
+the meaning of port-level and interface-level coverage coincides,                      also active till the end.
+and RD-Probe can guarantee 100% coverage in this scenario (§4.3).                      Discussion. RD-Probe is designed to be a black-box monitoring
+However, this is untrue for many long-running datacenters with                         system as it does not solicit runtime white-box metrics on switches
+accumulated complexity, especially ours.                                               like counters and logs. Although we leverage switch configurations
+Probe generation (§4.2-4.3). To address (C2), we propose a novel                       stored in CMDB, they are mostly static and only dictate the enabled
+two-phase generation scheme. Specifically, Phase I uses randomized                     protocols and modes. RD-Probe can complement other white-box
+generation, which dispatches tasks to randomly selected agents.                        techniques to enhance monitoring quality.
+Its goal is that most ports will reach -coverage quickly, so the
+coverage problem narrows down to a small subset of ports in Phase                      4 RD-PROBE DESIGN
+II. This goal is achievable owing to two observations. (i) Given                       4.1 Topology Construction
+randomness techniques, Phase-I tasks can cover different ports
+evenly. (ii) Given the coverage requirement, we can quantify the                       Topology construction transforms the vanilla Layer-3 topology
+required task number in Phase I using the theory of coupon collector                   into a de facto one using switch configurations. Its significance
+[46]. This number is orders of magnitude lower than path numbers.                      is to expose low-level components and configurations that affect
+We rigorously prove that Phase I realizes its goal (§4.2).                             coverage but are not directly visible in the physical topology.
+                                                                                       Vanilla topology. We describe it by an attributed graph   =
+   Next, Phase II uses deterministic generation, whose tasks com-                       , , , where
+plement Phase I and finally fulfill the coverage requirement. It has                   ·   comprises the Layer-3 switches, each identified by its man-
+two steps. (i) It locates the under-covered interfaces using coverage
+counters collected during Phase I. (ii) It constructs new probe tasks                     agement IP address. The monitoring system communicates with
+that go through these interfaces until all their member ports meet                        a switch via this address.
+coverage requirements. We rigorously prove that Phase II realizes                      ·     ×   comprises Layer-3 links among these switches.
+its goal (§4.3).                                                                         Two ends of a link represent two peer interfaces in one network
+                                                                                          domain.
+   Two-phase generation fulfills coverage and scalability require-                     ·  is the attribute function on interfaces. Given a      and an
+ments. As for coverage, it leverages the coupon collector theory                          interface   on  , ( . ) shows the address of  .
+to deduct the required task number. It relies on two phases to at-                     De facto topology. We also describe it as an attributed graph
+tain the coverage requirement collaboratively. As for scalability,                      =  , , , where
+its probe volume is far less than that of full-mesh probing [30, 69].                  ·  is the vertex set. Each vertex represents a routing plane on
+Moreover, probe planning completes in a few seconds, thanks to                            a physical switch. The property of a routing plane is that ports
+the low algorithmic complexity of both phases. In contrast, some                          on the same plane are interconnected while different planes are
+solutions cannot finish planning in even several hours due to the                         isolated from each other.
+NP-hard nature of the planning problem [25, 54] (§6.3).
+Data processing. We extend the data processing module with a
+coverage computation logic. It counts the number of Phase-I tasks
+through each interface, which we call Layer-3 coverage counters.
+They will guide Phase II in locating under-covered interfaces.
+
+   To compute coverage counters, the module listens for probe
+packets mirrored from switches. Specifically, switches match probe
+
+                                                                       262
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                 Ding et al.
+
+Category               Semantics of a config              Graph ops                 Explanation of the ops                              Config of example techniques
+                                                                                                                                        LACP Stacking VRF ECMP
+
+                Combine multiple ports as one             SplitEdge    Split an edge into many, each corresponding to a port            
+
+                Combine multiple switches as one          SplitVertex  Split a vertex into many, each corresponding to a switch           
+                                                                          Add a new edge, corresponding to the internal port              
+Virtualization
+                                                                                                                                                     
+                Enable a port for inter-switch comm. only AddEdge
+
+                Create traffic isolation within a switch SplitVertex Split a vertex into many, each corresponding to an isolated plane
+
+Randomness             Affect next-hop selection          AssignAttr   Assign a new attribute, indicating the range of selection                       
+
+    Table 2: Semantics regarding virtualization and randomness in our datacenters and the corresponding operations.
+
+Algorithm 1 Randomized Generation                                                   (4) A configuration of ECMP shows the group of interfaces that can
+                                                                                    load-balance traffic. It matches the semantics of next-hop selection,
+Input: Coverage requirement (, ), de facto topology                                 so we translate it into an AssignAttr operation. The assigned
+                                                                                    attribute is the ECMP group to which a port belongs.
+Output: Phase-I tasks                                                               Discussion. Table 2 can vary in other companies' datacenters if
+                                                                                    they adopt techniques with different virtualization and randomness
+1: procedure RandGen                               Generate  tasks in Phase I       semantics. The corresponding graph operation should then express
+2:  PropNum(, , )                                                                   those semantics. Since techniques provide precise semantics, we
+                                                                                    believe topology construction generalizes to other datacenters.
+3:   # of healthy agents
+                                                                                    4.2 Phase I: Randomized Generation
+4: for each healthy agent do
+5: Generate  / new tasks with this agent as the source                              Given the de facto topology and coverage requirement (, ), Phase
+                                                                                    I attains a coverage of (,  ) where   is quite close to . Specifi-
+6: for each of the  / tasks do                                                      cally, it generates tasks with random sources and destinations in the
+                                                                                    hope that the randomness techniques will distribute them evenly
+7:          Randomly choose a distinct destination agent                            across different ports. However, the crux is to determine the proper
+                                                                                    number of tasks. A small number will cause    , overburden-
+·    × is the edge set. Two ends of an edge represent two peer                      ing Phase II. A large number will waste probing bandwidth. We
+  ports with direct physical connection. Moreover, all the edges                    leverage the coupon collector theory to derive this number, which
+  incident to a vertex have a one-to-one correspondence with all                    gives a desired trade-off between coverage and probing overhead.
+  the ports on it.                                                                  Algorithm. As shown in Algorithm 1, Phase I first computes the
+                                                                                    proper number of tasks by analyzing the coverage requirement and
+·  is the attribute function on ports. Given a    and a port  on                    the structure of the de facto topology (Line 2). It then assigns an
+  , ( .) is the group of ports on  (including .) among which                        equal number of tasks to each healthy agent for load balancing
+  the switch can load-balance traffic. It expresses routing choices                 (Line 5). Next, it randomly chooses distinct destination agents for
+  for certain network prefixes.                                                     tasks on the same agent (Line 7).
+                                                                                    Proper number of tasks. We compute this number in two steps.
+Transformation procedure. We parse configurations of related                        First, we find the number of tasks required per switch. The idea
+techniques in a bottom-up order. This order is because techniques                   is to model port selection as a coupon collector process [46]. In
+are layered and rely on the lower abstraction. We translate each                    this process, there are  types of coupons, and each type has an
+configuration's semantics regarding virtualization and randomness                   unlimited supply. We try to collect  copies of each coupon in
+into equivalent graph operations. Table 2 summarizes all the five                   several independent attempts. Each attempt draws one coupon
+related semantics in our datacenters and their corresponding opera-                 randomly chosen from the  types. The analogy between coupon
+tions. For example, if a configuration enables a port for inter-switch              drawing and port coverage is clear when viewing ports in an ECMP
+communication only, we will call AddEdge on the corresponding                       group as coupons and a Phase-I task as a draw of coupons. This
+switch vertex. This operation adds a new edge, representing a com-                  is because each Phase-I task goes through one port uniformly at
+munication channel missed in the vanilla topology. Note that de                     random in the matching ECMP group (§2.4). Then, we derive the
+facto topology is changeable even when the physical topology is                     required number per switch using the mathematical properties of
+fixed (e.g., due to configuration updates).                                         this process. Second, we determine the task number for the whole
+Examples. We demonstrate four virtualization and randomness                         topology after knowing the per-switch task number. The idea is
+techniques (from bottom to top): link aggregation, switch stacking,                 that a task will traverse different tiers in sequence in multi-tier
+VRF, and ECMP (§2.2). The right half of Table 2 illustrates their                   datacenters (§2.4). We analyze tier by tier to find the number.
+corresponding transformation.
+(1) A configuration of link aggregation shows member ports in a                        Algorithm 2 shows the details. It has two procedures. Let
+LAG and enables load balance among them. It matches the seman-                       (, ) be the probability that we collect  copies of each of
+tics of port combining and next-hop selection, so we translate it into              the  types after  draws of coupons.
+a SplitEdge and a AssignAttr operation. The assigned attribute                      (1) The procedure ProbNumSw finds the task number required
+is the LAG to which a port belongs.                                                 by a switch (Lines 7-13). Suppose an ECMP group contains  ports
+(2) A configuration of switch stacking shows the neighboring
+member switches and local ports connected to them. It matches the
+semantics of switch combining and inter-switch communication,
+so we translate it into a SplitVertex and an AddEdge operation.
+(3) A configuration of VRF shows which interfaces belong to a VRF
+plane. It matches the semantics of traffic isolation, so we translate
+it into a SplitVertex operation.
+
+                                                                               263
+RD-Probe: Scalable Monitoring With Sufficient Coverage In Complex Datacenter Networks                     ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+                                                                                                                    A link with an aggregation degree of two
+
+Algorithm 2 Proper Number of Tasks                                                         Spine          !         "             !. "! = 6
+                                                                                                                                 min : # 2,   0.99 = 8
+1: procedure PropNum(, , )
+                                                                                                                                        = 8 - 6 = 2
+2: for Tier  in  (except the top tier) do             Need  tasks to cover Tier            Leaf !            "         #
+3:   0
+
+4: for each device  in Tier  do
+
+5:            += PropNumSw(, , )                                                                                                 + Task !  !. $!  !
+                                                                                                                                 + Task "  !. $!  "
+6: return max                                                                              Agents
+                                                                                                                                 (b) Phase-II tasks.
+7: procedure PropNumSw(, , )                                                                       !         "         #
+
+8: for each ECMP group  on  do                                                             (a) Spine-Leaf topology.
+9:   # of ports in 
+                                                                                           Figure 4: An example of two-phase generation.
+10:            1    min {  :   (, )        }
+               
+
+11:   max  among all ECMP groups on                                                        containing  = 4 ports on the uplinks. Since 1 (4, 20) 0.987
+
+                     Any port requires   tasks to reach coverage requirement (, )          and 1 (4, 21)                   =  21
+
+12:   # of ports on the up-/peer-links of                                                                 0.99, we know         . Therefore, each leaf        switch
+                                                                                                                              4
+
+13: return                                                                                 requires   = 21 tasks, and Phase I requires 21 × 3 = 63 tasks.
+
+                                                                                           Discussion. NetSonar [76] also uses the coupon collector theory
+
+                                                             :=                            but with a different focus. While it aims to cover all links on some
+                                                                 
+(Line   9).  Then   each  port  in  this  group  requires           tasks,   where
+
+ is the minimal integer satisfying  (, )   (Line 10). Let  be                              ECMP paths between pairs of agents, we determine the proper
+
+                                                                                           number of tasks to achieve sufficient port-level coverage.
+
+the largest  among all ECMP groups (Line 11). The task number
+
+the switch requires is the multiple of  and the number of ports on
+
+its up-links and peer-links (Lines 12-13).                                                 4.3 Phase II: Deterministic Generation
+
+(2) The procedure ProbNum finds the task number required by the                            Phase II complements Phase I to reach coverage requirements. It
+
+whole topology (Lines 1-6). For any tier, the required task number                         first locates under-covered interfaces in Phase I using coverage
+
+should equal the sum of each switch's required number in this tier                         counters from the data processing module (§3). It then generates
+
+(Line 5). As each task traverses multiple tiers, the required number                       additional tasks through these interfaces. Thus, Phase II starts when
+
+should be the maximum value among all tiers (Line 6).                                      coverage counters are ready. In principle, counters are ready shortly
+
+Analysis. We analyze Phase I from three aspects: the computation                           after each Phase-I task has some packets reaching the destination
+
+of  (, ), its scalability, and coverage guarantee.                                         and their mirrored packets reaching the data processing module.
+(1)  (, ) can be precisely and efficiently computed for any
+triplet (, , ). We give an explicit formula of  (, ) in Appen-                             Therefore, we expect Phase II to commence shortly. In our datacen-
+
+                                                                                           ters, we let Phase II start in the 20s after Phase I.
+
+dix A.1 using the coupon collector theory. We also show how to                             Algorithm. As shown in Algorithm 3, Phase II begins by finding
+
+evaluate     this   formula   using  dynamic     programming        in    (  2 23  )       under-covered interfaces (Line 2). Coverage requirement demands
+
+                                                                               
+
+time. In practice, we precompute the values for all possible triplets                      that  tasks go through this interface, where  is the minimal value
+                                                                                           satisfying  (, )   and  is the link aggregation degree (Line 3).
+and load them into memory in advance. This consumes < 20 MB
+of memory given   [1, 5],   [1, 100] and   [1, 5000].                                      We denote by  the difference between  and the coverage counter
+
+(2) We analyze the scalability in terms of probe volume and plan-                          (Line 4). A positive  indicates that we need  new tasks through this
+
+ning time (§2.2). As for volume, we show that an  -port switch                             interface (Line 5). Thus, we utilize breadth-first search (BFS) to find
+only requires  ( ln  ) Phase-I tasks in Appendix A.2 using the
+                                                                                           the -nearest agents (Line 6). For each of the  agents, we construct
+
+coupon collector theory. Thus, Phase I incurs at most a logarithmic                        an IP-in-IP ping task from and to this agent (Lines 8-9). Moreover,
+multiplicative overhead since ( ) tasks are necessary to achieve
+                                                                                           we add the under-covered interface as an intermediate hop (Line 10).
+
+-coverage in the optimal planning (although finding it is NP-hard                          IP-in-IP ping ensures that packets traverse this interface using
+
+[25, 54]). As for planning time, Phase I only iterates over all the tiers                  IP tunneling [69]. If other types of ping were used, randomness
+
+and ECMP groups once. Thus, given  switches and a maximum of                               techniques might select different paths that bypass this interface.
+ ports per switch, Phase I finishes in  ( ·  ln  ) time.
+                                                                                           Analysis. We analyze Phase II from two aspects: its scalability and
+
+(3) We summarize the coverage guarantee of Phase I in the fol-                             coverage guarantee.
+
+lowing theorem. Its proof is in Appendix A.3. Since large-scale                            (1) We analyze the scalability in terms of probe volume and plan-
+
+datacenters heavily adopt high-radix switches (e.g., chassis switch                        ning time (§2.2). As for volume, Phase II's tasks are much fewer
+with   64), this guarantee eliminates over 80% of ports for Phase
+                                                                                           than Phase I's for two reasons. (i) The coverage guarantee of Phase
+
+II. In practice, the fraction of -covered ports is much higher than                        I says that a switch only has      ·     1   =   3/4   under-covered
+                                                                                                                                 2 1/4       2
+
+the theoretical prediction, as Theorem 1 only gives a lower bound.                         ports on average. (ii) The s are mostly small since ports are close to
+
+     Theorem 1. After exercising Phase-I tasks, for a switch with                          -coverage very likely before Phase II. As for planning time, Phase
+
+ports,  at   least  1-     1    fraction  of  ports  has  attained   -coverage  on         II is fast since it iterates over each interface just once. The BFS is
+                        2 1/4
+                                                                                           efficient as the number of layers in datacenters is typically small
+average when  is large.
+
+                                                                                           (e.g., less than five).
+
+Example. We consider (, ) = (1, 0.99) in a two-tier datacenter                             (2) We state the final coverage guarantee in the next theorem. It
+with three leaves and two spines (Figure 4). Suppose each link
+has an aggregation degree of two. Let us focus on a leaf switch to                         says that our two-phase generation scheme ensures the ultimate
+determine the proper number of tasks. There is one ECMP group
+                                                                                           achievement of any prescribed coverage requirement. We defer its
+
+                                                                                           proof to Appendix B.
+
+                                                                                      264
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                     Ding et al.
+
+Algorithm 3 Deterministic Generation                                             To fully utilize resources in these clusters, we distribute jobs
+                                                                              among cluster nodes during topology construction, probe genera-
+Input: Coverage requirement (, ), de facto topology ,                         tion, and packet mirroring.
+                                                                              (1) Topology construction: We logically divide the whole region into
+     Layer-3 coverage counters                                                intra-pod and inter-pod topologies. Specifically, all nodes except
+                                                                              one in the generation cluster manage different pods. They construct
+Output: Phase-II probes                                                       intra-pod topologies for their managed pods. Besides, a central node
+                                                                              constructs the inter-pod topology. It aggregates intra-pod topolo-
+1: procedure DetGen(, , , )                                                   gies sent from other nodes to form a complete graph. Fortunately,
+                                                                              the central node is not a communication bottleneck because other
+2: for each interface  on each vertex    do                                   nodes only send differences since the last epoch. As long as there
+                                                                              are no significant configuration updates, the time spent on topology
+3:   # of aggregated ports in .                                               construction is negligible.
+                                                                              (2) Probe generation: Two-phase generation solely runs on the cen-
+4:   min{ :  (, )   } -  [. ]                                                 tral node thanks to its light overhead. Meanwhile, the other 15
+                                                                              nodes construct ring-ping lists for their managed pods. A ring-ping
+5: if  > 0 then                               . needs further coverage        list monitors the health status of servers in a rack. It shuffles all the
+                                                                              agents under a ToR into a ring structure. Each agent only pings its
+6:   1, . . . ,   the -nearest agents to .                                    left neighbor in the ring.
+                                                                              (3) Packet mirroring: We load-balance the job of maintaining cover-
+7:   for each  in [1,  ] do                                                   age counters among streaming nodes via hardware Mux (HMux)
+                                                                              [22, 85]. Specifically, we configure some switches as HMuxes based
+8:   Generate a new task with source and destination both as                  on the traffic volume. They share a common virtual IP address,
+                                                                              which is also the destination of packet mirroring. Upon receiving
+9:   Set the task type as IP-in-IP ping                                       a mirrored packet, they use the same hash on the packet's 5-tuple
+                                                                              to select a streaming node. It then replaces the virtual IP with the
+10:  Add . as the intermediate hop                                            node's direct IP and forwards the packet. Thus, each node maintains
+                                                                              coverage counters for different sets of interfaces.
+   Theorem 2. After exercising Phase II tasks, the coverage require-
+ment (, ) is achieved.                                                        5.2 Monitoring Statistics
+
+Example. Continuing with the previous example, suppose the                    Coverage metrics. Figure 5(a) shows the estimated coverage be-
+coverage counter of the interface 0.0 is six (Figure 4(b)). This              fore and after adopting RD-Probe. We set the coverage requirement
+interface has  = 2 ports. Since 1 (2, 7) 0.984 and 1 (2, 8)                   as (1, 99%). We obtain the estimated coverage using Layer-3 cov-
+0.992, we need eight tasks through this interface. Thus, we need              erage counters after an epoch ends. Previously, there were huge
+ = 8 - 6 = 2 additional tasks. The 2-nearest agents are 0 and 1,              coverage gaps in Region X and Z, where only 80.9% and 66.4% of
+so Phase II adds the two IP-in-IP tasks shown in Figure 4(b).                 ports were covered, respectively. Gaps mainly came from two kinds
+Discussion. Two reasons explain why we do not use Phase II solely             of ports: (i) those in large LAGs and (ii) peer ports that connect
+from the very beginning. (i) Phase II's task type must be IP-in-IP            to switches in the same tier. The reasons are as follows. (i) Highly
+ping to impose path control. However, it is crucial to have most              aggregated ports require the number of tasks multiple times (typ-
+probe tasks exercising other protocols to increase task diversity. (ii)       ically more than four) its aggregation degree. Pingmesh did not
+Using only Phase II will result in excessive tasks. Essentially, Phase        generate enough tasks through such ports. (ii) Peer ports exist in
+II greedily increases the coverage of an under-covered interface by           stacked switches and middleboxes like firewalls. Pingmesh was
+one each time. This greedy policy is only effective when Phase I              unaware of these ports, as many of them are invisible to Layer 3.
+sufficiently covers most ports.                                               After deploying RD-Probe, we successfully improve the coverage of
+                                                                              any region to above 99.5%. This is because RD-Probe reveals these
+   To extend RD-Probe to spineless architectures (§2.4), we only              ports, improving the quality of tasks.
+need to modify Algorithm 2 in Phase I. Specifically, the generation           Resource overhead. Besides sufficient coverage, RD-Probe further
+logic of random tasks in Phase I (i.e., Algorithm 1) and comple-              reduces probe volume and planning time. Moreover, overheads of
+mentary tasks in Phase II (i.e., Algorithm 3) remains valid. As for           other resources remain almost unchanged before and after adopting
+Algorithm 2, we cannot analyze the task number tier by tier. Conse-           RD-Probe. For example, the CPU consumption remains 0.6-5% per
+quently, the coverage guarantee in Phase I can be different. We will          core on agents; Mirroring consumes less than 0.1% of bandwidth
+explore the details in future work. On the other hand, the coverage           on switches and basically does not consume switch CPU.
+guarantee for Phase II still applies as it is topology-independent (see       (1) Planning time is below 2.2 seconds for Phase I and 3.1 seconds
+Appendix B). Thus, spineless architectures establish a new trade-off          for Phase II in the three regions. Moreover, Phase I and Phase II
+point between coverage and probing overhead.                                  spend over 60% of their time performing network IOs with other
+
+5 RD-PROBE IN PRODUCTION
+
+We have deployed RD-Probe in three production regions for over
+six months, each with  (103) switches and  (104) links. Table 3
+shows their structural information. They have diverse topologies
+and different adoption rates of certain techniques. We first introduce
+RD-Probe's implementation in production (§5.1) and then discuss
+insights from monitoring statistics (§5.2). Next, we discuss the
+resulting benefits (§5.3). We conclude with future efforts (§5.4).
+
+5.1 Production Implementation
+
+We have dedicated clusters to execute the generation module and
+streaming framework in production regions. The generation cluster
+has 16 nodes, each with an 8-core 2.80 GHz CPU and 64 GB of
+memory. The streaming cluster has 48 nodes, each with a 16-core
+2.80 GHz CPU and 32 GB of memory.
+
+                                                                         265
+RD-Probe: Scalable Monitoring With Sufficient Coverage In Complex Datacenter Networks            ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+                Name                     Scale                           Topology Max LAG size # of stacked switches # of VRF planes  ECMP
+
+                X 1,403 switches, 30.2k links, 26 pods Clos                             16       627 (44.7% of total)  13             Per-flow load balancing
+
+                Y 747 switches, 10.1k links, 20 pods Spine-Leaf                         4        587 (78.6% of total)  14             Per-flow load balancing
+
+                Z 740 switches, 20.4k links, 19 pods Spine-Leaf                         16       716 (96.8% of total)  18             Per-flow load balancing
+
+                                                Table 3: Structural information of the three deployed regions.
+
+                            Previous                           RD-Probe                          (2) Switch outages cause inevitable coverage blind spots, although
+                                                                                                 they occur occasionally. RD-Probe ensures that other devices are
+Coverage %100                            # of Tasks80k                                           unaffected if they still connect to end hosts and the control plane.
+                                                                                                 Specifically, coverage counters will be zero for compromised inter-
+            80                                     40k                                           faces, and IP-in-IP tasks specifying these interfaces as intermediate
+                                                                                                 hops in Phase II will get no response. If a Phase-II task receives no
+            60                                                 0                                 response throughout its lifetime, the source agent will immediately
+                                                                                                 alert the operator to the potential faulty interface. Note that we
+                X        Y            Z                           X      Y           Z           have not tested RD-Probe under massive device outages; in such
+                                                                                                 cases, monitoring might not be the primary concern.
+                   (a) Coverage.                                  (b) Probe volume.              (3) Node outages, while rare, have different impacts compared
+                                                                                                 to switch outages. For an outage in the generation cluster, we
+Figure 5: Monitoring statistics in the deployed regions.                                         can easily migrate the two-phase generation algorithm to other
+                                                                                                 active nodes. This is because the only stateful information RD-
+ (Mbps)         1e2         Resolved            TP(p1)/TP(p2)   1e6                              Probe preserves across epochs is the de facto topology, which can
+             3                                               4                                   be reconstructed with assistance from CMDB. For an outage in
+             0                                                                                   HMuxes and the streaming cluster, it effectively results in the loss
+            -3 Failure                                       3                                   of mirrored packets. To prevent excessive Phase-II tasks, we allow
+            -6 occurred                                                                          Phase II to raise alarms if too many coverage counters are zero (e.g.,
+            -9                                               2                                   over 1% of all interfaces) and skip those interfaces. Once the nodes
+                                                               12:00 12:30 13:00                 are back, the system may leave blind spots for the current epoch
+                11:30 12:00 12:30                                 Wednesday 09/13/2023           but will function normally in the next epoch.
+                  Tuesday 09/12/2023
+                                                                                                 5.3 Benefits of RD-Probe
+                (a) LPU silent drop.            (b) Unexpected L2 load imbalance.
+                                                                                                 In the first month since RD-Probe went online, it spotted many
+                Figure 6: Example failures found by RD-Probe.                                    previously unnoticed issues. Most of them only caused fail-slow
+                                                                                                 symptoms or intermittent packet drops, making them hard to locate
+nodes and the CMDB. These data imply that RD-Probe has low                                       via manual inspection. Fortunately, given sufficient port-level cov-
+algorithmic complexity.                                                                          erage under continuous monitoring, we found issues before users'
+(2) Figure 5(b) shows the volume in terms of task number. In                                     perception. Next, we present three example cases in production
+Region X and Y, we achieve sufficient coverage with 7.5% and 33.9%                               found by RD-Probe, which escaped the eyes of other deployed tools.
+fewer tasks, respectively. In Region Z, we improve the coverage                                  Case 1: Switch LPU silent drops. One task executing object stor-
+by 33.6% while incurring only 30.9% more tasks. This gain comes                                  age service in a region witnessed frequency drops. After obtaining
+from two advantages of RD-Probe over Pingmesh. (i) It leverages                                  the rate difference  (i.e., the difference between the switch's Tx
+asymmetry among pods. Asymmetry is common as it accumulates                                      and Rx rate) along its route, a core switch showed abnormal data
+over the years. For example, the largest and smallest pods in Region                             (Figure 6(a)). Before this failure, the switch was already sub-healthy,
+X contain 156 and 12 switches, respectively. Larger pods need more                               producing a positive rate difference. During the failure, one chip in
+inter-pod tasks, but Pingmesh generates 75 inter-pod tasks for any                               the line processing unit (LPU) associated with the buggy inbound
+pod in Region X. In contrast, RD-Probe generates different numbers                               interface ran into soft errors. It silently dropped some incoming
+of inter-pod tasks based on the pod's scale. (ii) RD-Probe reduces                               packets and could not report its monitoring data to the control
+redundancy in Pingmesh tasks. Redundancy means some ports are                                    plane. Thus, the rate difference decreased to -880 Mbps. We iso-
+covered too many times. Indeed, many pods do not need full-mesh                                  lated the faulty chip 10 minutes after failure, and this rate gradually
+pinging to attain sufficient coverage.                                                           restored to the normal value, i.e., zero.
+Fault tolerance. During RD-Probe's launch and operation, we
+come across various faults caused by internal (e.g., sudden device                                  This case highlights the importance of sufficient coverage. If we
+outages) and external factors (e.g., occasional interference from                                missed this inbound interface, the error would continue to affect
+other teams). Fortunately, RD-Probe remains operational as long                                  business traffic that was hashed to this chip. Furthermore, white-
+as physical conditions allow. In the following, we present how RD-                               box methods often fail to detect such failures for several reasons.
+Probe tolerates three typical faults in production environments:                                 (i) Methods relying on device self-reporting (e.g., Syslog) can be
+lost mirrored packets, switch outages, and node outages.                                         compromised by LPU soft errors, as the signaling or reporting
+(1) Multiple factors contribute to lost mirrored packets, including
+ERSPAN rate limiting, congestion at HMuxes, and probe packet
+loss. The overall loss rate fluctuates between  (10-6) and  (10-3)
+across the three regions. This loss leads to underestimated Layer-3
+coverage counters, necessitating more Phase-II tasks. Fortunately,
+this does not create coverage blind spots ­ the affected interfaces
+are slightly over-covered. During epochs with a loss rate of  (10-3),
+the total task count increases by less than 1.3% compared to normal
+epochs. The difference in planning time is negligible.
+
+                                                                                            266
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                            Ding et al.
+
+mechanism is affected. (ii) Silent drops occur even before packets                                 =1 =3                         = 5 (p = 0.99)
+reach detection points, such as before extracting in-packet telemetry
+data in INT methods and before capturing traffic in ERSPAN.                  # of Tasks106                            # of Tasks106
+Case 2: Unexpected Layer-2 load imbalance. Some tasks going                            105                                      105
+through one uplink on a stacked switch suffered from high loss                         104                                      104
+rates and latency. This uplink aggregated two ports (1, 2) from                        103                                      103
+different member switches. Figure 6(b) shows the ratio of uplink
+throughput of 1 over 2 in an hour. The ideal ratio should be 1                                102      103  104                        102      103         104
+for perfect Layer-2 load balance, but it was  (106)! This failure                             # of physical switches                   # of physical switches
+was due to flawed modules in preferential local traffic forwarding,
+which caused traffic to go only through the local port instead of            (a) Probe volume on FatTree.                         (b) Probe volume on VL2.
+stack cables. Thus, if the load of one member switch exceeds its
+capacity, the stack switch will be congested. We settled this issue          Time (s)    102                          Time (s)    102
+by resetting the module to enable forwarding through stack cables.                       101 1 minute                             101 1 minute
+The throughput ratio dropped to  (1).                                                    100                                      100
+                                                                                     10-1                                     10-1
+   Prior to RD-Probe, we detected such Layer-2 load imbalance by                              102      103  104                        102      103         104
+comparing the throughput of 1 and 2 obtained using telemetry                                  # of physical switches                   # of physical switches
+methods. However, this approach generated an excessive number
+of false positives (over 90 out of every 100 alarms), making it hardly       (c) Planning time on FatTree. (d) Planning time on VL2.
+usable. The false alarms were caused by uneven allocation of large                      Figure 7: Scalability of RD-Probe.
+flows within an uplink LAG. For most of the time, this uneven
+allocation does not cause issues as long as the combined throughput          numerous false alarms in the daily operation of datacenters. It is
+remains within the switch's capacity. Eventually, we adopted the             challenging to determine whether a failure is a genuine network
+black-box solution, which collects traffic metrics from the same             anomaly. Currently, we combine ring-ping (§5.1), health checks,
+perspective as our customers and raises alarms only when such                and assistance from downstream interfaces to filter out server-side
+imbalance causes undesirable packet loss and latency.                        failures. However, mistakes often occur. We need a better approach
+                                                                             to identify network-side failures.
+   This case shows the importance of sufficient port-level coverage.
+If we only require coverage of the aggregated interface, tasks may           6 RD-PROBE AT SCALE
+go through 2 and experience no issues, causing false negatives.              6.1 Simulation Setup
+Case 3: Detour routing. Some tasks executing TCP ping among
+two pods suddenly experienced increasing latency. After contacting           Behavioral-level simulator. We build a behavioral-level simula-
+recent configuration updates, we found the root cause was detour             tor on top of NS-3 [52] in about 7,000 lines of C++ code and 2,000
+routing caused by the wrong route policy. Specifically, operators            lines of Python code. It aims to evaluate the performance of RD-
+specified wrong preference values for some updated BGP routes.               Probe under massive scales. We run simulations on a machine with
+This error led the traffic to a slow path containing firewalls and           two 10-core 2.4 GHz CPUs and 126 GB of RAM. Although we extend
+two more hops. We rolled back the switch configurations to resolve           the NS-3's native architecture to simulate the monitoring architec-
+this issue.                                                                  ture (§2.1), there are still two differences between them. Fortunately,
+                                                                             they will not significantly change RD-Probe's performance.
+   This case shows the importance of black-box monitoring. All               (1) Omitted modules: The simulator omits the analysis and health
+the deployed white-box tools in the region failed to raise alarms            check modules. It only implements the coverage counter logic in the
+as switch components were still working as expected. Verification            data processing module. Such simplification is reasonable since RD-
+tools can detect such issues but with higher latency, as they need           Probe does not rely on the omitted modules. RD-Probe will show
+to retrieve the latest FIBs and RIBs from switches and verify a large        a similar performance given the same input as in the production
+number of entries.                                                           environment.
+                                                                             (2) Simplified techniques: We simplify LACP and switch stacking
+5.4 Future Efforts                                                           by only implementing their packet-level forwarding behaviors. For
+                                                                             example, the simulated LACP takes each LAG as given, while the
+Although RD-Probe proves successful in our datacenters, two prac-            real LACP has a negotiation mechanism to detect and enable a LAG.
+tical issues need further investigation.                                     We carefully choose simplification that does not affect port-level
+Sufficient coverage of north-south traffic. North-south traffic              coverage in the simulator.
+refers to traffic from the Internet to the datacenter and vice versa.        Simulator configuration. We configure techniques and noise in
+RD-Probe aims at sufficient port-level coverage within datacenters.          the simulator as follows. As for LACP, each interface aggregates
+It does not consider north-south traffic. However, virtualization and        two ports by default. As for switch stacking, each Layer-3 switch
+randomness techniques applied to such traffic bring new challenges           comprises two physical switches connected by one stack cable.
+to sufficient Layer-2 coverage, such as elastic IP (EIP), NAT, and           As for VRF, we adopt two planes: one for intra-pod routing and
+software load balancer (SLB).                                                another for inter-pod routing. As for ECMP, we enable per-flow
+Filtering out server-side failures. Server-side iptables up-                 load balancing based on a flow's five-tuple. Regarding noise, we
+dates, restarts, migrations, power-downs, and other factors lead to          inject a packet drop probability in [0, 10-3] to each physical link.
+                                                                             Topologies. We use two vanilla topologies: FatTree [2, 69] and VL2
+                                                                             [27, 54]. The largest FatTree and VL2 are 64-ary and 144-ary (for
+                                                                             core switches), respectively. The largest de facto topology (trans-
+                                                                             formed based on simulator configuration) for Fattree contains 10.2k
+
+                                                                        267
+RD-Probe: Scalable Monitoring With Sufficient Coverage In Complex Datacenter Networks                         ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+Rel volume   DT  NB                PM                           DT RD           Coverage (%)          DT NB RD                        System          Volume Time Coverage
+                                                 103                                        100
+          4                             Time (s)
+                                                 101                                         97
+                                                                                                                    Suff cvrg  deTector [54]                               
+                                                10-1
+          2                                            18 36 54 72 90 108                    94                                NetBouncer [69]           Conditional
+                                                        Radix of core switches
+          0                                                                                       18 36 54 72 90 108           Pingmesh [30]                               
+                                                                                                   Radix of core switches
+              18 36 54 72 90 108                                                                                                      RD-Probe                             
+             Radix of core switches
+
+             (a) Relative volume.                        (b) Planning time.                   (c) Achieved coverage.                              (d) Summary of results.
+
+                                                      Figure 8: Monitoring performance of existing systems.
+
+             DT (p = 97.3%)             NB (p = 98.4%)   RD (p = 99.5%)                                       Topo Con. Phase I Phase II
+
+FP (%)4                                 FN (%)    10                                          Volume (%)100                           Volume (%)100
+                                                                                                         75                                      75
+      2                                           5                                                      50                                      50
+                                                                                                         25                                      25
+      0                                           0                                                       0                                       0
+             3 30 300
+           # of random drops                          3  30 300                                                   16 32 48 64                             36 72 108 144
+                                                      # of random drops                                       Radix of core switches                  Radix of core switches
+
+             (a) False positive ratio.            (b) False negative ratio.                   (a) Volume breakdown on FatTree. (b) Volume breakdown on VL2.
+
+             Figure 9: Detection accuracy on random drops.                                    Time (%)  100                           Time (%)  100
+
+             DT (p = 97.3%)             NB (p = 98.4%)   RD (p = 99.5%)                                   75                                      75
+                                                                                                          50                                      50
+                                                                                                          25                                      25
+FP (%)0.50                              FN (%)    20                                                      0                                       0
+                                                  15                                                          16 32 48 64                             36 72 108 144
+      0.25                                        10
+                                                   5                                                          Radix of core switches                  Radix of core switches
+      0.00                                         0
+                1 4 7 10                                                                      (c) Time breakdown on FatTree. (d) Time breakdown on VL2.
+               # of incast events                        1 4 7 10                             Figure 11: Overhead breakdown when (, ) = (1, 99%).
+                                                         # of incast events
+
+             (a) False positive ratio.            (b) False negative ratio.                   Scalability results. We plot the overall probe volume on FatTree
+                                                                                              and VL2 in Figure 7(a) and (b), respectively. We obtain two findings.
+             Figure 10: Detection accuracy on congestion.
+                                                                                              (i) The task number increases slowly in the network scale. For ex-
+switches and 267.2k links, and contains 9.6k switches and 41.7k
+links for VL2.                                                                                ample, the task number is about the switch number to the power of
+Failures. We inject random drops and congestion to evaluate how                               1.53 on FatTree when  = 5 (obtained by applying least-squares lin-
+sufficient coverage enhances failure detection. A random drop oc-                             ear regression to that curve). Note that a -ary FatTree has  (2)
+curs by setting a physical link to drop packets with a probability                            switches and  (3) =  ((2)1.5) links. Thus, the required task
+between 0.01 and 0.5. Congestion is simulated via incast [3, 44],                             number is at least the switch number to the power of 1.5. This ad-
+where five servers generate many concurrent GET requests to an
+HTTP server. To create bottleneck links reliably, we enable pref-                             ditional 0.03 in the power stems from the coupon collector process
+erential local traffic forwarding (§5.3) on ToR switches of HTTP                              when we model randomness techniques (§4.2), which is pretty small.
+servers. We inject up to ten incast events per simulation run.                                (ii) Achieving sufficient coverage for  = 1 is the most expensive.
+Existing systems. We compare RD-Probe with Pingmesh (PM)                                      Once we reach that for  = 1, we only need to add 69.7-76.7% of
+[30], NetBouncer (NB) [69], and deTector (DT) [54]. To the best                               tasks to reach that for  = 3, and another 61.2-69.8% of tasks for
+of our knowledge, they are state-of-the-art black-box monitoring                               = 5.
+systems that have large-scale deployment. To incorporate low-level
+techniques, we build their probe generation methods on Layer-2                                   We plot the overall planning time on FatTree and VL2 in Fig-
+components rather than their intended Layer-3 components. Thus,
+we eliminate their difference in the intended coverage granularity.                           ure 7(c) and (d), respectively. We obtain two findings. (i) RD-Probe
+
+6.2 Performance of RD-Probe                                                                   finishes within 32 seconds, even at the largest scale. If we exclude
+
+We evaluate the achieved coverage and scalability of RD-Probe.                                the time spent on topology construction, it reduces to within 16
+Specifically, we fix  = 0.99 and vary   [1, 5]. We follow the same
+procedure as in §5 to obtain results except for one thing: Here, we                           seconds. (ii) Time differences given different s are negligible. This
+construct the de facto topology from scratch instead of modifying                             is because  only affects the time on Phase I and II. The dominating
+the one in the previous epoch.                                                                factor in their time complexity is the network scale rather than .
+Coverage results. Port-level coverage stays between 99.4-99.8%,
+99.1-99.6%, and 99.0-99.3% for  = 1, 3, 5, respectively. Thus, it                             6.3 Comparison with Existing Systems
+achieves sufficient coverage as Theorem 2 dictates. Moreover, the
+coverage approaches  from above as the scale or  increases. This                              Monitoring performance. We compare the probe volume, plan-
+fact indicates that we need significantly more tasks to nudge  even                           ning time, and port-level coverage of existing systems given  = 1
+higher (e.g., 99.9%).                                                                         and the VL2 topology. We omit the results of DT since a radix of
+                                                                                              90 because it runs out of memory when constructing the routing
+                                                                                              matrix. Figure 8 shows the results.
+                                                                                              (1) Figure 8(a) shows the volume of DT, NB, and PM relative to
+                                                                                              that of RD-Probe. The volume of NB and PM increases rapidly due
+                                                                                              to full-mesh pinging. It is four times that of RD-Probe at only 5k
+                                                                                              switches, leading to an additional 180 GBs of probing data daily in
+
+                                                                                268
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                       Ding et al.
+
+one region (excluding other rising resource demands). Thus, they                at ToR switches. Without sufficient coverage, probe tasks from
+exhaust limited probing resources at large scales.                              other systems are prone to missing many ports involved in link
+(2) Figure 8(b) shows the planning time of DT and RD-Probe, as                  aggregation and switch stacking. On the other hand, RD-Probe still
+NB and PM do not contain a separate probe planning phase. While                 has a non-zero FN ratio, since the detecting algorithm we use is not
+RD-Probe finishes within 10 seconds at the largest scale, DT can run            free from false negatives [69].
+for hours at a radix of 90 as the penalty for pursuing the minimal
+volume. It violates the time requirement when reacting to network               6.4 Microbenchmark
+updates. Thus, DT also has scalability issues at large scales.
+(3) Figure 8(c) shows the coverage of NB, DT, and RD-Probe. It omits            We evaluate how each step in RD-Probe contributes to the over-
+the results of PM since its coverage stays within 62.8-90.3%, too               all overhead. We present the results given (, ) = (1, 99%) and
+far away from sufficient coverage. The coverage gap of PM mainly                defer those given stricter requirements (i.e., when  = 3 and 5) to
+lies in core switches. Their ports comprise 33.3% of all ports, but             Appendix C. All these results show a similar trend.
+only 26.7% of tasks go through them. As for DT, its coverage stops              Volume breakdown. Figure 11(a) and (b) show the volume break-
+increasing at 97.5%. The reason is that every task in DT exercises              down on FatTree and VL2, respectively. Only Phase I and II con-
+IP-in-IP ping to control paths. However, it cannot control which                tribute to the volume. 55.0% of volume comes from Phase I on the
+port it travels to within an interface. Given a larger aggregation              8-ary FatTree. This percentage rapidly rises above 99% when the
+degree, the attainable coverage of DT is even lower. As for NB, its             radix is above 40, indicating that Phase I sufficiently covers most
+coverage slowly grows from 93.3% to 99.2% at the cost of incurring              ports. This observation matches the coverage guarantee of Phase
+excessive volume. This growth is owing to the increasing likeliness             I (i.e., Theorem 1), which also becomes stricter as the radix grows.
+of covering stack ports. As the volume rapidly grows, switches tend             Time breakdown. Figure 11(c) and (d) show the time breakdown
+to forward traffic via stack ports for Layer-2 load balance.                    on FatTree and VL2, respectively. We derive three findings. (i) Topol-
+                                                                                ogy construction consumes over 63% of the total time. This is be-
+   We summarize these results in Figure 8(d). RD-Probe is the only              cause it issues at least one SplitEdge operation per link (for LACP)
+system satisfying coverage and scalability requirements, even when              and two SplitVertex operations per vertex (for switch stacking
+other systems are also provided with the de facto topology.                     and VRF). Fortunately, as switches rarely reconfigure these tech-
+Detection accuracy. To show how sufficient coverage assists fail-               niques, this time is only incurred once during the initial epoch of
+ure detection, we fix the VL2 topology with the core radix as 72 and            RD-Probe. (ii) Phase I takes a larger percentage of time at larger
+inject two types of failures into the network: random drops and                 scales. Its consumption is 21.6% and 32.6% on the largest FatTree
+congestion. To eliminate the impact of the detection algorithm on               and VL2, respectively. The reason is that finding the proper number
+accuracy, we only take the tasks from different systems. They all               of tasks becomes computation-intensive as the number of ECMP
+detect failures using the same coordinate descend method from NB,               groups and switches increases. (iii) Phase II is the fastest step. Its
+which takes the loss rate of each task as input and estimates the loss          consumption is below 15.4% on FatTree and 4.0% on VL2, as most
+probability of each interface. If one member port in the detected               interfaces are sufficiently covered.
+interface has injected failures, we count it as a true positive. All
+reported results are averages of multiple simulation runs.                      7 CONCLUSION
+
+   As for random drops, Figure 9(a) and (b) show the false positive             RD-Probe is a complexity-aware and scalable monitoring system
+(FP) and false negative (FN) ratios achieved by tasks from different            with the guarantee of sufficient port-level coverage. It leverages
+systems, respectively. We obtain three findings. (i) Higher coverage            topology construction to expose low-level complexity and two-
+entails higher accuracy. When the coverage grows from 97.3% to                  phase generation to fulfill coverage and scalability requirements.
+99.5%, FP drops from 3.86% to almost zero, and FN drops from 10.5%              Deployment experience and simulation study show that RD-Probe
+to 3.3%. These ratios are higher than the portion of uncovered ports.           addresses prior challenges and outperforms existing deployed sys-
+The reason is that the detection method does not know the status                tems. RD-Probe has been running robustly in three Huawei Cloud's
+of uncovered ports. Such information loss causes it to make wrong               datacenter regions for over six months and enduring various faults
+judgments on even covered ports. (ii) 97.3% coverage is not good                in production environments. It has brought immediate benefits to
+enough. It cannot achieve zero FP nor FN, given only three failures.            our daily operation.
+Manual checks of the detection logs show that it often misjudges
+uplink ports as faulty, even if the actual loss is on a covered stack           Ethical issues. This work does not raise any ethical issues.
+port. (iii) 99.5% coverage is already satisfying, as it attains an almost
+zero FP and less than 4% FN. We need far more tasks to further                  ACKNOWLEDGEMENT
+improve coverage, whose benefit-cost ratio is too low.
+                                                                                We thank our shepherd, Maria Apostolaki, and the anonymous
+   As for congestion, Figure 10(a) and (b) show the false positive              reviewers for their insightful comments. We also thank Lijun Zhao,
+(FP) and false negative (FN) ratios achieved by tasks from different            Liyan Huang, and Hai Liu from Huawei Cloud for their continuous
+systems, respectively. Regardless of coverage and failure numbers,              support and timely feedback. Additionally, we appreciate Shujie
+the FP ratio remains close to zero, because the detection algorithm             Han, Jintao He, and Zirui Ou for their help in polishing an ear-
+seldom blames a non-congested interface for packet loss. However,               lier version of this paper. This work is supported by National Key
+a 2.2% increase in coverage reduces the FN ratio from above 10%                 Research and Development Program of China (2023YFB2904600),
+to below 4%. The FN ratio is high for other systems since they                  National Natural Science Foundation of China (62172007), and Re-
+tend to overlook congestion caused by Layer-2 load imbalance                    search Grants Council of Hong Kong (GRF 14201523).
+
+                                                                           269
+RD-Probe: Scalable Monitoring With Sufficient Coverage In Complex Datacenter Networks         ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+REFERENCES                                                                                          Sengupta. 2009. VL2: A scalable and flexible data center network. In Proc. of
+                                                                                                    SIGCOMM. 51­62.
+ [1] Jung Ho Ahn, Nathan Binkert, Al Davis, Moray McLaren, and Robert S Schreiber.            [28] Chuanxiong Guo, Guohan Lu, Dan Li, Haitao Wu, Xuan Zhang, Yunfeng Shi,
+
+      2009. HyperX: topology, routing, and packaging of efficient large-scale networks.             Chen Tian, Yongguang Zhang, and Songwu Lu. 2009. BCube: a high perfor-
+      In Proceedings of the Conference on High Performance Computing Networking,                    mance, server-centric network architecture for modular data centers. In Proc. of
+      Storage and Analysis. 1­11.                                                                   SIGCOMM. 63­74.
+ [2] Mohammad Al-Fares, Alexander Loukissas, and Amin Vahdat. 2008. A scal-                   [29] Chuanxiong Guo, Haitao Wu, Kun Tan, Lei Shi, Yongguang Zhang, and Songwu
+      able, commodity data center network architecture. ACM SIGCOMM computer
+      communication review 38, 4 (2008), 63­74.                                                     Lu. 2008. Dcell: a scalable and fault-tolerant network structure for data centers.
+ [3] Mohammad Alizadeh, Albert Greenberg, David A Maltz, Jitendra Padhye, Parveen                   In Proc. of SIGCOMM. 75­86.
+                                                                                              [30] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave
+      Patel, Balaji Prabhakar, Sudipta Sengupta, and Murari Sridharan. 2010. Data
+      center TCP (DCTCP). In Proc. of SIGCOMM. 63­74.                                               Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, Hua Chen, et al. 2015. Pingmesh: A
+ [4] Behnaz Arzani, Selim Ciraci, Luiz Chamon, Yibo Zhu, Hongqiang Harry Liu, Jitu
+                                                                                                    large-scale system for data center network latency measurement and analysis. In
+      Padhye, Boon Thau Loo, and Geoff Outhred. 2018. 007: Democratically finding                   Proc. of SIGCOMM. 139­152.
+      the cause of packet drops. In Proc. of NSDI. 419­435.                                   [31] Arpit Gupta, Rob Harrison, Marco Canini, Nick Feamster, Jennifer Rexford, and
+ [5] François Aubry, David Lebrun, Stefano Vissicchio, Minh Thanh Khong, Yves
+                                                                                                    Walter Willinger. 2018. Sonata: Query-driven streaming network telemetry. In
+      Deville, and Olivier Bonaventure. 2016. SCMon: Leveraging segment routing to                  Proc. of SIGCOMM. 357­371.
+      improve network monitoring. In Proc. of INFOCOM. IEEE, 1­9.                             [32] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David Mazières, and
+ [6] Novella Bartolini, Ting He, and Hana Khamfroush. 2017. Fundamental limits
+      of failure identifiability by Boolean network tomography. In Proc. of INFOCOM.                Nick McKeown. 2014. I know what your packet did last hop: Using packet
+      IEEE, 1­9.                                                                                    histories to troubleshoot networks. In Proc. of NSDI. 71­85.
+                                                                                              [33] Vipul Harsh, Sangeetha Abdu Jyothi, and P Brighten Godfrey. 2020. Spineless
+ [7] Ryan Beckett, Aarti Gupta, Ratul Mahajan, and David Walker. 2017. A general                    data centers. In Proc. of HotNets. 67­73.
+      approach to network configuration verification. In Proc. of SIGCOMM. 155­168.           [34] Leo Huang and Arya Reais-Parsi. 2013. Localizing packet loss in a large complex
+
+ [8] Ran Ben Basat, Sivaramakrishnan Ramanathan, Yuliang Li, Gianni Antichi,                        network. https://apricot.net/apricot2013/assets/Google_Monitoring_APRICOT
+
+      Minian Yu, and Michael Mitzenmacher. 2020. PINT: Probabilistic in-band network                _2013.pdf .
+      telemetry. In Proc. of SIGCOMM. 662­680.
+ [9] Robert Birke, Lydia Y Chen, and Evgenia Smirni. 2012. Data centers in the cloud:         [35] Qun Huang, Haifeng Sun, Patrick PC Lee, Wei Bai, Feng Zhu, and Yungang Bao.
+      A large scale performance study. In 2012 IEEE Fifth international conference on
+      cloud computing. IEEE, 336­343.                                                               2020. Omnimon: Re-architecting network telemetry with resource efficiency and
+[10] Matt Brown, Ari Fogel, Daniel Halperin, Victor Heorhiadi, Ratul Mahajan, and                   full accuracy. In Proc. of SIGCOMM. 404­421.
+                                                                                              [36] Michael Isard. 2007. Autopilot: automatic data center management. ACM SIGOPS
+      Todd Millstein. 2023. Lessons from the evolution of the Batfish configuration                 Review 41, 2 (2007), 60­67.
+      analysis tool. In Proc. of SIGCOMM. 122­135.                                            [37] Karthick Jayaraman, Nikolaj Bjørner, Jitu Padhye, Amar Agrawal, Ashish Bhar-
+[11] Ramón Cáceres, Nick G Duffield, Joseph Horowitz, and Donald F Towsley. 1999.
+      Multicast-based inference of network-internal loss characteristics. IEEE Transac-             gava, Paul-Andre C Bissonnette, Shane Foster, Andrew Helwer, Mark Kasten, Ivan
+      tions on Information theory 45, 7 (1999), 2462­2480.                                          Lee, et al. 2019. Validating datacenters at scale. In Proc. of SIGCOMM. 200­213.
+[12] Jeffrey D Case, Mark Fedor, Martin Lee Schoffstall, and James Davin. 1990.               [38] Vimalkumar Jeyakumar, Mohammad Alizadeh, Yilong Geng, Changhoon Kim,
+
+      Rfc1157: Simple network management protocol (snmp).                                           and David Mazières. 2014. Millions of little minions: Using packets for low latency
+                                                                                                    network programming and visibility. ACM SIGCOMM Computer Communication
+[13] Benoit Claise. 2004. Cisco Systems NetFlow Services Export Version 9. https:                   Review 44, 4 (2014), 3­14.
+                                                                                              [39] Pravein Govindan Kannan, Nishant Budhdev, Raj Joshi, and Mun Choon Chan.
+      //www.ietf .org/rfc/rfc3954.txt.
+                                                                                                    2021. Debugging Transient Faults in Data Centers using Synchronized Network-
+[14] Ítalo Cunha, Renata Teixeira, Nick Feamster, and Christophe Diot. 2009. Mea-                   wide Packet Histories.. In Proc. of NSDI. 253­268.
+                                                                                              [40] Changhoon Kim, Anirudh Sivaraman, Naga Katta, Antonin Bas, Advait Dixit,
+      surement methods for fast and accurate blackhole identification with binary
+      tomography. In Proc. of SIGCOMM IMC. 254­266.                                                 and Lawrence J Wobker. 2015. In-band network telemetry via programmable
+[15] Amogh Dhamdhere, David D Clark, Alexander Gamero-Garrido, Matthew Luckie,                      dataplanes. In Proc. of SIGCOMM, Vol. 15.
+                                                                                              [41] John Kim, Wiliam J Dally, Steve Scott, and Dennis Abts. 2008. Technology-driven,
+      Ricky KP Mok, Gautam Akiwate, Kabir Gogia, Vaibhav Bajpai, Alex C Snoeren,                    highly-scalable dragonfly topology. SIGARCH Computer Architecture News 36, 3
+      and Kc Claffy. 2018. Inferring persistent interdomain congestion. In Proc. of                 (2008), 77­88.
+      SIGCOMM. 1­15.
+[16] Amogh Dhamdhere, Renata Teixeira, Constantine Dovrolis, and Christophe Diot.             [42] Petr Lapukhov and Aijay Adams. 2016. Netnorad: Troubleshooting networks via
+
+      2007. NetDiagnoser: Troubleshooting network unreachabilities using end-to-end                 end-to-end probing. https://engineering.fb.com/2016/02/18/core-data/netnorad-
+      probes and routing data. In Proc. of CoNEXT. 1­12.
+[17] Nick G Duffield and Matthias Grossglauser. 2001. Trajectory sampling for direct                troubleshooting- networks- via- end- to- end- probing/.
+      traffic observation. IEEE/ACM transactions on networking 9, 3 (2001), 280­292.
+[18] John Evans and Fabien Chraim. 2023. No packet left behind. https://storage.go            [43] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. 2016. Flowradar: A better
+                                                                                                    netflow for data centers. In Proc. of NSDI. 311­324.
+      ogleapis.com/site- media- prod/meetings/NANOG88/4790/20230613_Evans_N
+                                                                                              [44] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. 2016. Lossradar: Fast
+      o_Packet_Lef t_v1.pdf .                                                                       detection of lost packets in data center networks. In Proc. of CoNEXT. 481­495.
+
+[19] Chongrong Fang, Haoyu Liu, Mao Miao, Jie Ye, Lei Wang, Wansheng Zhang,                   [45] Yahui Li, Xia Yin, Zhiliang Wang, Jiangyuan Yao, Xingang Shi, Jianping Wu, Han
+
+      Daxiang Kang, Biao Lyv, Peng Cheng, and Jiming Chen. 2020. VTrace: Automatic                  Zhang, and Qing Wang. 2018. A survey on network verification and testing with
+                                                                                                    formal methods: Approaches and challenges. IEEE Communications Surveys &
+      diagnostic system for persistent packet loss in cloud-scale overlay network. In               Tutorials 21, 1 (2018), 940­969.
+      Proc. of SIGCOMM. 31­43.                                                                [46] Michael Mitzenmacher and Eli Upfal. 2017. Probability and computing: Random-
+[20] Marco Ferrante and Monica Saltalamacchia. 2014. The coupon collector's problem.                ization and probabilistic techniques in algorithms and data analysis. Cambridge
+      Materials matemàtics (2014), 0001­35.                                                         university press.
+[21] M Foschiano et al. 2015. Cisco systems' encapsulated remote switch port analyzer
+      (erspan). draft-foschiano-erspan-00. txt, Tech. Rep (2015).                             [47] Tal Mizrahi, Gidi Navon, Giuseppe Fioccola, Mauro Cociglio, Mach Chen, and
+[22] Rohan Gandhi, Hongqiang Harry Liu, Y Charlie Hu, Guohan Lu, Jitendra Padhye,
+                                                                                                    Greg Mirsky. 2019. AM-PM: Efficient network telemetry using alternate marking.
+      Lihua Yuan, and Ming Zhang. 2014. Duet: Cloud scale load balancing with                       IEEE Network 33, 4 (2019), 155­161.
+      hardware and software. ACM SIGCOMM Computer Communication Review 44, 4                  [48] Edgar Costa Molero, Stefano Vissicchio, and Laurent Vanbever. 2022. FAst in-
+      (2014), 27­38.                                                                                network GraY failure detection for ISPs. In Proc. of SIGCOMM. 677­692.
+                                                                                              [49] Al Morton. 2016. Rfc7799: Active and Passive Metrics and Methods (with Hybrid
+[23] Yilong Geng, Shiyu Liu, Zi Yin, Ashish Naik, Balaji Prabhakar, Mendel Rosenblum,
+                                                                                                    Types In-Between).
+      and Amin Vahdat. 2019. SIMON: A Simple and Scalable Method for Sensing,
+      Inference and Measurement in Data Center Networks.. In Proc. of NSDI. 549­564.          [50] Srinivas Narayana, Anirudh Sivaraman, Vikram Nathan, Prateesh Goyal, Venkat
+[24] Rainer Gerhards. 2009. The syslog protocol. Technical Report.
+[25] Denisa Ghita, Hung Nguyen, Maciej Kurant, Katerina Argyraki, and Patrick                       Arun, Mohammad Alizadeh, Vimalkumar Jeyakumar, and Changhoon Kim. 2017.
+      Thiran. 2010. Netscope: Practical network loss tomography. In Proc. of INFOCOM.
+      IEEE, 1­9.                                                                                    Language-directed hardware design for network performance monitoring. In
+                                                                                                    Proc. of SIGCOMM. 85­98.
+[26] Phillipa Gill, Navendu Jain, and Nachiappan Nagappan. 2011. Understanding                [51] Radhika Niranjan Mysore, Andreas Pamboris, Nathan Farrington, Nelson Huang,
+
+      network failures in data centers: measurement, analysis, and implications. In                 Pardis Miri, Sivasankar Radhakrishnan, Vikram Subramanya, and Amin Vahdat.
+      Proc. of SIGCOMM. 350­361.
+[27] Albert Greenberg, James R Hamilton, Navendu Jain, Srikanth Kandula,                            2009. Portland: a scalable fault-tolerant layer 2 data center network fabric. In
+                                                                                                    Proc. of SIGCOMM. 39­50.
+      Changhoon Kim, Parantap Lahiri, David A Maltz, Parveen Patel, and Sudipta               [52] ns3 2022. Network Simulator 3. https://www.nsnam.org/.
+
+                                                                                              [53] Tian Pan, Enge Song, Zizheng Bian, Xingchen Lin, Xiaoyu Peng, Jiao Zhang, Tao
+
+                                                                                                    Huang, Bin Liu, and Yunjie Liu. 2019. Int-path: Towards optimal path planning
+                                                                                                    for in-band network-wide telemetry. In Proc. of INFOCOM. IEEE, 487­495.
+
+                                                                                         270
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                             Ding et al.
+
+[54] Yanghua Peng, Ji Yang, Chuan Wu, Chuanxiong Guo, Chengchen Hu, and Zong-                   [80] Zhehui Zhang, Haiyang Zheng, Jiayao Hu, Xiangning Yu, Chenchen Qi, Xuemei
+
+      peng Li. 2017. deTector: a topology-aware monitoring system for data center                     Shi, and Guohui Wang. 2021. Hashing linearity enables relative path control in
+      networks. In Proc. of USENIX ATC. The Advanced Computing Systems Associa-                       data centers. In Proc. of ATC. 855­862.
+      tion.                                                                                     [81] Yikai Zhao, Kaicheng Yang, Zirui Liu, Tong Yang, Li Chen, Shiyi Liu, Naiqian
+
+[55] Peter Phaal, Sonia Panchen, , and Neil McKee. 2001. InMon Corporation's sFlow:                   Zheng, Ruixin Wang, Hanbo Wu, Yi Wang, et al. 2021. LightGuardian: A Full-
+                                                                                                      Visibility, Lightweight, In-band Telemetry System Using Sketchlets.. In Proc. of
+      A Method for Monitoring Traffic in Switched and Routed Networks. https:                         NSDI. 991­1010.
+                                                                                                [82] Naiqian Zheng, Mengqi Liu, Ennan Zhai, Hongqiang Harry Liu, Yifan Li, Kaicheng
+      //www.ietf .org/rfc/rfc3176.html.
+                                                                                                      Yang, Xuanzhe Liu, and Xin Jin. 2022. Meissa: scalable network testing for
+[56] Costin Raiciu, Sebastien Barre, Christopher Pluntke, Adam Greenhalgh, Damon                      programmable data planes. In Proc. of SIGCOMM. 350­364.
+                                                                                                [83] Yu Zhou, Chen Sun, Hongqiang Harry Liu, Rui Miao, Shi Bai, Bo Li, Zhilong
+      Wischik, and Mark Handley. 2011. Improving datacenter performance and ro-
+      bustness with multipath TCP. ACM SIGCOMM Computer Communication Review                          Zheng, Lingjun Zhu, Zhen Shen, Yongqing Xi, et al. 2020. Flow event telemetry
+      41, 4 (2011), 266­277.                                                                          on programmable data plane. In Proc. of SIGCOMM. 76­89.
+                                                                                                [84] Yu Zhou, Dai Zhang, Kai Gao, Chen Sun, Jiamin Cao, Yangyang Wang, Mingwei
+[57] Arjun Roy, Deepak Bansal, David Brumley, Harish Kumar Chandrappa, Parag
+                                                                                                      Xu, and Jianping Wu. 2020. Newton: Intent-driven network traffic monitoring.
+      Sharma, Rishabh Tewari, Behnaz Arzani, and Alex C Snoeren. 2018. Cloud                          In Proc. of CoNEXT. 295­308.
+      datacenter sdn monitoring: Experiences and challenges. In Proc. of IMC. 464­470.          [85] Yibo Zhu, Nanxi Kang, Jiaxin Cao, Albert Greenberg, Guohan Lu, Ratul Mahajan,
+[58] Arjun Roy, Hongyi Zeng, Jasmeet Bagga, and Alex C Snoeren. 2017. Passive
+      Realtime Datacenter Fault Detection and Localization.. In Proc. of NSDI. 595­612.               Dave Maltz, Lihua Yuan, Ming Zhang, Ben Y Zhao, et al. 2015. Packet-level
+[59] John Scudder, Rex Fernando, and Stephen Stuart. 2016. Rfc7854: BGP Monitoring                    telemetry in large datacenter networks. In Proc. of SIGCOMM. 479­491.
+
+      Protocol (BMP).                                                                           APPENDICES
+
+[60] Vyas Sekar, Michael K Reiter, Walter Willinger, Hui Zhang, Ramana Rao Kompella,            Appendices are supporting material that has not been peer-reviewed.
+
+      and David G Andersen. 2008. cSamp: A system for network-wide flow monitoring.             APPENDIX A ANALYSIS OF RANDOMIZED
+                                                                                                GENERATION
+      (2008).
+                                                                                                We present three properties and their formal proofs regarding ran-
+[61] Vyas Sekar, Michael K Reiter, and Hui Zhang. 2010. Revisiting the case for a               domized generation. Recall that  (, ) denotes the probability
+      minimalist approach for network flow monitoring. In Proc. of SIGCOMM IMC.                 that we collect  copies of each coupon after  draws of  types
+      328­341.                                                                                  of uniform coupons. In this section, we investigate the following
+
+[62] Gregg Siegfried. 2018. Monitoring Modern Services and Infrastructure. https:               properties.
+                                                                                                (1) The explicit formula and evaluation of  (, ) (Appendix A.1)
+      //www.gartner.com/en/documents/3868219.                                                   (2) The growth rate of minimum  satisfying  (, )   with
+
+[63] Vibhaalakshmi Sivaraman, Srinivas Narayana, Ori Rottenstreich, Shan Muthukr-                   respect to  (Appendix A.2)
+                                                                                                (3) The coverage guarantee (Appendix A.3)
+      ishnan, and Jennifer Rexford. 2017. Heavy-hitter detection entirely in the data
+      plane. In Proc. of SIGCOMM SOSR. 164­176.                                                 A.1 Computation of  (, )
+[64] Han Hee Song, Lili Qiu, and Yin Zhang. 2006. NetQuest: A flexible framework
+      for large-scale network measurement. ACM SIGMETRICS Performance Evaluation                Notation. We use the following notation.
+      Review 34, 1 (2006), 121­132.
+[65] Junho Suh, Ted Taekyoung Kwon, Colin Dixon, Wes Felter, and John Carter.                   · Let  () =       -1      be the truncated Taylor series of the expo-
+                                                                                                                  =0   !
+      2014. Opensample: A low-latency, sampling-based measurement platform for
+      commodity sdn. In Proc. of ICDCS. IEEE, 228­237.                                          nential function.
+[66] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2015. Cherrypick: Tracing
+      packet trajectory in software-defined datacenter networks. In Proc. of SIGCOMM            · Given an analytic function  at the origin, let  [] denote its
+      SOSR. 1­7.
+[67] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2016. Simplifying Data-                 coefficient of the  term in the Taylor expansion. For example,
+      center Network Debugging with PathDump.. In Proc. of OSDI. 233­248.
+[68] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2018. Distributed network                []      =   1  for  any        N.
+      monitoring and debugging with switchpointer. In Proc. of NSDI. 453­456.                               !
+[69] Cheng Tan, Ze Jin, Chuanxiong Guo, Tianrong Zhang, Haitao Wu, Karl Deng,
+                                                                                                An explicit formula. We show that
+      Dongming Bi, and Dong Xiang. 2019. NetBouncer: Active Device and Link Failure
+      Localization in Data Center Networks.. In Proc. of NSDI. 599­614.                                              (, )    =  !   (    -      ()) [].                     (1)
+[70] Yunhong Xu, Keqiang He, Rui Wang, Minlan Yu, Nick Duffield, Hassan Wassel,                                                 
+
+      Shidong Zhang, Leon Poutievski, Junlan Zhou, and Amin Vahdat. 2022. Hashing               Let 1, . . . ,  denote the copies of each type of coupon after 
+      Design in Modern Networks: Challenges and Mitigation Techniques. In 2022
+      USENIX Annual Technical Conference (USENIX ATC 22). 805­818.                              draws. Then, by the formula of multinomial coefficient, there are
+[71] Kaicheng Yang, Yuanpeng Li, Zirui Liu, Tong Yang, Yu Zhou, Jintao He, Tong
+                                                                                                   !     number  of  ways  to   collect  these  copies.  Since  there  are  
+      Zhao, Zhengyi Jia, Yongqiang Yang, et al. 2021. SketchINT: Empowering INT                 1!··· !
+      with TowerSketch for per-flow per-switch measurement. In Proc. of ICNP. IEEE,
+      1­12.                                                                                     possible sequences of  draws, we have
+
+[72] Fangdan Ye, Da Yu, Ennan Zhai, Hongqiang Harry Liu, Bingchuan Tian, Qiaobo                                           1                              !
+                                                                                                             (, ) = 
+      Ye, Chunsheng Wang, Xin Wu, Tianchen Guo, Cheng Jin, et al. 2020. Accuracy,                                                                                  .
+      scalability, coverage: A practical configuration verifier on a global WAN. In Proc.                                          min  ,        = 1! · · · !
+      of SIGCOMM. 599­614.
+[73] Minlan Yu, Albert G Greenberg, David A Maltz, Jennifer Rexford, Lihua Yuan,                Note that  -  () =               . It follows that
+                                                                                                                            =
+      Srikanth Kandula, and Changhoon Kim. 2011. Profiling Network Performance                                                   !
+      for Multi-tier Data Center Applications.. In Proc. of NSDI, Vol. 11. 5­5.
+[74] Minlan Yu, Lavanya Jose, and Rui Miao. 2013. Software Defined Traffic Measure-                      ( -  ()) [] =                                      1
+      ment with OpenSketch.. In Proc. of NSDI, Vol. 13. 29­42.
+[75] Hongyi Zeng, Peyman Kazemian, George Varghese, and Nick McKeown. 2012.                                                             min  ,                     .
+      Automatic test packet generation. In Proc. of CoNEXT. 241­252.                                                                             = 1! · · · !
+[76] Hongyi Zeng, Ratul Mahajan, Nick McKeown, George Varghese, Lihua Yuan, and
+                                                                                                Thus, we derive the explicit formula of  (, ).
+      Ming Zhang. 2015. Measuring and troubleshooting large operational multipath               Evaluation of the formula. Directly evaluating (1) for any triplet
+      networks with gray box testing. Mountain Safety Res., Seattle, WA, USA, Rep.              (, , ) is not feasible due to the complex expansion of the power
+      MSR-TR-2015-55 (2015).
+[77] Hongyi Zeng, Shidong Zhang, Fei Ye, Vimalkumar Jeyakumar, Mickey Ju, Junda
+
+      Liu, Nick McKeown, and Amin Vahdat. 2014. Libra: Divide and conquer to verify
+      forwarding tables in huge networks. In Proc. of NSDI. 87­99.
+[78] Ennan Zhai, Ang Chen, Ruzica Piskac, Mahesh Balakrishnan, Bingchuan Tian, Bo
+
+      Song, and Haoliang Zhang. 2020. Check before you change: Preventing correlated
+      failures in service updates. In Proc. of NSDI. 575­589.
+[79] Kaiyuan Zhang, Danyang Zhuo, Aditya Akella, Arvind Krishnamurthy, and Xi
+
+      Wang. 2020. Automated verification of customizable middlebox properties with
+      gravel. In Proc. of NSDI. 221­239.
+
+                                                                                           271
+RD-Probe: Scalable Monitoring With Sufficient Coverage In Complex Datacenter Networks                        ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+series. Instead, we use dynamic programming to evaluate its value                      non-decreasing in  and approaches one when   . Thus,
+in  (223) time. The boundary condition is                                              given any (, ) and   (0, 1), the existence of such an  is clear.
+
+             0 (, ) = 1 for any ,   N,                                    (2)             Second, we show  =  ( ln  ). Let  be a random variable
+
+              (, ) = 0 for  > 0 and  < .                                  (3)          denoting the first time when  copies of each coupon are collected.
+                                                                                       A known result is that E =  ln  + ( - 1) ln ln  +  ( ) [20].
+The transition equation is                                                             According to Markov inequality,
+
+    (, )                                                                                                     1 -  ( , ) = Pr[ > ]  E .
+                                                                                                                                                   
+
+                                    ( ( - 1))! ( - )- (-1)             ·               By  letting        =   1      =   (   ln  ),  we    have      ( , )      .
+                                 ·              ·
+   = (-1)                                                                                                    1- E
+                  ( - 1) ( - 1)!                      
+    =0                                                                                     Third, we show  = ( ln  ). It suffices to show that the limit
+
+   -1 ( - ,  -  ( - 1)) for  > 0 and   . (4)                                           inferior of the ratio  is at least one when   . We may
+
+Note that in (4),  (, ) only relies on the values whose , ,                                                            ln 
+are smaller, so dynamic programming is applicable. Since each
+coefficient can be computed in  ( + ) multiplications, the time                        assume  = 1 for now since this will only make  lower. A beautiful
+complexity is  ( ·  · ( + )) =  (223). The boundary
+condition (3) is straightforward. Moreover, we impose the condition                    result [46] by Pierre-Simon Laplace, Paul Erdös, and Alfréd Rényi
+(2) to enable the transition equation to hold even when  = 1. The
+following calculation shows how to derive the transition equation.                     states that when  = 1, for any constant  we have
+
+                                                                                                     Pr[      <    ln   +  ]          - -       as        .
+
+                                                                                                                                      ,
+
+                                                                                       By choosing  = - ln(- ln ), we know that 1 ( ,  ln  +)  .
+                                                                                       Thus, lim inf   1 and the claim is proved.
+
+                                                                                                            ln 
+
+ (, )                                                                                  A.3 Coverage Guarantee of Phase I
+
+  !                                                                                    We repeat the coverage guarantee of Phase I below for convenience.
+=
+             -   ()       []
+  
+        
+
+                                                                                           Theorem 1. After exercising Phase-I tasks, for a switch with 
+
+  !          -  -1 ()     -     -1                                                     ports,  at  least  1-     1    fraction  of  ports  has  attained   -coverage  on
+=                            ( - 1)!                                                                          2 1/4
+                                         []
+                                                                                       average when  is large.
+
+                                                 By definition of  ()                      Proof. Let us focus on any Tier . A first observation is that
+
+                      -   -1 ()     -  (-1)   (-1)    []                               each task will contribute coverage to two switch ports in . This
+                                             ( - 1)!
+  !             
+=
+                                                                                       is because a task will traverse each layer in sequence in multi-tier
+   
+                                                                                       datacenters (see the first assumption in §2.4). It goes through one
+         =0
+
+                                                 By binomial theorem                   port on Tier  in the uplink direction and another in the downlink
+
+                (-1)             -  -1 ()    -     [  -  (  -  1)]                     direction.
+
+=  !                         
+
+    =0 ( - 1)!                                                                             Thus, the mathematical model is that there are  types of
+
+                                                 By definition of  []                  coupons, and we make 2  uniform and independent draws. Our
+
+  !          (-1)        ( - )- (-1)                           - 1))                                                                 1
+=        =0              ( -  ( - 1))! -1 ( - ,  -  (
+                                                                                       goal is to show that at most 2 1/4 types of coupons have less than
+                                                                                        copies on average.
+             ( - 1)!
+                                                                                           Let  denote the probability that one particular type of coupon
+
+                                           By the formula of -1 (·, ·)                 has <  copies. Since  is the same for all types of coupons, the
+
+                                                                                       types of coupons with <  copies are exactly  on average. Thus,
+
+                             !         ·  ( - )- (-1)       ·                          it  suffices  to  show    that        1
+
+= (-1)  ·                                                                                                                 2 1/4 .
+
+                 ( -  ( - 1))!  · ( - 1)!                                                  Fortunately, we have an explicit formula of  by binomial distri-
+
+    =0
+
+-1 ( - ,  -  ( - 1))                                                                   bution:
+
+                                           Reorganizing coefficients                                              -1                          2  -
+
+                                                                                                              =         2  1        1-     1
+
+                                 ( ( - 1))! ( - )- (-1)                                                                                               .               (5)
+                                                                                                                                                                    
+= (-1)                        ·              ·                      ·                                                      
+                                                                                                                                                                         !
+                  ( - 1) ( - 1)!                                                                                  =0
+
+    =0                                                                                 Now we apply two inequalities to simplify the term:                   
+
+-1 ( - ,  -  ( - 1))                                                                   whenever    and 1 -  < - . We have                                    
+
+A.2 Growth Rate of                                                                                                 -1 (2 )                      
+                                                                                                                                exp -2 + .
+Suppose we fix the coverage requirement (, ). We are interested                                                <
+in the growth speed of the minimal  that satisfies  ( , )  
+in terms of  . Our result is that  = ( ln  ). Thus, back to                                                         =0    !                     
+Algorithm 2, we know each port requires  (ln  ) tasks, where  is
+the radix of a switch. Consequently, a switch only needs  ( ln  )                      Recall from Appendix A.2 that  <  = (ln  ). Thus, when  is
+
+tasks in the randomized generation phase.                                              large,
+
+Deduction of the result. We deduct it in three steps. First, we                                                         -1 (2 )     exp (-2) .
+show that such a minimal  always exists. Note that  ( , ) is
+                                                                                                                              !
+
+                                                                                                                         =0
+
+                                                                                       Now, suppose  is a random variable following a Poisson distribu-
+                                                                                       tion with mean 2. Then   Pr[ < ]. Meanwhile, we can view
+
+                                                                               272
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                    Ding et al.
+
+                         Topo Con. Phase I Phase II                                         APPENDIX B ANALYSIS OF DETERMINISTIC
+                                                                                            GENERATION
+Volume (%)100                              Volume (%)100
+           75                                         75                                    The analysis of deterministic generation boils down to its coverage
+           50                                         50                                    guarantee, which is stated in Theorem 2. We repeat the theorem
+           25                                         25                                    here for convenience.
+            0                                          0
+                                                                                               Theorem 2. After exercising Phase II tasks, the coverage require-
+                    16 32 48 64                                36 72 108 144                ment (, ) is achieved.
+                Radix of core switches                     Radix of core switches
+
+(a) Volume breakdown on FatTree. (b) Volume breakdown on VL2.
+
+Time (%)100                                Time (%)  100
+            75                                         75
+            50                                         50                                      Proof. After exercising Phase II tasks, we claim that for each
+            25                                         25                                   interface  . containing  aggregated ports, there are at least  :=
+            0                                          0                                    min{ :  (, )  } tasks that go through it. This is valid for two
+                16 32 48 64                                  36 72 108 144                  reasons. (i) The coverage counter  [.] never overestimates the
+
+                Radix of core switches                     Radix of core switches           number of Phase I tasks going through . even in case of numerous
+                                                                                            faults (§5.2). (ii) Whenever  [ .] < , there will be  = - [.]
+(c) Time breakdown on FatTree. (d) Time breakdown on VL2.
+Figure 12: Overhead breakdown when (, ) = (3, 99%).                                         new tasks in Phase II going through this interface thanks to IP-in-IP
+                                                                                            ping. Thus, the interface will surely reach -coverage.
+                         Topo Con. Phase I Phase II
+                                                                                               Now, by definition of , with   probability, each port in this
+Volume (%)100                              Volume (%)100
+           75                                         75                                    interface will reach -coverage. Let  denote the number of ports
+           50                                         50                                    with -coverage in this interface. We know E  . Summing
+           25                                         25                                    over all interfaces, we know the fraction of ports in the whole
+            0                                          0
+                                                                                            datacenter that have -coverage is
+                    16 32 48 64                                36 72 108 144
+                Radix of core switches                     Radix of core switches
+
+(a) Volume breakdown on FatTree. (b) Volume breakdown on VL2.                               interface E  ,
+                                                                                             interface 
+Time (%)  100                              Time (%)100
+           75                                       75                                      which gives the desired result.  
+           50                                       50
+           25                                       25                                         It is noteworthy that Theorem 2 is topology-independent, as its
+            0                                        0                                      proof does not assume any specific datacenter topology.
+
+                    16 32 48 64                              36 72 108 144
+                Radix of core switches                   Radix of core switches
+
+(c) Time breakdown on FatTree. (d) Time breakdown on VL2.                                   APPENDIX C MORE EXPERIMENTS
+Figure 13: Overhead breakdown when (, ) = (5, 99%).
+                                                                                            Microbenchmark. We show the results of volume and time break-
+ as the sum of  i.i.d. random variables, each following a Poisson                           down given coverage requirement (3, 99%) and (5, 99%) in Figure 12
+distribution with mean 2. Therefore,                                                        and 13, respectively. Similar to the results given (1, 99%), Phase I
+                                                                                            contributes to the majority of volume and 20-50% of time. Phase II
+                                      
+                                                                                            contributes to less than 3% of volume and 20% of time. Topology
+                           Pr  < 
+                                                                                            construction consumes most of the time, but this overhead will
+                                      =1
+                                                                                            likely be incurred only once (i.e., in the initial epoch).
+
+                         = Pr             - 2          <-      
+
+                               =1                                 .
+
+                                       2                       2
+
+When  is large, the central limit theorem says that                          -2  will
+
+                                                                        =1
+
+                                                                          2
+
+converge in distribution to the standard normal distribution N (0, 1).
+
+Let  := /2 > 0. We have
+
+                      1    - 2              1               2
+                                           
+                                -   d   =                           - 
+
+                                2                                 2 d
+
+                   2 -                               2 
+
+                    1       - (+ )2                     - 2      2
+                =                                                     - 
+                              2        d                2
+                                                                    2 d
+
+                   2 0                                    2 0
+
+                1           2       1                  
+
+                           
+                = exp - = exp - .
+
+                2          22                          4
+
+Recall from Appendix A.2 that               ln  . This implies                  1
+
+                                                                             2 1/4 ,
+
+which completes the proof.                                                         
+
+                                                                                       273
+

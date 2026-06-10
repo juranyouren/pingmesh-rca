@@ -1,0 +1,45 @@
+# 文献调研进度记录
+
+## 完成状态 (2026-05-25)
+- 英文论文25篇: PDF → txt 转换完成, 全部阅读完成
+- 中文论文7篇: PDF → txt 转换完成, 全部阅读完成 (含summary)
+- 总计32篇论文全部阅读总结完毕
+- 总结文件: docs/文献调研总结.md
+
+## 论文分组
+
+### Group A (核心RCA & LLM, 英文) — 9篇 ✅
+AmocRCA, NetEventCause, Model-Based Diagnosis (NetDx), Stalled/Biased/Confused, TAMO, BiAn, Confucius, FaultInsight, SkeletonHunter
+
+### Group B (网络监控与故障检测, 英文) — 8篇 ✅
+Canary, Pingmesh, R-Pingmesh, deTector, dDrops, RD-Probe, ByteTracker, Classifying Host-Side RDMA Pingmesh
+
+### Group C (告警/事件/综述/其他, 英文) — 8篇 ✅
+COLA, SkyNet, AIOps Survey, Hawkeye, Glint, TraceRCA, TRA, Event-Based Estimation
+
+### Group D (中文论文, added_papers) — 7篇 ✅
+智能承载网络告警分析(赵良), 改进FP-Growth根因分析(黄兵明), 高维张量告警关联(匡立伟), GCN告警压缩(黄兵明), 知识图谱根因定位(刘劲), 大小模型协同(黄金超), NetLLM(SIGCOMM'24)
+
+## 高相关度文献 (五星, 可直接引用)
+
+### 英文
+1. BiAn (SIGCOMM'25) — LLM-based网络故障定位, 阿里云生产部署
+2. NetEventCause (TNNLS'25) — 无拓扑网络事件驱动RCA, 华为
+3. TAMO (TSC'25) — LLM Agent+多模态RCA
+4. AIOps Survey (ACM CSUR'25) — LLM×AIOps综述, 北大
+5. COLA (ICSE'24) — 知识增强告警聚合, CUHK+华为
+6. SkyNet (SIGCOMM'25) — 告警洪流分析, 阿里云
+7. SkeletonHunter (SIGCOMM'25) — 大模型训练网络诊断, 清华+阿里
+8. FaultInsight (KDD'24) — 主机级故障因果诊断, 北大+字节
+9. AmocRCA (FSE'25) — 轻量级指标驱动RCA
+10. Canary (TON'26) — 网络故障检测定位
+
+### 中文
+11. 赵良等 (2022) — PrefixSpan告警关联+拓扑推理, 联通现网, 准确率99%
+12. 黄兵明等 (~2023) — 改进FP-Growth+因果推断跨域根因分析
+13. 黄兵明等 (2023) — GCN+XGBoost时空融合告警压缩, 准确率95.86%
+
+## 下一步
+- 将文献总结融入论文1.3节"国内外研究现状"
+- 补充中文文献引用
+- 逐句修改正文消除AI痕迹

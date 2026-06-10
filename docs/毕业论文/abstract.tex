@@ -1,0 +1,35 @@
+% -*- coding: utf-8 -*-
+
+
+\begin{zhaiyao}
+\begin{spacing}{1.5}
+    云数据中心网络故障通常表现为端到端丢包、时延升高和多源告警同时爆发。面向智能运维场景，系统需要先完成网络侧异常检测，再在高度连通的Spine-Leaf拓扑中开展告警关联、根因分析与故障定位。然而，ECMP会隐藏实际转发路径，单个交换机、链路或光模块异常又可能触发Pingmesh、BGP/BFD、Syslog、SNMP等多类告警，形成告警风暴。大量衍生告警会掩盖真正指向故障根因的少量信号，使传统依赖固定路径、历史统计或纯文本推理的方法难以稳定完成故障诊断。
+
+    针对上述问题，本文设计了一种面向拓扑关联事件的数据中心网络故障根因定位框架。该框架以Pingmesh端到端探测结果作为网络侧异常检测触发信号，将异常源宿端点、物理拓扑和设备告警映射为带属性的拓扑图；在此基础上，根据运维专家定义的告警严重度构造个性化PageRank偏好向量，通过图上随机游走刻画异常路径交汇关系和告警传播影响，将数百个候选设备压缩为Top-10嫌疑集；随后由大语言模型在候选集范围内读取设备告警语义，完成根因设备复核、故障诊断说明和传播路径解释。该设计利用拓扑计算缩小搜索空间，利用语义推理区分根因告警与衍生告警，避免模型直接处理海量无序告警。
+
+    本文基于华为云生产环境中104例真实网络故障案例进行实验，其中常规场景90例、告警风暴场景14例。结果显示，相比最优基线方法，本文方法在常规场景下的Top-3准确率由86.67\% 提升至92.22\%，在告警风暴场景下由35.71\% 提升至78.57\%。消融实验表明，去除PageRank后，风暴场景Top-1准确率由35.71\% 降至28.57\%；去除语义推理模块后，常规场景Top-1准确率由60.00\% 降至38.89\%。实验结果说明，拓扑剪枝与语义诊断在大规模数据中心网络根因分析中具有互补作用，其中DeepSeek-R1-Distill-Qwen-32B在定位准确率和推理时间之间取得了较好平衡。
+\end{spacing}
+\end{zhaiyao}
+
+
+
+\begin{guanjianci}
+数据中心网络；根因定位；告警风暴；PageRank算法；Pingmesh告警；
+\end{guanjianci}
+
+
+
+\begin{abstract}
+    \begin{spacing}{1.5}
+
+
+
+Alarm storms and path uncertainty caused by ECMP routing severely challenge root cause localization in cloud datacenter networks. To address this, we propose a topology-associated event root cause localization framework. Triggered by Pingmesh anomalies, the framework first maps probing endpoints, physical topology, and multi-source alarms into an attributed graph. Next, using expert-defined alarm weights as a preference vector, a Personalized PageRank algorithm executes random walks to compress hundreds of nodes into a Top-10 candidate set. Finally, a Large Language Model (LLM) interprets the alarm semantics within this candidate set to perform root cause verification and explain fault propagation, avoiding direct exposure to chaotic alarms.
+
+Experiments on 104 real-world failure cases from Huawei Cloud show that our method improves Top-3 accuracy from 86.67\% to 92.22\% in conventional cases, and from 35.71\% to 78.57\% in alarm storm cases compared to the best baseline. Ablation studies confirm that removing PageRank pruning or the LLM module leads to severe drops in Top-1 accuracy, proving their complementary roles. Notably, DeepSeek-R1-Distill-Qwen-32B achieves the optimal balance between accuracy and inference latency.
+    \end{spacing}
+    \end{abstract}
+    
+    \begin{keywords}
+    Datacenter network; Root cause localization; Alarm storm; PageRank algorithm; Pingmesh alarm; 
+    \end{keywords}

@@ -1,0 +1,359 @@
+                  
+
+                  Monthly Topic
+
+                
+
+                
+
+                Research on Mobile Network Optimization Based on
+                       Collaboration of Large and Small Models
+
+  100048
+
+Huang JinchaoXie ZhipuLü FeibiDi ZixiangXing ZhenCheng XinzhouChina Unicom Research InstituteBeijing 100048Chi
+na
+
+                      
+
+ 
+
+ 
+
+ doi10.12045/j.issn.1007-3043.2024.09.002
+
+ 1007-3043202409-0007-06
+
+ TN929.5
+
+ A
+
+ OSID
+
+
+Abstract
+
+It proposes an intelligent mobile network optimization method based on the collaboration of large and small models. Firstly
+
+we utilize large language models to process and understand unstructured data such as network logs and external open-
+
+source dataextracting key information. Secondlya knowledge graph is constructedencompassing multidimensional
+
+information such as network equipmentparameter configurationsand expert optimization experienceto analyze the
+
+relationship between network status and optimization requirements. Thenusing specialized tools and models such as deep
+
+learning and graph neural networks for root cause analysisnetwork fault points can be quickly identified. Based on a
+
+knowledge graph database and the problem reasoning capabilities of large modelsthe proposed method can provide specific
+
+solutions to front-line employees. Finallythrough the implementation and validation in real scenariosexperts and front-line
+
+employees evaluate and provide feedback on the proposed solutions. This evaluation and feedback information is continuously
+
+collected and fed back to the previous layersforming a loop of continuous optimization.
+
+Keywords
+
+Mobile network optimizationCollaboration of large and small modelsKnowledge graphGraph neural networkLarge
+
+language model
+
+ . J. 202497-12.
+
+1                     
+                      
+       4G5G           
+                      
+--------------------  
+                      
+2024-07-30
+
+                                                                                         /2024/09 07
+    
+
+Monthly Topic 
+
+                                                              /
+                                                              
+                                                              
+                                                              
+                                                              
+                                                              
+                                                         
+                                                         
+                              
+                    
+                                                    
+                   
+                           
+
+                                                       
+            1-3      Chat                              
+GPT  AI 
+ AI                        
+
+                                                      
+                                                       
+                                                            
+                                                            
+                            
+                                                      KPIPM 
+                                                      /CM 
+                                
+
+2                                    1 
+
+                           
+                           
+4-5                        
+                           
+2                          
+                           
+                           
+                           
+ 4                         
+ 1                         
+
+                           3 
+
+                                 
+                           
+                           
+                           3.1 
+
+                                 
+                           
+                           
+                           
+                           
+                           
+                           KPIPM/CM 
+
+08 2024/09/DTPT
+  
+
+  Monthly Topic
+
+                                                   
+                      9                            
+KPIPM/CM                                        
+                        
+                      
+      
+                        
+
+                        -- --                    -
+ token                                                -
+                        -             -
+                                             -  -
+                                   -                  -
+                      14              -
+                                           -       -
+                       -                            -
+                                      --
+                        -                       -
+                                                      -
+                      
+
+                        --
+3.2 
+                        -             -
+                           -             -
+
+                                      2 
+
+                      
+                      2 
+                      
+                      
+ 3.1                  
+                      
+                      
+                      
+                      
+ 2                     2 
+                      
+                      
+                      3.3 
+
+                            
+ 2  9                 SVMGBDT
+14                    
+                      
+                       GBDT
+                       3 
+                      
+                      
+                      
+                      
+                      
+                      
+                      
+
+                                      /2024/09 09
+    
+
+Monthly Topic 
+
+                                                    
+
+                  3 
+
+                                   ChatGLM          LLaMA
+
+                                   
+      
+                               +     =      
+                       prompt               prompt
+
+                       AI                             
+
+                                                     
+3.4                                                  
+
+                         
+ 3 
+                        
+ 3  4                  MASK
+                        
+       1                MASKMASK
+
+                       
+
+ LLaMA                   Prompts                             Reward
+ChatGLM BaichuanQwen   LM Outputs
+                                                    Reward
+       2                                            Model
+
+                                    4 
+
+                       
+                       
+                       
+ AI                    3.5 
+
+       3                     
+                       
+                                           
+                       
+                       
+                       
+                                           
+                       
+                        5 
+                       /
+
+10 2024/09/DTPT
+                                 
+
+                                 Monthly Topic
+
+                                    PCI  2 
+                                    
+                                    
+ Code                               
+                                                        
+                                     TOP3 
+                                     6 
+                                    
+                                    
+                             
+                                          
+      Code                     OCR  
+                                     4 
+                                                        
+                                    
+                                    
+                                    
+                                     GIS 
+                                    
+       ......                       /
+                                    
+ 5                                  4.2 
+
+4                                         
+                                       XGBoostGCNGraphSAGEGATRGCN  
+                                     XGBoost 
+""                                  GCNGraphSAGEGATRGCN 
+                                    
+                                     Hit@K Hit@K 
+ 2                                   K 
+                                     1 
+4.1                                  1  K=135 
+                                    
+                                    
+ 2 
+                                          
+                                     2
+                                    
+ TraceMRPMCM                         90% 85% 
+                                    
+                                    
+ 3                                  
+                                    2 
+                                    
+                                     5.15 
+ 3 
+ 4 11 
+ 6 
+ 3 
+
+                                    /2024/09 11
+                 
+
+                 Monthly Topic 
+-
+
+                                            
+                                                  
+  
+    
+
+   1/21/0/XXX PRB  50% 
+   >50 GByte1/21/02XXXX PRB  30% 
+   <25 GByte:
+   
+   1
+   2 5G 
+   31721702XXXX
+   
+    
+
+                           6 
+
+   1                                        
+                                            
+                 Hit@1/%  Hit@3/%  Hit@5/%  
+ XGBoost           49.25    72.70    84.08  
+                   52.18    78.52    88.76  
+   GCN             56.04    78.86    89.09
+GraphSage          33.22    61.24    73.83  
+                   60.45    76.76    82.68
+   GAT             70.75    87.03    92.09  1  . AI 
+  RGCN                                             J. 20182414.
+ 
+                                            2  . 
+ 2 %                                                J. 20231661-63.
+
+                                            3  . J.
+                                                    2024525-30.
+           4     5 6 7 8 9
+                                            4  . J. 
+           6.10  2.42 2.14 1.97 1.72 0.95           202147668-73.
+
+           6.64  3.27 2.65 1.72 1.39 1.04   5  . 
+                                                   J. 202123197-99.
+ 10  5.6 
+ 6                                             
+ 6.9                                            
+                                                
+                                                
+5                                               
+                                                
+      
+
+
+
+12 2024/09/DTPT
+

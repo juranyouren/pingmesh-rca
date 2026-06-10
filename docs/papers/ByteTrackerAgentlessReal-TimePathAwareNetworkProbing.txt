@@ -1,0 +1,933 @@
+ByteTracker: An Agentless and Real-time Path-aware Network
+                               Probing System
+
+Shixian Guo1, Kefei Liu1,2, Yulin Lai1, Yangyang Bai1, Ziwei Zhao1, Songlin Liu1, Jianghang Ning1
+ Gen Li1, Jianwei Hu1, Yongbin Dong1, Feng Luo1, Sisi Wen1, Qi Zhang1, Yuan Chen1, Jiale Feng1
+Yang Bai1, Chengcai Yao1, Zhe Liu1, Xin Hu1, Yang Lv1, Zhuo Jiang1, Jiao Zhang2,3, Tao Huang2,3
+
+            1ByteDance China, 2State Key Laboratory of Networking and Switching Technology, BUPT, China
+                                                     3Purple Mountain Laboratories
+
+ABSTRACT                                                                                            1 INTRODUCTION
+
+As the number of data center servers grows into the millions and                                    Many data center network monitoring and diagnostic systems are
+due to the demand for more accurate, rapid and powerful network                                     built on Pingmesh [18], which conducts active probing between
+fault detection and location, the existing Pingmesh-centric moni-                                   servers to measure network RTT and packet drop rate. Based on
+toring and diagnostic system is not efficient enough. In this paper,                                these metrics, operators can detect network anomalies and locate
+we propose ByteTracker, the first agentless probing and diagnostic                                  failed devices. However, we identified several limitations of the
+system for large-scale data center networks. It does not need to de-                                Pingmesh-centric system during long-term deployment.
+ploy probe processes or make any configurations on end hosts, and
+all probes are launched by a small number of centralized Probers.                                      Firstly, Pingmesh consistently experiences a high probe timeout
+ByteTracker achieves accurate, real-time probe path tracking with                                   rate due to end-host probe noise. For example, a high CPU load
+packet mirroring on switches. By reducing end-host probe noise,                                     on the target server can result in timeout responses. This makes it
+precisely identifying network timeout probes, accurately tracking                                   necessary to increase the timeout alarm threshold to avoid frequent
+probe paths, and marking the failed switch with multiple network                                    false alarms. However, some switches can suffer from subtle packet
+timeout probes, ByteTracker can locate network failures with nearly                                 drops due to failed switching chips, resulting in a probe timeout rate
+100% accuracy. We have deployed ByteTracker in all of our data cen-                                 of less than 0.01%. Such a low timeout rate can easily be drowned
+ters for over half a year. During deployment, ByteTracker can detect                                out by probe noise and can hardly be noticed.
+almost all network anomalies and locate them within 5 seconds
+with 100% accuracy.                                                                                    Secondly, in fault location, Pingmesh-centric systems collect
+                                                                                                    anomalous probe 5-tuples and typically use Traceroute or INT
+CCS CONCEPTS                                                                                        (Inband Network Telemetry) to track their paths for faulty device
+                                                                                                    voting [2, 7, 10, 22]. However, this method can take several minutes,
+· Networks  Data center networks; Network measurement;                                              which is unacceptable for fault-sensitive services such as distributed
+Network monitoring; Error detection and error correction.                                           training [14, 23, 25, 32]. Furthermore, frequent route changes and
+                                                                                                    the use of packet-level or flowlet-level network load balancing
+KEYWORDS                                                                                            [5, 30] can cause inaccurate path tracking. In addition, Pingmesh
+                                                                                                    cannot determine whether timeout probes are caused by end hosts
+Network Diagnosis, Agentless Probing, Real-time Path Tracking.                                      or networks. As a result, host timeout probes can interfere with
+                                                                                                    network timeout probes, leading to incorrect network fault location.
+ACM Reference Format:
+Shixian Guo1, Kefei Liu1,2, Yulin Lai1, Yangyang Bai1, Ziwei Zhao1, Songlin                            Thirdly, Pingmesh cannot detect or locate bit flipping. In our
+Liu1, Jianghang Ning1, Gen Li1, Jianwei Hu1, Yongbin Dong1, Feng Luo1, Sisi                         data centers, we have encountered extreme cases where the corrupt
+Wen1, Qi Zhang1, Yuan Chen1, Jiale Feng1, Yang Bai1, Chengcai Yao1, Zhe                             packet payload passes all packet checks and reaches the target process,
+Liu1, Xin Hu1, Yang Lv1, Zhuo Jiang1, Jiao Zhang2,3, Tao Huang2,3. 2025.                            causing the service application to crash. Although these cases are
+ByteTracker: An Agentless and Real-time Path-aware Network Probing                                  rare, when they occur, operators need to spend hours or even days
+System. In ACM SIGCOMM 2025 Conference (SIGCOMM '25), September                                     locating the anomalous network device.
+8­11, 2025, Coimbra, Portugal. ACM, New York, NY, USA, 13 pages. https:
+//doi.org/10.1145/3718958.3750515                                                                      Finally, Pingmesh relies on distributed agents for probing, which
+                                                                                                    are user-space applications running on each server. As the number
+*The first two authors contributed equally to this paper. This work was done during                 of data center servers grows into the millions, ensuring the proper
+Kefei Liu's internship at ByteDance China. Zhuo Jiang is the corresponding author.                  operation of each agent and conducting agent updates becomes
+                                                                                                    increasingly difficult. Moreover, when agent bugs lead to risks, such
+Permission to make digital or hard copies of all or part of this work for personal or               as an abnormally high probe frequency, it's hard to quickly shut
+classroom use is granted without fee provided that copies are not made or distributed               down all agents in a large data center with millions of servers.
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the                     To solve the limitations above, we propose ByteTracker, the first
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or              agentless probing and diagnostic system for large-scale data center
+republish, to post on servers or to redistribute to lists, requires prior specific permission       networks. It does not need to deploy probe agents or make any
+and/or a fee. Request permissions from permissions@acm.org.                                         configurations on end hosts, and all probes are launched by a small
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                number of centralized Probers. Therefore, it is easy to deploy with
+© 2025 Copyright held by the owner/author(s). Publication rights licensed to ACM.                   low overhead. If a bug occurs in the ByteTracker system, operators
+ACM ISBN 979-8-4007-1524-2/25/09
+https://doi.org/10.1145/3718958.3750515
+
+                                                                                               541
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                    Guo et al.
+
+can simply shut down all the Probers to ensure the network's safety         Timeout Rate (%)  2     Timeout Rate
+and stability. The Prober uses TCP SYN packets with an invalid
+destination port as probes, and the response is automatically done                                  Timeout Alarm Threshold
+by the target server kernel, which has high process priority and
+can greatly reduce probe noise caused by the end host.                                        1
+
+   There are two types of probing traffic in ByteTracker: (1) North-                          0  0  12            24                36  48
+South probing: The probe packet travels from the high-tier Prober
+to the low-tier server and bounces back. (2) East-West probing:                                                   Timestamp (hour)
+the low-tier top-of-rack (ToR) switch probes the target server via
+the high-tier multi-chip switches, which is also launched by the            Figure 1: The probe timeout rate measured by Pingmesh in one of our data
+Prober sending IP-in-IP [6, 35, 36] encapsulated SYN packets. This          centers. Probe noise (> 0.01%) occurs all the time, and makes it necessary to
+combination ensures that ByteTracker can effectively detect almost          raise the alarm threshold to reduce false alarms. However, probe noise can
+all network problems with minimal overhead.                                 easily drown out subtle packet drops.
+
+   By mirroring probe packets on switches to the Analyzer with              such as Traceroute and INT, to determine the path of anomalous
+ERSPAN (Encapsulated Remote Switched Port Analyzer) [13], Byte-             probes, and use a voting algorithm [2, 7, 10, 22] for fault location.
+Tracker can accurately track their network paths in real time. And
+by comparing the contents of probe packets hop by hop, the Ana-                Pingmesh can effectively detect various network anomalies. When
+lyzer can detect bit flipping and immediately determine where the           network anomalies occur, Pingmesh can usually detect abnormal
+packets were modified. ByteTracker can accurately classify host and         metrics, such as increased latency and packet drop rate. This is
+network timeout probes by sending concurrent probe packets to the           because the hierarchical full-mesh probing and the random probe 5-
+probe target. In addition, by marking the anomalous switch with             tuples ensure that Pingmesh probes can cover all network links and
+multiple network timeout probes, ByteTracker can achieve nearly             routing rules. In addition, with active probing, Pingmesh can detect
+100% accuracy in network fault location.                                    anomalies before services run, thereby reducing the likelihood of
+                                                                            services being affected by network problems. This is why we insist
+   ByteTracker's low deployment and system overhead allows us               on using active probing for network monitoring and diagnosis.
+to deploy it in all our data centers, totaling millions of servers,
+within only one year. During the six-month deployment, Byte-                   However, during long-term deployment, we identified several
+Tracker can detect almost all network anomalies and locate them             issues with the Pingmesh-centric monitoring and diagnostic sys-
+within 5 seconds with 100% accuracy. In summary, this paper makes           tem. §2.2 will present three critical demands in fault detection and
+the following contributions:                                                location that Pingmesh cannot effectively satisfy. This makes us
+                                                                            realize that network probing systems need to be more accurate,
+· We propose the first agentless probing scheme for large-scale data        rapid and powerful in detecting and locating network faults. §2.3
+  center networks. It achieves accurate, real-time path tracking and        will summarize the limitations of the Pingmesh-centric system.
+  is easy to deploy with low overhead.                                      These limitations explain Pingmesh's poor performance in §2.2
+                                                                            and also explain why we cannot improve Pingmesh, but must design
+· We propose an efficient method that can (1) reduce end-host               and deploy a new network probing and diagnostic system. §2.4 will
+  probe noise; (2) identify host and network timeout probes; and            summarize the targets of an ideal network probing system.
+  (3) achieve near 100% network fault location accuracy.
+                                                                            2.2 Higher Demand for Probing Systems
+· We share our experience of switch forwarding and propose the
+  combination of North-South and East-West probing to effectively           Demand-1: Detect and locate subtle switch packet drops. For
+  cover almost all network problems with low overhead.                      a probing system in a large-scale data center, timeout probes occur
+                                                                            all the time. These timeout probes can be caused by failures, such
+· We share our experience of quickly verifying and deploying                as packet drops due to link flapping, or by probe noise, such as a
+  ByteTracker in all our data centers, including legacy clusters that       target server response timeout due to CPU overload. Unfortunately,
+  do not support ERSPAN.                                                    as shown in Figure 1, probe noise is much more common than failures
+                                                                            and often appears as "background noise" in the probing system. The
+· We present some novel network anomalies that occurred in our              presence of probe noise makes it necessary to increase the timeout
+  data centers, including subtle packet drops, silent bit flipping,         alarm threshold to avoid frequent false alarms. Indeed, appropriate
+  large packet drops, forwarding anomalies in multi-chip switches,          thresholds can usually filter out probe noise and accurately detect
+  and one-way packet drops.                                                 anomalies, since network failures often trigger much higher timeout
+                                                                            rates than probe noise, as shown in Figure 1.
+2 BACKGROUND AND MOTIVATION
+2.1 Network Probing Systems in Production                                      However, not all network failures result in high timeout rates.
+                                                                            Some high-tier switches can experience subtle packet drops due
+Many monitoring and diagnostic systems for data center networks             to a failed switching chip, resulting in a probe timeout rate of less
+are built on Pingmesh [18]. Pingmesh conducts active probing be-            than 0.01% in Pingmesh. These packet drops trigger the retransmis-
+tween hosts to monitor network SLAs (Service Level Agreements)              sion of service flows, resulting in increased latency and reduced
+such as RTT and packet drop rate. Based on these metrics, our net-          throughput. As these switches are at a high network tier, many
+work operators have developed an alert system for high packet drop          services will be affected. Unfortunately, such a low packet drop rate
+rates and tail RTT. Furthermore, we use path tracking techniques,           can easily be drowned out by probe noise, and can hardly be noticed
+                                                                            until service groups complain of degraded network performance.
+
+                                                                       542
+ByteTracker: An Agentless and Real-time Path-aware Network Probing System                             SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+In addition, when using the paths of timeout probes for network                 Timeout Rate (%)  15  Pingmesh Probe Timeout Rate
+troubleshooting, probe noise can interfere with real packet drops,
+leading to incorrect fault location.                                                              10
+Demand-2: Track probe paths quickly and accurately. Pingmesh-
+centric systems typically use Traceroute or INT to track the path of                              5
+anomalous probes for fault location. However, this method has two
+drawbacks: (1) Poor timeliness. Collecting anomalous probes and                                   80:00 16:00 0:00 8:00 16:00 0:00 8:00 16:00 0:00 8:00
+replaying them to determine their paths for fault location can take                                                                Time (hour:minute)
+several minutes, which is unacceptable for fault-sensitive services
+such as distributed training. (2) Low accuracy. If the fault results            Figure 2: One of our clusters is used by two different service groups periodically
+in route changes, the replayed probes may take different paths.                 (00:00-18:00 and 18:00-24:00 daily). Each time before switching, the hosts reboot
+In addition, when using packet-level or flowlet-level load balanc-              for reconfiguration, resulting in a large number of probe noises in Pingmesh.
+ing schemes such as DLB (Dynamic Load Balancing) [5] and AR
+(Adaptive Routing) [30], it is difficult to guarantee that the replayed         drops is due to the fact that timeout probes contain a lot of noise, and
+probe can take the same path. An effective solution to improve                  Pingmesh cannot tell whether timeout probes are caused by end hosts
+the timeliness and accuracy of path tracking under flow-level load              or networks. Network timeout probes are usually triggered by switch
+balancing (e.g. ECMP) is to use a fixed set of probe 5-tuples, and              and link failures, such as flapping links and packet corruption. For
+periodically track and store their paths, so that the probe paths               host timeout probes, some are caused by network failures, such
+can be read directly in fault location. However, network failures or            as NIC flapping and routing misconfigurations. Others are caused
+device isolation can result in route changes, and the probe paths               by complicated non-network problems, such as host crashes, host
+may not be updated in time.                                                     reboots and CPU overload due to services.
+Demand-3: Locate silent bit flipping in transmission. Device
+failures can cause one or more bits to flip in a packet during trans-              One insight is that network timeout probes are typically caused by
+mission. To uncover corrupt packets, data center networks check                 network failures and should be quickly detected and located. In con-
+packet contents both hop-by-hop, such as CRC (Cyclic Redundancy                 trast, host timeout probes are complicated. While some are caused
+Check), and end-to-end, such as TCP checksum. And most corrupt                  by network problems, others may be noise, such as that caused
+packets can be detected and dropped. However, we have encoun-                   by active host reboots, as shown in Figure 2. The probing system
+tered extreme cases where the corrupt packet payload can pass all               should be able to reduce probe noise on end hosts and distinguish
+the checks and reach the target process, causing the service to crash.          between network and host timeout probes so that network timeout
+Even worse, there are no metrics on the switch or NIC to indicate               probes can be used to accurately detect and locate network failures.
+packet corruption. While these cases are rare, when they occur,                 Ignorant of probe paths. Pingmesh is inherently ignorant of
+operators need to spend hours or even days locating the anomalous               probe paths and needs to track them additionally via Traceroute or
+network device. Unfortunately, existing probing systems cannot                  INT, resulting in poor timeliness and accuracy of path tracking. An
+detect bit flipping, let alone locate anomalous switches.                       ideal solution is to use packet mirroring techniques on switches,
+                                                                                such as ERSPAN, to copy packets that match specific rules and send
+2.3 Limitations of Existing Systems                                             these copies to a remote server for analysis. Packet mirroring is
+                                                                                now a standard technique supported by most data center switches.
+Relying on agents. Pingmesh relies on distributed agents for prob-              By mirroring probe packets on each data center switch, we can
+ing, which are user-space applications running on each data center              determine in real time which switches these probes are passing
+server. However, this approach becomes inefficient as the number of             through. Packet mirroring can also accurately track probe paths
+servers increases. Firstly, the probe agent needs to be adapted to all          when the network route changes or under packet/flowlet-level load
+the servers in the data center, which may have different operating              balancing. Furthermore, by comparing the contents of probes hop
+systems, configurations, and NIC counts. As the number of servers               by hop, we can detect corrupt packets and immediately determine
+grows, it becomes increasingly difficult to ensure that the agent               where they were modified.
+can adapt to each one and run properly. Secondly, when agents
+need to be upgraded, it must be completed on all servers in the data               However, packet mirroring cannot be applied to the Pingmesh
+center, which is not an easy task as the number of servers in the               system because of its reliance on end-host probe agents. If bugs in
+data center grows into the millions. In addition, it is risky to probe          the agents cause an abnormally high probe frequency, then a large
+based on agents in a large data center. If some bugs in the agents              number of probe packets will be mirrored. This would place a
+cause an abnormally high probing frequency, a huge number of                    heavy load on the switches, and in severe cases could cause them
+probe packets will flood the data center network, resulting in severe           to fail. As it is difficult to quickly suspend all probe agents in a
+performance degradation of service networks. When this happens,                 large data center with millions of servers, this risk is unacceptable.
+it is crucial to quickly suspend the probing of all agents, which is            Therefore, to achieve accurate, real-time probe path tracking, we
+very difficult in a large data center with millions of servers.                 need to design and deploy a new probing and diagnostic system.
+High probe noise and inability to distinguish timeout probes.
+Pingmesh's poor accuracy in detecting and locating subtle packet                2.4 Targets for Network Probing Systems
+
+                                                                                In summary, to solve the limitations above, the new data center
+                                                                                network probing and diagnostic system should have the follow-
+                                                                                ing capabilities to meet current and future requirements for fault
+                                                                                detection and location.
+
+                                                                           543
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                                     Guo et al.
+
+· Agentless: There is no need to deploy probe agents on end                  Figure 3: The internal structure of a multi-chip switch. It has multiple line
+  hosts, thereby eliminating the overhead of agent deployment and            cards, and each card has multiple switching chips connected by the switching
+  updates, as well as the risk of agent failure.                             fabric. Switching between some ports occurs on one chip, while switching
+                                                                             between others must traverse the switching fabric.
+· Highly controllable: Each probe can be precisely controlled
+  to prevent overloading network devices with excessive probing              ToR-mesh probing is to reduce its probe interval to 1 millisecond.
+  or mirroring traffic. If any risks arise, probing and path tracking        However, this will result in a significant probe overhead.
+  can be stopped quickly to ensure network stability.
+                                                                                In summary, timeout classification based on the system's own
+· Low probe noise and probe timeout identifiable: It can re-                 probe data does not require additional metrics or events and thereby
+  duce probe noise caused by end hosts and determine whether                 has a lower overhead. However, ToR-mesh probing relies on probe
+  timeout probes are caused by hosts or networks so that network             results from multiple NICs and is difficult to achieve 1-millisecond
+  failures can be accurately detected and located.                           accuracy. It is necessary to find a method to identify host timeout
+                                                                             probes that relies on less probe data and has higher accuracy.
+· Accurate and real-time path tracking: It can accurately track
+  probe paths in real time so that network faults can be located             3.2 Effectively Cover Network Problems
+  quickly and precisely.
+                                                                             In this section, we will share two interesting experiences of switch
+· Low overhead and easy to deploy: It should have low over-                  forwarding that we gained during the deployment of Pingmesh.
+  head in terms of deployment, probe task generation, bandwidth              These experiences directly guided the design of ByteTracker. The
+  consumption, and host resource usage.                                      first is the difference in forwarding between single-chip and multi-
+                                                                             chip switches, which led to the combination of North-South and
+3 BYTETRACKER OVERVIEW                                                       East-West probing in ByteTracker. The second is the difference in
+                                                                             forwarding between large and small packets in switches, which led
+This section focuses on the framework of ByteTracker (§3.3). In              to the use of large packets as probes in ByteTracker.
+order to better understand the design philosophy, we first discuss
+two key issues that needed to be resolved during the design of                  In a data center, low-tier switches have fewer ports and typically
+ByteTracker. The first issue is how to accurately determine whether          have only one switching chip to connect all the ports for forwarding.
+timeout probes are caused by hosts or networks (§3.1). The second            Therefore, for single-chip switches, it is sufficient to guarantee that the
+issue is how to effectively cover network problems (§3.2).                   probes can cover all the switch ports. In contrast, high-tier switches
+                                                                             have more ports and typically require multiple switching chips
+3.1 Classify Host and Network Timeout Probes                                 to connect them. As shown in Figure 3, in a multi-chip switch,
+                                                                             forwarding between some ports occurs on one switching chip,
+One way to distinguish timeout probes is to collect additional moni-         while forwarding between others is inter-chip and must traverse
+toring metrics or events for assistance. For example, before an active       the switching fabric. As a result, both intra-chip and inter-chip
+host reboot, a notification will be posted on the event platform; for        forwarding can fail. Therefore, for multi-chip switches, probe packets
+probe drops caused by target NIC down, the monitoring of the tar-            must cover not only all ports, but also forwarding within each chip
+get NIC status will show an anomaly; for timeout responses caused            and between different chips.
+by CPU overload, the target host's CPU utilization will increase. By
+collecting these events and metrics, we can determine whether the               In addition, the switch forwards packets based on cells, which
+timeout probe is caused by the host. However, this method requires           can vary with different switching chips, but are typically no larger
+to collect a lot of additional information, which severely increases         than 256 bytes. The switch will split packets larger than one cell
+the system overhead. Moreover, this method cannot guarantee accu-            into multiple cells for forwarding, and then reassemble these pieces
+racy. For example, there is no notification for sudden host crashes;         before sending them out. In contrast, packets smaller than one cell
+NIC status may not be reported in real time; and millisecond-level           are forwarded directly. Therefore, to ensure that the probes can
+CPU overloads may not result in a noticeable increase in average             effectively detect anomalies in all switches' packet splitting and
+CPU utilization.                                                             reassembly processes, the probe packet size should be large enough
+                                                                             to trigger packet splitting on all switches in the data center.
+   Another way is to use the system's own probe data for assistance.
+For example, R-Pingmesh [25] uses probe results between all NICs                In summary, to effectively detect network problems in data cen-
+under the same ToR switch (ToR-mesh probing) to mark the NIC                 ters, ByteTracker's probe packets must cover not only all switch
+status. If multiple NICs under a ToR switch detect timeout probes            ports and network links, but also all forwarding rules in multi-
+to the same target NIC at the same time, that target NIC may be              chip switches. In addition, its probes should be large enough to
+failed. For a period of time, all timeout probes associated with that        trigger packet splitting on all the switches in the data center.
+NIC will be identified as host timeout probes. However, we found
+that ToR-mesh is not accurate enough during deployment. Firstly,
+its accuracy depends on the number of NICs connected to the ToR
+switch. If there are only a small number of NICs under a ToR switch,
+ToR-mesh is inaccurate. In addition, the probe interval of ToR-
+mesh is 100 millisecond, making it difficult to identify host timeout
+probes at 1 millisecond level. One idea to improve the accuracy of
+
+                                                                        544
+ByteTracker: An Agentless and Real-time Path-aware Network Probing System                                                    SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+3.3 ByteTracker Framework                                                                   Figure 4: ByteTracker framework. ByteTracker is agentless and uses a small
+                                                                                            number of centralized Probers to launch all the probes. It mirrors all probe
+Figure 4 shows the framework of ByteTracker. Its core workflow is                           and response packets on switches to precisely track their paths in real time.
+that  a server is connected to each DCI (Data Center Interconnect)
+switch1 as a Prober to generate probe tasks and launch all probes;                          accurate probe path tracking, and marking the failed switch with
+and  each data center switch uses ERSPAN to mirror all passed                               multiple network timeout probes, ByteTracker can achieve nearly
+probe and response packets to a remote analysis server (Analyzer)                           100% accuracy in network fault location.
+for probe path tracking, fault detection and location.
+                                                                                            4 DESIGN AND IMPLEMENTATION
+   ByteTracker does not need to deploy probe agents on end
+hosts. The Prober uses a TCP connection request (SYN packet)                                This section will first introduce the probe data plane, including
+with an invalid destination port as the probe packet. After the target                      (§4.1.1) probing without end-host agents and packet mirroring with
+server receives the probe, its kernel responds with a TCP RST                               ERSPAN; (§4.1.2) the data plane implementation of North-South
+packet to reject the invalid connection request. This response is                           and East-West probing; and (§4.1.3) how to distinguish between
+supported by the OS kernel, so there is no need to run a response                           host and network timeout probes with concurrent probing. Then
+process on the end host. Therefore, ByteTracker has low deployment                          §4.2 will introduce the generation of probe tasks to effectively cover
+and upgrade overheads. And the kernel-based response effectively                            network problems with minimal overhead. Finally, §4.3 will show
+reduces probe noise on the end host. In addition, since each probe                          how to achieve near 100% accuracy in network fault location.
+is initiated by only a small number of centralized Probers, fine-
+grained probe control is ensured. If a bug occurs in the ByteTracker                        4.1 Probe Data Plane
+system, operators can simply close all the Probers to stop all probe
+and mirror traffic to ensure network safety and stability.                                  4.1.1 Agentless Probing and Packet Mirroring.
+                                                                                            An effective way to achieve agentless probing and reduce probe
+   ByteTracker has two types of probing: North-South prob-                                  noise on the end host is to leverage the automatic response mech-
+ing and East-West probing. As shown in Figure 5, in North-South                             anism in the OS kernel. We considered two widely supported re-
+probing, the Prober sends a TCP SYN packet to the server. After                             sponse mechanisms in the OS kernel: (1) responses to invalid TCP
+receiving the SYN packet, the server responds to the Prober with                            connection requests (SYN packets), and (2) responses to ICMP echo
+a TCP RST packet. The probe packet traverses from the high-tier                             requests (Ping packets). By sending these two types of packets to
+Prober to the low-tier server and bounces back, hence the name                              the target server, the Prober can receive an automatic response
+North-South probing2. In East-West probing, the Prober sends a                              without the need to run a user-space response process on the tar-
+TCP SYN packet within IP-in-IP encapsulation. The outer IP points                           get server. In addition, the kernel process has a higher processing
+to a specific ToR switch, while the inner IP points to the target                           priority than the user-space process. Therefore, the kernel-based
+server. After receiving the IP-in-IP packet, the ToR switch unpacks                         response can effectively reduce the process delay on the target
+the outer encapsulation and sends the SYN packet to the target                              server, thereby reducing end-host probe noise.
+server through high-tier multi-chip switches. Upon receipt of the
+SYN packet, the target server responds to the Prober with a TCP                                We compared the two response mechanisms. In terms of over-
+RST packet. The core of this process is the ToR switch probing                              head, both mechanisms consume very few resources on the target
+the target server, mimicking host-to-host probing, hence the name                           server. And ICMP responses have even lower CPU consumption
+East-West probing. North-South probes can effectively cover all                             because for each ICMP probe received, the kernel can simply invert
+network links and switch ports with a simple probing method, and                            the source and destination IP addresses to construct the response
+can detect and locate most network problems. East-West probes                               packet. However, in terms of network coverage, ICMP packets lack
+complement North-South probes to ensure that all forwarding rules                           the port number field, whereas TCP packets contain complete 5-
+in the multi-chip switches are covered.                                                     tuples. Therefore, TCP probes can provide better network coverage
+                                                                                            under 5-tuple-based load balancing, such as ECMP, by modifying
+   For each probe target, the Prober sends multiple probes in                               the source port number. Consequently, we chose to use TCP SYN
+parallel and judges whether the timeout is caused by the host                               and RST packets for probing.
+or the network based on the number of timeout probes. In this
+way, ByteTracker can identify end-host timeout probes lasting only
+a few milliseconds with low overhead and no need for additional
+metrics, events or probe data. In addition, the Analyzer will check
+the paths of network timeout probes to further filter misclassified
+host timeout probes. In fault location, the Analyzer marks the failed
+switch with the paths of network timeout probes. And by comparing
+the contents of probe packets hop by hop, the Analyzer can detect
+bit flipping and immediately locate the abnormal switch. With low
+end-host probe noise, precise identification of network timeout probes,
+
+1
+
+ Each of our data centers has multiple DCI switches, which are interconnected via a
+control plane switch. We deploy a Prober under the control plane switch in each data
+center. In this way, the Prober can connect to all the DCI switches in a data center.
+2North-South probing also involves probing between different Probers to cover all
+ports in the DCI switch, as well as the inter-DC connections.
+
+                                                                                       545
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                       Guo et al.
+
+Figure 5: ByteTracker has two types of probing flows. North-South probing is primary and responsible for covering all switch ports and links. East-West probing is
+auxiliary to ensure that all forwarding rules in high-tier multi-chip switches are covered.
+
+   The SYN probe payload size in ByteTracker is 512 bytes to ensure        IP as itself, destination IP as the target server, and an invalid desti-
+effective detection of anomalies in all switches' packet splitting         nation port into an IP-in-IP packet. The destination IP address of
+and reassembly processes (the cell size in data center switches is         the outer encapsulation points to a ToR switch that enables IP-in-IP
+typically no larger than 256 bytes). Note that the kernel network          forwarding.  When this packet arrives at the ToR switch, it strips
+stack cannot generate SYN packets with a payload by default. The           the outer encapsulation and sends the internal SYN packet to the
+Prober uses the raw socket APIs to send SYN probes with a payload          target server via high-level multi-chip switches.  Upon receiving
+in batches. The SYN packet has an invalid destination port, which is       the SYN packet, the destination server will send a RST packet to the
+fixed and pre-reserved on all servers to prevent any service process       source IP of the SYN packet (i.e. the Prober). If the Prober captures
+from using it. RST packets are automatically generated by the target       the RST packet within the timeout threshold, this probe is marked
+server kernel and have no payload. When they return, the Prober            as successful; otherwise, it is marked as a timeout.
+uses libpcap [1] to capture them. The DSCP (Differentiated Services
+Code Point) value in ByteTracker's probe and response packets is a         4.1.3 Identify Host and Network Timeout Probes.
+specific number that will not be used by any services. The ERSPAN          As shown in Figure 6, for each target, the Prober sends a group of
+feature on the switch identifies and mirrors these packets based on        probes in parallel and uses the number of timeout probes to deter-
+their DSCP value. These mirrored packets are transmitted in the            mine the timeout location. These probes use different source ports
+management network to reduce bandwidth consumption and the                 to be hashed onto different paths. Typically, traffic is distributed
+probability of packet drops.                                               evenly across network links, meaning that concurrent probes on
+                                                                           parallel paths can reach the target server at almost the same time.
+4.1.2 Probe in Two Directions.                                             As a result, host anomalies will usually cause most probes in the
+North-South probing. Figure 5 (a) shows the workflow for each              group to time out. On the other hand, if most probes in a group time
+North-South probe.  The Prober sends a TCP SYN packet with                 out, then this is most likely caused by the host, since it is very rare
+an invalid destination port to a target server in the data center.         for multiple parallel paths to drop packets at the same time.3 There-
+After the server receives the SYN packet, its kernel will respond          fore, if only a small number of probes in a group experience timeout,
+to the Prober with a RST packet. If the Prober captures the RST            the Prober infers that the cause is in the network, otherwise the
+packet within the timeout threshold, it calculates the network RTT;        Prober infers that the cause is in the host.
+otherwise, it marks this probe as a timeout. North-South probing
+targets include all NICs in the data center where the Prober is               During deployment, the Prober sends 3 probes in parallel for each
+located, as well as all Probers in other data centers. In addition,        probe target. If 1 or 2 probes experience a timeout, the Prober judges
+each probe selects a random source port. This ensures that North-          this to be network-related; if all 3 probes experience a timeout, the
+South probes can effectively cover all devices, switch ports and           Prober judges this to be host-related. The reason for choosing 3
+links, thereby detecting most network failures in the data center.         as the threshold is that there is still a low probability of 2 parallel
+                                                                           paths failing at the same time, whereas 3 or more parallel paths
+East-West probing. East-West probing aims to supplement North-             failing at the same time is almost impossible. Therefore, by sending
+South probing to ensure full coverage of the multi-chip switches'          3 probes in parallel, the Prober can efficiently distinguish between
+forwarding rules. In North-South probing, the vertical probes can          host and network timeout probes with minimal probe overhead. In this
+cover the cross-tier forwarding rules of all multi-chip switches. To       way, the Prober can classify timeout probes based on probe data
+further cover their intra-tier forwarding rules, East-West probing         to a single target without relying on additional metrics, events or
+requires probes to be sent from a tier below the multi-chip switches       probe results. In addition, this approach can accurately identify host
+and forwarded by them within the same tier. However, as the Prober         timeout probes at the millisecond level without frequent probing.
+is located in the highest tier of the data center network, it cannot
+directly achieve this goal. To solve this problem, ByteTracker uses        3An exception occurs when a ToR switch's downstream port or link fails, which can
+the IP-in-IP technique. Figure 5 (b) shows the East-West probing           also cause most probes in a group to be dropped. However, these failures can easily
+process.  The Prober encapsulates a SYN packet with the source             be detected via NIC status monitoring. Therefore, ByteTracker still classifies these
+                                                                           timeout probes as host-related and focuses on the remaining network timeout probes.
+
+                                                                      546
+ByteTracker: An Agentless and Real-time Path-aware Network Probing System                                        SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+Figure 6: For each target, the Prober sends multiple probes in parallel and       Algorithm 1 Locate Network Packet Drops
+classifies host and network timeouts based on the number of timeout probes.
+                                                                                  Input:       ,    
+4.2 Probe Task Generation
+                                                                                  Output:  
+The pinglist generator is located in each Prober to generate this
+Prober's North-South and East-West pinglists. The North-South                     1: function LocateAbnormalSwitches()
+pinglist simply includes all NICs in the data center where the Prober             2: _   ( )
+is located, as well as all Probers in other data centers. To ensure
+fine-grained coverage of network links, the Prober probes all targets             3: if _. = 1 then
+in the North-South pinglist around once per second. As the Prober
+sends 3 probes in parallel for each target, each NIC receives an                  4:        return _
+average of 3 North-South probes per second.
+                                                                                  5: else if _. > 1 then
+   As North-South probing has covered all vertical forwarding in
+multi-chip switches, East-West probing only needs to cover their                  6:        if   __. _ drops > 10% then
+horizontal forwarding. As shown in Figure 5 (b), our data centers
+use single-chip switches within pods and multi-chip switches to                   7:            return   __ with >10%  _ drop
+connect different pods. Therefore, East-West probing only needs
+to construct cross-pod probes within the data center. Cross-pod                   8:        else
+forwarding is based on the subnet address of the pod, which is
+matched to all NICs in the pod. Therefore, flows between the same                 9:            return _
+pair of pods trigger the same forwarding rule on a cross-pod switch.
+Based on this principle, East-West probing only needs to enable IP-               10: function MarkSwitches()
+in-IP on one ToR switch in each pod to probe all the other pods in the
+data center. And for each probe to a target pod, only one random                  11:  for            in  paths  of  all  network  timeout  probes  do
+NIC needs to be selected as the target.
+                                                                                                    
+   Since there are at most a dozen pods in our one data center,
+this method has little IP-in-IP deployment overhead. The Prober                   12:        . __._ + +
+probes each pod pair in the data center every second, and for each                                
+target, the Prober still sends 3 probes in parallel to identify host
+and network timeout probes. As the probe target for each pod                      13:       if   . __._                                             >=  5  then
+pair is randomly selected from a large number of NICs within the
+target pod, the number of East-West probes received by each NIC is                                      
+much lower than the number of North-South probes. The random
+selection of target IP and source port ensures that the East-West                 14:            . __.  
+probes can cover horizontal forwarding in all multi-chip switches.                                    
+
+   Host-to-host probing systems typically require deploying a probe               15: return   
+agent on all servers, carefully designing pinglists for each agent
+based on the network topology to effectively cover network issues,                4.3 Probe Analysis and Fault Localization
+and periodically updating the pinglist for each agent. In contrast,
+ByteTracker only needs to deploy a small number of Probers and                    4.3.1 Accurately Locate Network Packet Drops.
+enable IP-in-IP on a few ToR switches. Pinglist generation in Byte-               The Analyzer periodically collects network timeout probes reported
+Tracker is very simple and there is no need to distribute pinglists.              by the Prober and uses the location where these probes were last
+In summary, ByteTracker achieves effective coverage of network                    mirrored to locate packet drops. However, it is still possible for
+problems with low deployment and system overhead.                                 the Prober to misidentify host timeout probes as network timeout
+
+                                                                                  probes. For example, in rare cases, only 1 or 2 probes in a group
+
+                                                                                  may experience a host timeout, while the others complete success-
+
+                                                                                  fully. To further eliminate the interference of these host timeout
+
+                                                                                  probes on packet drop location, the Analyzer checks the paths of
+
+                                                                                  all network timeout probes. For these probes, if the ToR switch of
+
+                                                                                  the destination NIC successfully captures the SYN packet while no
+
+                                                                                  switch captures the corresponding RST packet, the Analyzer will
+
+                                                                                  determine that these timeout probes are caused by hosts. After this
+
+                                                                                  step, the Analyzer can get almost pure network timeout probes.
+
+                                                                                     Suppose that part of the path taken by the SYN/RST packet is tier-
+                                                                                  A switches  switch B1 in tier-B switches tier-C switches. For
+                                                                                  simplicity, we only consider unidirectional network traffic. Figure
+
+                                                                                  7 (a) shows the normal forwarding and mirroring process of the
+                                                                                  SYN/RST packet in this scenario.  The packets from the tier-A
+                                                                                  switches arrive at switch B1 and are mirrored to the Analyzer. 
+                                                                                  Switch B1 then forwards them to the tier-C switches.  the packets
+                                                                                  sent by switch B1 arrive at the tier-C switches and are mirrored
+
+                                                                                  to the Analyzer. Assume that switch B1 is dropping packets, the
+                                                                                  anomaly could appear in step  or both steps  and .
+
+                                                                                     Note that ERSPAN mirrors packets before the switch forwards
+                                                                                  them. Therefore, for probe packet drops in the forwarding process
+                                                                                  (step ), the switch can still mirror them before dropping. And as
+                                                                                  shown in Figure 7 (b), it's a fact that most probe packet drops in
+                                                                                  our data center behave as an anomaly in step , such as silent
+                                                                                  packet drops and packet drops due to egress port flapping. Packet
+
+                                                                                  drop location is straightforward in this scenario: the Analyzer can
+                                                                                  easily identify the anomalous switch (B1) by checking where the
+                                                                                  network timeout probes were last captured. This simple fault location
+                                                                                  logic is due to the collection of (1) pure network timeout probes
+
+                                                                                  via concurrent probing and further checking the paths of network
+
+                                                                                  timeout probes, and (2) accurate probe paths captured by ERSPAN.
+                                                                                  However, this is based on the assumption that the switch can always
+                                                                                  normally mirror probe packets to the Analyzer.
+
+                                                                                     Actually, the ERSPAN system is sometimes unreliable, and the
+
+                                                                                  mirrored packets may be dropped, leading to an incorrect drop
+
+                                                                             547
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                          Guo et al.
+
+Figure 7: Locate network packet drops in the Analyzer. (a) The normal forwarding and mirroring process of probe packets. (b) In most cases, switches can mirror
+probe packets before dropping them. (c) In rare cases, a failed switching chip not only drops probe packets during forwarding, but also fails to mirror them.
+
+location. For example, if a host drops only one SYN probe in a group,         5 BYTETRACKER DEPLOYMENT
+and its last mirrored packet at the ToR switch is unfortunately
+dropped during transmission, then this probe will be identified               This section will share our experience of verifying and deploying
+as a network timeout probe and it will incorrectly mark a switch              ByteTracker across our data centers. Replacing Pingmesh and de-
+as abnormal; if a switch drops a probe packet and the mirrored                ploying a new network probing and diagnostic system across all
+packet is also dropped during transmission, the last-hop switch will          data centers with millions of servers is not an easy task. Never-
+be incorrectly marked as abnormal. Fortunately, as the mirrored               theless, ByteTracker's low deployment and system overhead allowed
+packets are transmitted in the management network, the probability            us to validate and deploy it in all of our data centers within only
+of a mirrored packet being dropped  is small, usually much less               one year. In addition, this section will demonstrate how to deploy
+than 1%. As shown in Equation 1, if more than 5 independent                   ByteTracker in legacy clusters that do not support ERSPAN.
+network timeout probes mark a switch as abnormal at the same
+time, the probability of a false positive  is much less than (1%)5,           5.1 Deployment Phases in Our Data Centers
+which is almost 0. Therefore, during deployment, if more than 5
+network timeout probes are last mirrored by a switch within a short           Phase-1: Deploy North-South probing in a data center. In this
+time period, the Analyzer will identify this switch as abnormal.              phase, we verified the feasibility of all the ByteTracker design de-
+                                                                              tails except for East-West probing. First, we deployed a Prober in
+ =                                                    (1)                     the data center to conduct North-South probing, which validates
+                                                                              agentless probing and timeout probe classification through con-
+    : probe  fault                                                            current probing. This step is quick because it does not require any
+                                                                              changes to the end host or switch. Next, we enabled ERSPAN on
+   Besides, in some extreme cases, the faulty switching chip may              all switches in the data center to verify the probe path tracking
+not only cause packet drops in forwarding (step ), but also prevent           and the fault location algorithm. Due to the low deployment and
+those packets from being mirrored normally (step ). As shown in               system overhead, we were able to verify the feasibility of almost
+Figure 7 (c), in this scenario, the timeout probes are last mirrored          all ByteTracker designs and fix system bugs in just 3 months. And
+in the last-hop switches (i.e., tier-A switches). As a result, many           in this phase, we found that some faulty switching chips could not
+tier-A switches connected to switch B1 will be identified as abnor-           normally mirror packets, as shown in Figure 7 (c). We therefore
+mal. When this happens, the Analyzer will further inspect all the             improved Algorithm 1 to cover this anomaly. In addition, we did
+next-hop switches connected to these marked switches to obtain                find that North-South probing cannot detect some intra-tier for-
+the number of mirrored packets on each switch, which usually                  warding anomalies in multi-switches, whereas Pingmesh can. This
+decreases significantly on the anomalous switch.                              demonstrates the necessity of East-West probing.
+                                                                              Phase-2: Deploy East-West probing in the data center. In Phase-
+4.3.2 Detect and Locate Silent Bit Flipping.                                  2, we further selected a ToR switch in each pod of the data center
+With ERSPAN, the Analyzer can compare the mirrored probes hop                 to support IP-in-IP for East-West probing. ByteTracker is then able
+by hop to detect silent bit flipping and directly locate where these          to detect almost all network problems in the data center. During
+probes were modified. Since ERSPAN mirrors the probes before                  this phase, we continued to compare ByteTracker with Pingmesh
+the switch forwards them, if the Analyzer finds that the packet               to further improve its fault location accuracy. We ensured that
+mirrored by a switch is corrupted, it usually means that the packet           ByteTracker could accurately detect and locate all the problems
+was modified while being forwarded from the last-hop switch to                Pingmesh can detect, as well as those Pingmesh fails to effectively
+this one. For example, in Figure 7 (a), if the packet contents mirrored       detect, such as subtle packet drops and silent bit flipping. This
+in step  differ from those mirrored in step , there is usually a              phase took another 3 months. After this phase, ByteTracker was
+problem with step . During deployment, the Analyzer sets the                  ready to replace Pingmesh as the primary network monitoring and
+variable bits in the collected probes to 1, such as the TTL (Time             diagnostic system in our data centers.
+To Live) and ECN (Explicit Congestion Notification) bits in the IP            Phase-3: Deploy ByteTracker in all data centers. After the
+header, calculates the probe digest using MD5 (Message-Digest                 previous two phases, we had already verified the design details
+Algorithm 5), and compares the probe digest hop by hop.
+
+                                                                         548
+ByteTracker: An Agentless and Real-time Path-aware Network Probing System                                                      SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+of ByteTracker and improved its system stability and fault loca-                                   800                                        Completion Time (second)  3.0   Completion Time of Each Probe Round
+tion accuracy. In Phase-3, we spent 6 months gradually deploying
+ByteTracker in all of our data centers and used ByteTracker as                  Throughput (Mbps)  700         Probe           Response                                 2.5
+the primary network monitoring and diagnostic system. After this
+phase, our developers and operators tend to check ByteTracker's                                    600                                                                  2.0
+monitoring panel and alert/location results whenever a service or
+network issue arises, as it reports fewer false alarms and is more ac-                             500
+curate at detecting and locating network problems than Pingmesh.
+                                                                                                   400                                                                  1.5
+5.2 Clusters that do not Support ERSPAN
+                                                                                                   300                                                                  1.0
+Although most data center switches support ERSPAN as a standard
+technique, some switches in legacy clusters may not support it. For                                200                                                                  0.5
+these clusters, we deployed ByteTracker in two phases.
+Phase-1: Deploy Probers to conduct North-South and East-                                           100
+West probing without path tracking. East-West probing requires
+some ToR switches in the cluster to enable IP-in-IP. While some                                    00       6          12        18      24                             0.00     6          12        18    24
+legacy switches may not support IP-in-IP, it is not difficult to find                                          Timestamp (hour)                                                     Timestamp (hour)
+one ToR switch in a pod that does. After this phase, ByteTracker
+can already outperform Pingmesh in terms of system overhead and                 Figure 8: (left) The probe and response throughput measured on the Prober.
+fault detection accuracy. This is because ByteTracker (1) is agent-             (right) The completion time for each round of probing measured on the Prober.
+less and relies on only a small number of Probers for probing, (2)
+can effectively reduce probing noise on the end host, and (3) can                                  4.0      Drop Rate          P99 RTT 180                              1.0      Drop Rate          P99 RTT 10
+accurately identify host and network timeout probes.                                               3.5
+Phase-2: Probers launch Traceroute tasks to track the paths                                                                              140                            0.8                                        8
+of abnormal probes for fault location. Using the Prober to launch               Drop Rate (%)      3.0                                        P99 RTT (ms)                                                            P99 RTT (ms)
+Traceroute tasks centrally provides finer control of path tracking than                                                                            Drop Rate (%)
+using the end-host agent to launch Traceroute tasks in a distributed                               2.5                                   100                            0.6                                        6
+manner [25]. As responding to Traceroute packets consumes the                                      2.0
+switch CPU, data center switches typically limit the response fre-                                                                                                      0.4                                        4
+quency to Traceroute packets. Centralized Traceroute can better                                    1.5                                   60
+control the number of Traceroute packets to prevent them from                                      1.0
+stressing the switch and being dropped. In addition, because the                                                                                                        0.2                                        2
+Prober can accurately distinguish between host and network time-                                   0.5                                   20
+out probes in the data plane, ByteTracker can use the paths of net-
+work timeout probes to achieve more accurate fault location than the                               0.00  4     8           12    16      200                            0.00  4     8           12      16  200
+Pingmesh-centric system.                                                                                    Timestamp (minute)                                                      Timestamp (minute)
+
+6 EVALUATION                                                                    Figure 9: (left) Server CPU overload leads to a high probe timeout rate and tail
+                                                                                RTT in Pingmesh. (right) Meanwhile, ByteTracker detects few timeout probes
+We have deployed ByteTracker in all of our data centers for over 6              and the measured tail RTT remains stable.
+months. We evaluated ByteTracker's performance in a data center
+with hundreds of thousands of servers from the following perspec-               Mbps probe and 100 Mbps response throughput, which will be dis-
+tives: (1) system overhead, (2) probe noise caused by end hosts, (3)            tributed to all the switches and links in the data center. Therefore,
+efficiency in detecting network anomalies, and (4) fault location               the network bandwidth consumed can be ignored. Furthermore, the
+accuracy and timeliness.                                                        mirrored packets will not consume service network bandwidth as
+System overhead. ByteTracker does not need to deploy end-host                   they are transmitted in the management network.
+probe processes. Therefore, compared to agent-based systems, such
+as Pingmesh [18], R-Pingmesh [25] and NetBouncer [36], Byte-                    Probe noise caused by end hosts. Replies in the OS kernel have
+Tracker can significantly reduce end-host overhead. The payload                 a higher priority than user-space agent processes. Therefore, Byte-
+size of SYN packets is 512 bytes, whereas RST packets are standard              Tracker experiences much lower probe noise caused by end hosts
+and have no payload. As calculated in §4.2, the frequency of each               than the agent-based Pingmesh. In one instance, the CPU utilization
+NIC being probed is approximately 3 packets per second. There-                  of some hosts in a cluster approached 100% due to a software bug.
+fore, resource consumption on the end host, including NIC bandwidth,            As shown in Figure 9, the Pingmesh agent could not acquire enough
+CPU cycles and memory, can be ignored. In addition, we contin-                  CPU cycles for the probe response, thus triggering a large number
+uously monitor the total bandwidth consumption of the probes                    of timeout probes and high tail RTT. In contrast, the kernel-based
+on the Prober. As shown in Figure 8, the Prober has around 600                  response was still able to run normally. Therefore, ByteTracker
+                                                                                detected few timeout probes and the tail RTT remained stable.
+
+                                                                                Efficiency in detecting network anomalies. ByteTracker's care-
+                                                                                ful design ensures effective detection of network issues. Over the
+                                                                                last 6 months, ByteTracker has detected 276 network anomalies.
+                                                                                Most of them are link flapping and CRC errors caused by aged
+                                                                                or failed hardware. In comparison, Pingmesh detected only 262
+                                                                                anomalies. The additional cases are mostly subtle packet drops. As
+                                                                                shown in Figure 10, subtle packet drops are usually drowned out
+                                                                                by probe noise in Pingmesh. In contrast, ByteTracker can effec-
+                                                                                tively detect them due to its low end-host probe noise and accurate
+                                                                                identification of network timeout probes. In addition, with East-West
+                                                                                probing, ByteTracker effectively detected 8 cases of silent packet
+                                                                                drops in the forwarding of multi-chip switches; with large probes,
+                                                                                ByteTracker detected 5 cases of large packet drops on switches;
+                                                                                and with hop-by-hop comparison of probe contents, the Analyzer
+                                                                                accurately detected and located 2 cases of silent bit flipping.
+
+                                                                                Fault location accuracy and timeliness. For all 276 network
+                                                                                anomalies detected, ByteTracker can accurately track the paths
+                                                                                of network timeout probes with ERSPAN. By marking the faulty
+                                                                                switches with multiple paths, ByteTracker achieved 100% accurate
+                                                                                fault location. Compared to the Pingmesh-centric system that needs
+                                                                                to take several minutes to collect anomalous probes and track their
+                                                                                network paths for fault location, ByteTracker can locate the abnormal
+
+                                                                           549
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                  Guo et al.
+
+Timeout Rate (%) Timeout Rate (%)  0.100    NetTracker Probe Timeout Rate               Marked Count  40     Switch 1  Switch 2  Switch 3             Switch 4
+                                   0.075                                                              30
+                                                                                                      20
+                                   0.050                                                              10
+
+                                   0.025                                                               0
+                                                                                                      200
+                                   0.000    Pingmesh Probe Timeout Rate                 Mirror Count  150    The Count of Mirrored Probe Packets
+                                   0.100                                                              100
+                                                                                                       50
+                                   0.075
+                                                                                                         00
+                                   0.050
+
+                                   0.025
+
+                                   0.000 0  2  4                         6  8  10                            4         8         12               16            20
+
+                                               Timestamp (hour)                                                        Timestamp (minute)
+
+Figure 10: (up) ByteTracker can accurately detect subtle packet drops on                Figure 11: A failed switching chip causes both packet drops in forwarding
+switches. (down) In contrast, Pingmesh cannot detect them due to high probe             and packet mirroring failure. (up) In this case, timeout probes mark many
+noise and inability to identify timeout probes.                                         switches as abnormal. (down) Meanwhile, the number of packets mirrored on
+                                                                                        a next-hop switch decreases significantly.
+
+switch within 5s after the Prober detects network timeout probes due                    are a well-known issue in data center networks. When they oc-
+to real-time path tracking with packet mirroring on switches.                           cur, services will experience connectivity failures and throughput
+                                                                                        degradation. In layer-3 traffic loops, packets will be dropped when
+7 TYPICAL ANOMALIES DETECTED                                                            their TTL counters in the IP header are exhausted. However, layer-
+                                                                                        2 traffic loops are not subject to TTL and will continue endlessly,
+During deployment, ByteTracker can effectively detect and locate                        consuming large amounts of switch bandwidth. When traffic loops
+almost all network anomalies. Some of them are well known and                           occur, Pingmesh can only detect timeout probes, and operators
+have been discussed extensively in previous work, such as link                          need to replay them to further diagnose the root cause. In contrast,
+flapping, CRC errors, and network misconfigurations. In addition,                       ByteTracker can identify whether probes are in a loop directly by
+some typical anomalies detected by ByteTracker have been detailed                       tracking their paths in real time with packet mirroring.
+in previous sections, including subtle packet drops, large packet drops,
+silent bit flipping, and forwarding anomalies in multi-chip switches.                   8 EXPERIENCES AND FUTURE WORK
+This section will summarize some interesting cases. These cases                         8.1 Experiences Learned
+demonstrate the efficiency and robustness of ByteTracker in fault
+detection and location.                                                                 Reduce the use of multi-chip switches. As mentioned in §3.2,
+                                                                                        multi-chip switches are much more complicated than single-chip
+Faulty switching chips cause probe mirroring failures. In                               switches. Unlike single-chip switches, which only have intra-chip
+some extreme cases, the failed switching chip not only causes many                      forwarding, multi-chip switches also have inter-chip forwarding.
+packet drops in forwarding, but also prevents those packets from                        As a result, multi-chip switches are more likely to fail than single-
+being mirrored normally. We discussed this scenario in §4.3.1 and                       chip switches. To fully cover the forwarding rules in multi-chip
+Figure 11 shows such a case. When this happens, many switches                           switches, ByteTracker adds East-West probing in addition to North-
+will be marked as abnormal by network timeout probes. Upon                              South probing. Suppose that there are only single-chip switches in
+further inspection, we can notice that the number of packets being                      the data center, then ByteTracker only needs to conduct North-South
+mirrored drops significantly on a next-hop switch. In this way, the                     probing. To reduce network failures and the complexity of the prob-
+Analyzer can still effectively locate the faulty switch.                                ing system, the use of multi-chip switches should be reduced. And
+                                                                                        this is the trend in our data center. As switching chips improve, the
+Simultaneous packet drops on multiple switches. Once, after                             total bandwidth of a single-chip switch increases, allowing us to
+an upgrade of switches in a data center, a bug in the patch caused                      connect more servers using only single-chip switches.
+multiple switches to drop packets simultaneously. Similar to Figure
+11 (up), timeout probes quickly marked these switches as abnormal.                      Use fixed probe 5-tuples to improve fault location. As shown
+However, there was no obvious decrease in the number of mirrored                        in Figure 11, some failures can prevent probes from being mirrored
+probes on the next-hop switches. The Analyzer then accurately in-                       normally. In these cases, network timeout probes will incorrectly
+ferred that all these switches are abnormal. For the Pingmesh-centric                   mark many switches as anomalous, and the Analyzer needs to
+system, when multiple switches are marked by timeout probes,                            further inspect the number of mirrored probes on the next-hop
+operators usually conclude that the fault location is incorrect due to                  switches. However, this process is not straightforward. To improve
+probe noise interference. In contrast, due to low end-host probe noise,                 the robustness of fault location, the Prober can use a fixed set of
+precise network timeout identification, accurate probe path tracking,                   probe 5-tuples, and for each probe, it selects one 5-tuple from the
+and fault marking with multiple timeout probes, ByteTracker can                         set. The Analyzer then stores and continuously updates the paths
+confidently determine that these switches are all abnormal if multiple                  of all probe 5-tuples in the set. In this way, if timeout probes cannot
+switches are marked as abnormal and there is no obvious decrease                        effectively mark the abnormal switch, the Analyzer can retrieve
+in the number of mirrored probes on the next-hop switches.                              the historical paths of these timeout probes for fault location.
+
+Traffic loop. When there are loops in network paths and errors in
+network configurations, packets can loop endlessly. Traffic loops
+
+                                                                                   550
+ByteTracker: An Agentless and Real-time Path-aware Network Probing System                          SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+Large probe packets are necessary. Although using small probes                            1000  P999 RTT     P995 RTT
+can reduce network bandwidth consumption, some switch failures                             100
+can only be detected by large probes. As discussed in §3.2, this is             RTT (ms)
+because in the forwarding process, the switch first splits large pack-                    10
+ets into multiple cells and then reassembles them, whereas small
+packets are forwarded directly. As a result, if a switch has a failure                    10    2         4  6              8  10
+in the packet splitting or reassembly process, only large probes can
+detect it. The packet size threshold that triggers packet splitting                                       Timestamp (hour)
+varies with switch brands and configurations. ByteTracker's probe
+size is 512 bytes to ensure that it can trigger packet splitting on all         Figure 12: As Pingmesh automatically retransmits timeout probes, packet
+switches in our data center and thereby detect any anomalies in                 drops can result in high tail RTT due to probe retransmission.
+the packet splitting or reassembly process.
+                                                                                the same subnet as the server's IP address. In Pingmesh and Byte-
+Most packet drops occur in one direction. As the data center                    Tracker, the probe target is the server's IP address, thereby ensuring
+network is full-duplex, it is typically believed that network failures          the effective detection of service packet forwarding anomalies.
+will cause packet drops in both directions. However, our diagnostic
+results show that most packet drops occur in only one direction. In             8.2 Limitations and Future Work
+particular, in North-South probing, network failures usually only
+drop SYN packets (from high-tier switches to low-tier switches) or              Locate the abnormal switch port. ByteTracker can only report
+RST packets (from low-tier switches to high-tier switches). After               the switches traversed by probes, and thus the Analyzer can at most
+discussions with our network hardware team, we realized that                    locate faulty switches. To further locate anomalous switch ports,
+network devices are not simple single entities. For example, the                operators must examine switch logs and metrics. Fortunately, the
+optical module in the switch port contains both a transmitter and a             latest version of ERSPAN can identify the switch port traversed by
+receiver, and failure is more likely to occur in one device, causing            the probe. With the enhanced ERSPAN capabilities, the Analyzer
+packet drops in one direction. In addition, our optical fibers are              can mark the failed switch port directly in the fault location.
+usually multi-core, with half for transmission and half for reception.          Detect anomalous hosts with host timeout probes. ByteTracker
+Consequently, issues such as dirty fiber interfaces or aged/damaged             can currently accurately identify host and network timeout probes,
+fibers can also cause packet drops in only one direction.                       and use the paths of network timeout probes to locate faulty switches.
+                                                                                However, ByteTracker has not yet made effective use of host time-
+Avoid probe retransmission. Pingmesh uses the kernel stack to                   out probes to detect anomalous hosts and NICs. As mentioned in
+construct TCP probes, and when a probe timeout occurs, the kernel               §2.3, the causes of host timeout probes are very complicated. Some
+automatically retransmits it. This results in an inaccurate measure-            are caused by real problems, such as NIC flapping and incorrect
+ment of both the probe timeout rate and RTT, since the successful               routing configurations, while others are probe noise, such as time-
+retransmission will not be recorded as a timeout and the measured               out probes caused by CPU overload from the service process. If we
+RTT includes the timeout wait delay. Figure 12 shows the tail RTT               can filter out end-host probe noise, we can use host timeout probes
+measured by Pingmesh in the subtle packet drop case mentioned in                caused by real faults to accurately detect abnormal hosts and NICs.
+Figure 10. As some dropped probes can be successfully retransmit-               This is a challenging task and will be our future work.
+ted, the tail RTT increases significantly. This also causes Pingmesh            Use accurate RTT to locate network hotspots. As the Prober is
+to capture fewer timeout probes in Figure 10. In ByteTracker, the               dedicated to network probing and end hosts respond to probes in
+Prober uses the raw socket APIs rather than the kernel stack to                 the OS kernel with high priority, the RTT measured by the Prober is
+construct probes. This ensures that the Prober sends the probe only             less affected by end-host processing delay. Therefore, compared to
+once to accurately measure probe timeout.                                       agent-based Pingmesh, the RTT measured by ByteTracker is much
+Bit flipping is becoming more frequent in the data center.                      closer to the actual network RTT and can better reflect network
+Tunneling techniques (e.g. VXLAN [27]) and gateway devices are in-              load. In addition, with high RTT probes and accurate probe path
+creasingly being used in data centers. However, we have found that              tracking based on packet mirroring, the Analyzer can further locate
+some tunnel entries and gateways may encapsulate or decapsulate                 network hotspots. In this way, ByteTracker can effectively detect
+incoming packets without verification to improve packet process-                and locate network performance bottlenecks.
+ing performance. This causes corrupt packets to be transmitted as               Adapting ByteTracker to RoCE clusters. Since RoCE (RDMA
+correct packets instead of being discarded, thereby increasing the              over Converged Ethernet) NICs support TCP communication, Byte-
+likelihood of application errors. Therefore, it is critical to enhance          Tracker can also probe RoCE networks. RoCE clusters typically
+packet verification at tunnel entries and gateways.                             rely on lossless Ethernet, whereas TCP networks are lossy. There-
+                                                                                fore, network operators typically allocate TCP and RoCE traffic to
+IP-in-IP probes cannot efficiently detect forwarding issues.                    separate NIC and switch queues and enable PFC (Priority-based
+During network troubleshooting, we found that, although IP-in-IP                Flow Control) in the RoCE queue [17]. As a result, although Byte-
+probes can effectively specify the probe path by designating a target           Tracker's TCP probes can detect problems in physical and TCP
+switch in the outer layer, they may fail to detect forwarding anom-             networks, they cannot detect issues specific to RoCE queues, such
+alies of service packets. This is because IP-in-IP probe forwarding             as packet drops caused by PFC deadlock or incorrect PFC config-
+is based on the target switch's IP address, which is typically not in           urations. To further detect RoCE-specific issues, we plan to send
+                                                                                additional RoCE queue probes in RoCE clusters.
+
+                                                                           551
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                                      Guo et al.
+
+9 RELATED WORK                                                                REFERENCES
+
+Monitor and diagnose physical and TCP networks. There is a                     [1] 2025. Libpcap. http://www.tcpdump.org/.
+large body of literature on the monitoring and diagnosis of physical
+networks [2, 4, 12, 16, 18­21, 24, 28, 29, 31, 33, 36­42, 44]. Here, we        [2] Behnaz Arzani, Selim Ciraci, Luiz Chamon, Yibo Zhu, Hongqiang Harry Liu, Jitu
+introduce the most relevant schemes for ByteTracker. Pingmesh
+[18] monitors host-to-host connectivity and latency for network                     Padhye, Boon Thau Loo, and Geoff Outhred. 2018. 007: Democratically Finding
+troubleshooting and SLA tracking. NetBouncer [36] leverages IP-                     the Cause of Packet Drops. In 15th USENIX Symposium on Networked Systems
+in-IP packets to probe specific paths and deduces failed switches                   Design and Implementation (NSDI 18). 419­435.
+and network links based on the probe drop rate. RD-Probe [8]                   [3] Wei Bai, Shanim Sainul Abdeen, Ankit Agrawal, Krishan Kumar Attre, Paramvir
+mirrors probes on switches to analyze their network coverage and
+then adds deterministic probes to improve network coverage. All                     Bahl, Ameya Bhagat, Gowri Bhaskara, Tanya Brokhman, Lei Cao, Ahmad Cheema,
+of these schemes require the deployment of end-host probe agents,                   et al. 2023. Empowering Azure Storage with RDMA. In 20th USENIX Symposium
+thereby involving high overheads for deploying or updating agents                   on Networked Systems Design and Implementation (NSDI 23). 49­67.
+in large-scale data centers, as well as posing a risk of agent failure.        [4] Ran Ben Basat, Sivaramakrishnan Ramanathan, Yuliang Li, Gianni Antichi,
+Everflow [44] matches and mirrors specific packets at the switch for
+network performance analysis and troubleshooting. ByteTracker                       Minian Yu, and Michael Mitzenmacher. 2020. PINT: Probabilistic In-band Net-
+is the first agentless probing system for large-scale data center                   work Telemetry. In Proceedings of the Annual conference of the ACM Special Interest
+networks. It leverages the switch's match-and-mirror features to                    Group on Data Communication on the applications, technologies, architectures, and
+accurately track probe paths in real time.                                          protocols for computer communication. 662­680.
+Monitor and diagnose virtual and RDMA networks. With the                       [5] Broadcom. 2017. Trident 3 Dynamic Load Balancing. https://www.broadcom.
+rapid development of cloud services and high-performance net-
+works, there is an increasing demand to monitor and troubleshoot                    com/video/6328983519112.
+both virtual networks [11, 34, 43] and RDMA networks [3, 9, 15, 25,
+26]. Among them, R-Pingmesh [25] extends the Pingmesh system                   [6] Jiaxin Cao, Rui Xia, Pengkun Yang, Chuanxiong Guo, Guohan Lu, Lihua Yuan,
+to RoCE networks and uses ToR-mesh probing to identify host and
+network timeout probes. However, R-Pingmesh needs to deploy                         Yixin Zheng, Haitao Wu, Yongqiang Xiong, and Dave Maltz. 2013. Per-packet
+probe agents in end hosts. In addition, ToR-mesh probing relies on
+probe results from other NICs and is difficult to achieve millisecond-              Load-balanced, Low-latency Routing for Clos-based Data Center Networks. In
+level accuracy. ByteTracker has been deployed in all of our data                    Proceedings of the ninth ACM conference on Emerging networking experiments and
+centers to monitor and diagnose their physical and TCP networks.                    technologies. 49­60.
+It can identify host timeout probes at the millisecond level based             [7] Ítalo Cunha, Renata Teixeira, Nick Feamster, and Christophe Diot. 2009. Mea-
+on the probe data sent to a single target. Adapting ByteTracker
+to RDMA and virtual networks to detect and troubleshoot their                       surement Methods for Fast and Accurate Blackhole Identification with Binary
+specific network issues is our future work.                                         Tomography. In Proceedings of the 9th ACM SIGCOMM conference on Internet
+                                                                                    measurement. 254­266.
+10 CONCLUSION                                                                  [8] Rui Ding, Xunpeng Liu, Shibo Yang, Qun Huang, Baoshu Xie, Ronghua Sun, Zhi
+
+In this paper, we propose ByteTracker, the first agentless probing                  Zhang, and Bolong Cui. 2024. RD-Probe: Scalable Monitoring With Sufficient
+and diagnostic system for large-scale data center networks. It does                 Coverage In Complex Datacenter Networks. In Proceedings of the ACM SIGCOMM
+not require the deployment of probe agents or any configurations on                 2024 Conference. 258­273.
+end hosts, and all probes are launched by a few centralized Probers.           [9] Jianbo Dong, Kun Qian, Pengcheng Zhang, Zhilong Zheng, Liang Chen, Fei
+ByteTracker achieves accurate, real-time probe path tracking with
+packet mirroring on switches. ByteTracker is now deployed in all                    Feng, Yichi Xu, Yikai Zhu, Gang Lu, Xue Li, et al. 2025. Evolution of Aegis:
+our data centers and has become our most important monitoring                       Fault Diagnosis for AI Model Training Service in Production. In 22nd USENIX
+and diagnostic system for physical and TCP networks. During                         Symposium on Networked Systems Design and Implementation (NSDI 25). 865­881.
+deployment, ByteTracker can detect almost all network anomalies               [10] Nick Duffield. 2006. Network Tomography of Binary Network Performance
+and locate them within 5 seconds with 100% accuracy. This work                      Characteristics. IEEE Transactions on Information Theory 52, 12 (2006), 5373­
+does not raise any ethical issues.                                                  5388.
+
+ACKNOWLEDGMENTS                                                               [11] Chongrong Fang, Haoyu Liu, Mao Miao, Jie Ye, Lei Wang, Wansheng Zhang,
+
+We would like to acknowledge the contributions of all the ByteDance                 Daxiang Kang, Biao Lyv, Peng Cheng, and Jiming Chen. 2020. VTrace: Automatic
+network teams to the design, implementation, deployment and im-
+provement of ByteTracker. We would also like to thank our shep-                     Diagnostic System for Persistent Packet Loss in Cloud-scale Overlay Network.
+herd, Costin Raiciu, and the anonymous SIGCOMM reviewers who                        In Proceedings of the Annual conference of the ACM Special Interest Group on Data
+helped us to improve the quality of this paper. Zhuo Jiang is the                   Communication on the applications, technologies, architectures, and protocols for
+corresponding author of this paper.                                                 computer communication. 31­43.
+                                                                              [12] Seyed K Fayaz, Tushar Sharma, Ari Fogel, Ratul Mahajan, Todd Millstein, Vyas
+
+                                                                                    Sekar, and George Varghese. 2016. Efficient network reachability analysis using
+                                                                                    a succinct control plane representation. In 12th USENIX Symposium on Operating
+                                                                                    Systems Design and Implementation (OSDI 16). 217­232.
+                                                                              [13] M Foschiano et al. 2015. Cisco systems' encapsulated remote switch port analyzer
+                                                                                    (ERSPAN). draft-foschiano-erspan-00. txt, Tech. Rep (2015).
+                                                                              [14] Adithya Gangidi, Rui Miao, Shengbao Zheng, Sai Jayesh Bondu, Guilherme Goes,
+
+                                                                                    Hany Morsy, Rohit Puri, Mohammad Riftadi, Ashmitha Jeevaraj Shetty, Jingyi
+
+                                                                                    Yang, et al. 2024. RDMA over Ethernet for Distributed Training at Meta Scale. In
+                                                                                    Proceedings of the ACM SIGCOMM 2024 Conference. 57­70.
+                                                                              [15] Yixiao Gao, Qiang Li, Lingbo Tang, Yongqing Xi, Pengcheng Zhang, Wenwen
+
+                                                                                    Peng, Bo Li, Yaohui Wu, Shaozong Liu, Lei Yan, et al. 2021. When Cloud Storage
+                                                                                    Meets RDMA. In 18th USENIX Symposium on Networked Systems Design and
+                                                                                    Implementation (NSDI 21). 519­533.
+                                                                              [16] Yilong Geng, Shiyu Liu, Zi Yin, Ashish Naik, Balaji Prabhakar, Mendel Rosenblum,
+
+                                                                                    and Amin Vahdat. 2019. SIMON: A Simple and Scalable Method for Sensing,
+                                                                                    Inference and Measurement in Data Center Networks. In 16th USENIX Symposium
+                                                                                    on Networked Systems Design and Implementation (NSDI 19). 549­564.
+                                                                              [17] Chuanxiong Guo, Haitao Wu, Zhong Deng, Gaurav Soni, Jianxi Ye, Jitu Padhye,
+
+                                                                                    and Marina Lipshteyn. 2016. RDMA over Commodity Ethernet at Scale. In
+                                                                                    Proceedings of the 2016 ACM SIGCOMM Conference. 202­215.
+                                                                              [18] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave
+
+                                                                                    Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, and Hua and Chen. 2015. Pingmesh: A
+
+                                                                                    Large-Scale System for Data Center Network Latency Measurement and Analysis.
+                                                                                    Computer communication review 45, 4 (2015), 139­152.
+                                                                              [19] Arpit Gupta, Rob Harrison, Marco Canini, Nick Feamster, Jennifer Rexford, and
+
+                                                                                    Walter Willinger. 2018. Sonata: Query-Driven Streaming Network Telemetry.
+                                                                                    In Proceedings of the 2018 conference of the ACM special interest group on data
+                                                                                    communication. 357­371.
+                                                                              [20] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David Mazières, and
+
+                                                                                    Nick McKeown. 2014. I Know What Your Packet Did Last Hop: Using Packet
+                                                                                    Histories to Troubleshoot Networks. In 11th USENIX Symposium on Networked
+                                                                                    Systems Design and Implementation (NSDI 14). 71­85.
+
+                                                                         552
+ByteTracker: An Agentless and Real-time Path-aware Network Probing System                                                      SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+[21] Qun Huang, Haifeng Sun, Patrick PC Lee, Wei Bai, Feng Zhu, and Yungang                          Control for Commodity Networks. ACM SIGCOMM Computer Communication
+                                                                                                     Review 44, 4 (2014), 407­418.
+      Bao. 2020. Omnimon: Re-architecting Network Telemetry with Resource Effi-                [34] Arjun Roy, Deepak Bansal, David Brumley, Harish Kumar Chandrappa, Parag
+      ciency and Full Accuracy. In Proceedings of the Annual conference of the ACM
+      Special Interest Group on Data Communication on the applications, technologies,                Sharma, Rishabh Tewari, Behnaz Arzani, and Alex C Snoeren. 2018. Cloud
+      architectures, and protocols for computer communication. 404­421.                              Datacenter SDN Monitoring: Experiences and Challenges. In Proceedings of the
+[22] Yiyi Huang, Nick Feamster, and Renata Teixeira. 2008. Practical Issues with                     Internet Measurement Conference 2018. 464­470.
+      Using Network Tomography for Fault Diagnosis. ACM SIGCOMM Computer                       [35] William Simpson. 1995. IP in IP Tunneling. Technical Report.
+      Communication Review 38, 5 (2008), 53­58.                                                [36] Cheng Tan, Ze Jin, Chuanxiong Guo, Tianrong Zhang, Haitao Wu, Karl Deng,
+[23] Ziheng Jiang, Haibin Lin, Yinmin Zhong, Qi Huang, Yangrui Chen, Zhi Zhang,
+                                                                                                     Dongming Bi, and Dong Xiang. 2019. NetBouncer: Active Device and Link Failure
+      Yanghua Peng, Xiang Li, Cong Xie, Shibiao Nong, et al. 2024. MegaScale: Scaling                Localization in Data Center Networks. In 16th USENIX Symposium on Networked
+      Large Language Model Training to More Than 10,000 GPUs. In 21st USENIX                         Systems Design and Implementation (NSDI 19). 599­614.
+      Symposium on Networked Systems Design and Implementation (NSDI 24). 745­                 [37] Weitao Wang, Xinyu Crystal Wu, Praveen Tammana, Ang Chen, and TS Eu-
+      760.
+                                                                                                     gene Ng. 2022. Closed-loop Network Performance Monitoring and Diagnosis
+[24] Jonatan Langlet, Ran Ben Basat, Gabriele Oliaro, Michael Mitzenmacher, Minlan                   with SpiderMon. In 19th USENIX Symposium on Networked Systems Design and
+      Yu, and Gianni Antichi. 2023. Direct Telemetry Access. In Proceedings of the ACM               Implementation (NSDI 22). 267­285.
+      SIGCOMM 2023 Conference. 832­849.                                                        [38] Tong Yang, Jie Jiang, Peng Liu, Qun Huang, Junzhi Gong, Yang Zhou, Rui Miao,
+
+[25] Kefei Liu, Zhuo Jiang, Jiao Zhang, Shixian Guo, Xuan Zhang, Yangyang Bai,                       Xiaoming Li, and Steve Uhlig. 2018. Elastic Sketch: Adaptive and Fast Network-
+                                                                                                     wide Measurements. In Proceedings of the 2018 Conference of the ACM Special
+      Yongbin Dong, Feng Luo, Zhang Zhang, Lei Wang, et al. 2024. R-Pingmesh: A                      Interest Group on Data Communication. 561­575.
+      Service-Aware RoCE Network Monitoring and Diagnostic System. In Proceedings              [39] Da Yu, Yibo Zhu, Behnaz Arzani, Rodrigo Fonseca, Tianrong Zhang, Karl Deng,
+      of the ACM SIGCOMM 2024 Conference. 554­567.
+[26] Teng Ma, Tao Ma, Zhuo Song, Jingxuan Li, Huaixin Chang, Kang Chen, Hai                          and Lihua Yuan. 2019. dShark: A General, Easy to Program and Scalable Frame-
+                                                                                                     work for Analyzing In-network Packet Traces. In 16th USENIX Symposium on
+      Jiang, and Yongwei Wu. 2019. X-RDMA: Effective RDMA Middleware in Large-                       Networked Systems Design and Implementation (NSDI 19). 207­220.
+      scale Production Environments. In 2019 IEEE International Conference on Cluster          [40] Yikai Zhao, Kaicheng Yang, Zirui Liu, Tong Yang, Li Chen, Shiyi Liu, Naiqian
+      Computing (CLUSTER). IEEE, 1­12.
+[27] Mallik Mahalingam, Dinesh Dutt, Kenneth Duda, Puneet Agarwal, Lawrence                          Zheng, Ruixin Wang, Hanbo Wu, Yi Wang, et al. 2021. LightGuardian: A Full-
+      Kreeger, T Sridhar, Mike Bursell, and Chris Wright. 2014. Virtual eXtensible Local             Visibility, Lightweight, In-band Telemetry System Using Sketchlets. In 18th
+      Area Network (VXLAN): A Framework for Overlaying Virtualized Layer 2 Networks                  USENIX Symposium on Networked Systems Design and Implementation (NSDI
+      over Layer 3 Networks. Technical Report.                                                       21). 991­1010.
+[28] Meta. 2016. NetNORAD: Troubleshooting Networks via End-to-end Prob-                       [41] Hao Zheng, Chengyuan Huang, Xiangyu Han, Jiaqi Zheng, Xiaoliang Wang, Chen
+
+      ing. https://engineering.fb.com/2016/02/18/core-infra/netnorad-troubleshooting-                Tian, Wanchun Dou, and Guihai Chen. 2024. Mon: Empowering Microsecond-
+                                                                                                     level Network Monitoring with Wavelets. In Proceedings of the ACM SIGCOMM
+      networks- via- end- to- end- probing/.                                                         2024 Conference. 274­290.
+                                                                                               [42] Yu Zhou, Chen Sun, Hongqiang Harry Liu, Rui Miao, Shi Bai, Bo Li, Zhilong
+[29] Masoud Moshref, Minlan Yu, Ramesh Govindan, and Amin Vahdat. 2016. Trumpet:
+      Timely and Precise Triggers in Data Centers. In Proceedings of the 2016 ACM                    Zheng, Lingjun Zhu, Zhen Shen, Yongqing Xi, et al. 2020. Flow Event Telemetry
+      SIGCOMM Conference. 129­143.                                                                   on Programmable Data Plane. In Proceedings of the Annual conference of the ACM
+                                                                                                     Special Interest Group on Data Communication on the applications, technologies,
+[30] NVIDIA. 2023. NVIDIA InfiniBand Adaptive Routing Technology--Accelerating                       architectures, and protocols for computer communication. 76­89.
+                                                                                               [43] Shunmin Zhu, Jianyuan Lu, Biao Lyu, Tian Pan, Chenhao Jia, Xin Cheng, Daxiang
+      HPC and AI Applications. https://resources.nvidia.com/en-us-cloud-native-
+                                                                                                     Kang, Yilong Lv, Fukun Yang, Xiaobo Xue, et al. 2022. Zoonet: A Proactive
+      supercomputing- dpus- campaign/infiniband- white- paper- adaptive- routing.                    Telemetry System for Large-Scale Cloud Networks. In Proceedings of the 18th
+                                                                                                     International Conference on emerging Networking EXperiments and Technologies.
+[31] Yanghua Peng, Ji Yang, Chuan Wu, Chuanxiong Guo, Chengchen Hu, and Zong-                        321­336.
+
+      peng Li. 2017. deTector: a Topology-aware Monitoring System for Data Center              [44] Yibo Zhu, Nanxi Kang, Jiaxin Cao, Albert Greenberg, Guohan Lu, Ratul Mahajan,
+      Networks. In 2017 USENIX Annual Technical Conference (USENIX ATC 17). 55­68.
+[32] Kun Qian, Yongqing Xi, Jiamin Cao, Jiaqi Gao, Yichi Xu, Yu Guan, Binzhang Fu,                   Dave Maltz, Lihua Yuan, Ming Zhang, Ben Y Zhao, et al. 2015. Packet-Level
+                                                                                                     Telemetry in Large Datacenter Networks. In Proceedings of the 2015 ACM Confer-
+      Xuemei Shi, Fangbo Zhu, Rui Miao, et al. 2024. Alibaba HPN: A Data Center Net-                 ence on Special Interest Group on Data Communication. 479­491.
+      work for Large Language Model Training. In Proceedings of the ACM SIGCOMM
+      2024 Conference. 691­706.
+[33] Jeff Rasley, Brent Stephens, Colin Dixon, Eric Rozner, Wes Felter, Kanak Agarwal,
+
+      John Carter, and Rodrigo Fonseca. 2014. Planck: Millisecond-scale Monitoring and
+
+                                                                                          553
+

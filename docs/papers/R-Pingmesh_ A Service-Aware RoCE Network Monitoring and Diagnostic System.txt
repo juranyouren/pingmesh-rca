@@ -1,0 +1,1024 @@
+R-Pingmesh: A Service-Aware RoCE Network Monitoring and
+                             Diagnostic System
+
+Kefei Liu1, Zhuo Jiang3, Jiao Zhang1,2,, Shixian Guo3, Xuan Zhang1, Yangyang Bai3, Yongbin Dong3
+    Feng Luo3, Zhang Zhang3, Lei Wang3, Xiang Shi3, Haohan Xu3, Yang Bai3, Dongyang Song3
+                     Haoran Wei3, Bo Li3, Yongchen Pan1, Tian Pan1,2, Tao Huang1,2
+
+                        1State Key Laboratory of Networking and Switching Technology, BUPT, China
+                                     2Purple Mountain Laboratories 3Douyin Vision Co., Ltd.
+
+ABSTRACT                                                                                       1 INTRODUCTION
+
+RoCE services are sensitive to network failures and performance                                Remote Direct Memory Access (RDMA) has been used by many
+bottlenecks, which become more common as the RoCE network                                      data center services [2, 10, 19, 20, 40, 47] to achieve low latency
+scales. In addition, some non-network problems behave like net-                                and high throughput with low CPU overhead. Among all RDMA
+work problems and can waste troubleshooting time. However, exist-                              networking solutions in the data center, RDMA over Converged
+ing mechanisms cannot quickly detect and locate network problems                               Ethernet (RoCE) is the most widely adopted.
+or determine whether the service problem is network-related.
+                                                                                                  Timely and accurately locating network problems is critical to
+   In this paper, we propose R-Pingmesh, the first service-aware                               ensuring stable and high-quality operation of RoCE services. The
+RoCE network monitoring and diagnostic system based on end-                                    performance of some services, such as Distributed Machine Learn-
+to-end probing. R-Pingmesh can accurately measure network RTT                                  ing (DML), has a barrel effect. First, they are extremely sensitive to
+and end-host processing delay based on commodity RDMA NICs                                     single-point failures. For example, packet drops caused by a single
+(RNICs), distinguish between RNIC and in-network packet drops,                                 flapping switch port or RNIC1 can severely degrade the training
+and judge whether a problem is network-related and assess its                                  throughput of the entire cluster. Some failures, such as an accident
+impact on services. We have deployed R-Pingmesh on tens of thou-                               RNIC or host down, can even cause the training task to fail. Second,
+sands of RNICs for over 6 months. One-month evaluation results                                 performance bottlenecks that occur in both end hosts and networks
+show that 85% of the problems located by R-Pingmesh are accurate,                              can also severely degrade service performance, such as CPU over-
+where all 157 switch network problems are accurate. R-Pingmesh                                 load and network congestion due to uneven load balancing. Over
+efficiently detects and locates 14 types of problems during deploy-                            the past year, the size of the RoCE network used by services (service
+ment, and we share our experience in dealing with them.                                        network) has grown rapidly from hundreds of RNICs to tens of
+                                                                                               thousands of RNICs, and this growth continues. As a result, both
+CCS CONCEPTS                                                                                   the frequency and impact of single-point problems are increasing.
+
+· Networks  Data center networks; Network measurement;                                            In addition, when service problems occur, the network team
+Network monitoring; Error detection and error correction.                                      should quickly determine if the problem is network-related. If so,
+                                                                                               resolve it. If not, the service team should work with other teams to
+KEYWORDS                                                                                       find the problem. This is not easy. First, when a service fails, service
+                                                                                               logs can be misleading. Some of them, such as NCCL [36] "error
+RDMA; Network troubleshooting; Service tracing probing                                         code 12", look like a network problem. However, the root cause
+                                                                                               may be an abnormal remote process exit due to GPU down or GPU
+ACM Reference Format:                                                                          driver failure. Second, service performance degradation can also be
+Kefei Liu1, Zhuo Jiang3, Jiao Zhang1,2,, Shixian Guo3, Xuan Zhang1, Yangyang                   caused by many non-network problems, such as degraded compute
+Bai3, Yongbin Dong3, Feng Luo3, Zhang Zhang3, Lei Wang3, Xiang Shi3,                           speed due to GPU underclocking or improper NCCL parameters.
+Haohan Xu3, Yang Bai3, Dongyang Song3, Haoran Wei3, Bo Li3, Yongchen                           These problems can degrade the average network throughput and also
+Pan1, Tian Pan1,2, Tao Huang1,2. 2024. R-Pingmesh: A Service-Aware RoCE                        appear as network problems.
+Network Monitoring and Diagnostic System. In ACM SIGCOMM 2024 Con-
+ference (ACM SIGCOMM '24), August 4­8, 2024, Sydney, NSW, Australia. ACM,                         However, existing mechanisms cannot quickly detect and locate net-
+New York, NY, USA, 14 pages. https://doi.org/10.1145/3651890.3672264                           work problems. In addition, when service suffers from non-network
+                                                                                               problems, operators often waste a lot of time trying to find the root
+The first two authors contributed equally to this paper. This work is done while Kefei         cause in the network. Previously, the method of diagnosing service
+Liu, Xuan Zhang, and Yongchen Pan are doing a joint research project at Douyin                 performance problems could be roughly divided into two steps: (1)
+Vision Co., Ltd. (*Jiao Zhang is the corresponding author.)                                    inspecting the servers and switches in the service network for con-
+                                                                                               figurations, logs, and anomalous metrics (e.g., packet drops, Tx/Rx
+Permission to make digital or hard copies of all or part of this work for personal or          PFC pause frames); (2) running benchmark tools such as perftest [4]
+classroom use is granted without fee provided that copies are not made or distributed          and nccl-test [3] between the RNICs in the service network. This ap-
+for profit or commercial advantage and that copies bear this notice and the full citation      proach works when the cluster size is small. As the RoCE network
+on the first page. Copyrights for components of this work owned by others than the             scales, these troubleshooting steps become time-consuming.
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission  1
+and/or a fee. Request permissions from permissions@acm.org.
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                       The state of a flapping RNIC or port frequently fluctuates between up and down.
+© 2024 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-0614-1/24/08
+https://doi.org/10.1145/3651890.3672264
+
+554
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                              Liu et al.
+
+   In this paper, we extend Pingmesh [13] to RoCE networks and            2 BACKGROUND & MOTIVATION
+propose R-Pingmesh, the first service-aware RoCE network moni-            2.1 Is It a Network Problem?
+toring and diagnostic system based on end-to-end active probing,
+to address the above problems. To fully meet our requirements,            Service logs can be misleading. Some of our DML services rely on
+we need to achieve four design targets that cannot be achieved            NCCL to communicate between GPUs. If the service fails, the ser-
+by Pingmesh. First, we need to detect problems specific to RoCE           vice team will inspect the NCCL log to determine the root cause.
+networks, such as PFC misconfigurations. Second, we need to dis-          One of the most common errors is "error code 12", which means
+tinguish between RNIC and in-network packet drops to accurately           that RDMA communication between the local and remote process
+locate network failures. Third, we need to accurately measure end-        experiences timeout. This sounds like a network problem, and it
+host processing delay and service network RTT to detect and locate        is true that many "error code 12" problems are caused by the net-
+performance bottlenecks. Finally, we need to assess the impact of         work, such as RNIC down or persistent packet drops on switches.
+problems on services so that we can determine a solution for each         However, the cause could also be an abnormal remote process exit
+problem to minimize service performance loss and determine if a           due to GPU down, GPU hang, and GPU out of memory.
+service problem is caused by networks.
+                                                                             In addition, service performance degradation can also be caused
+   First, by constructing regular RoCE packets as probes and ACKs,        by non-network problems, such as degraded compute performance
+R-Pingmesh can detect RoCE-specific problems. Second, with ToR-           due to GPU underclocking. As DML services constantly repeat
+mesh (Top-of-Rack switch) probing, R-Pingmesh can detect anoma-           computation and communication, and each cycle takes only a few
+lous RNICs and identify anomalous probes caused by RNICs in               seconds, these problems appear as degraded network throughput at
+real time. Third, by probing with UD QP, R-Pingmesh reduces the           coarse monitoring granularity and also look like network problems.
+consumption of RNIC connectivity resources and can accurately             When these non-network problems occur and cause service failure
+measure network RTT and end-host processing delay. And by per-            or performance degradation, network operators often waste a lot
+forming the service tracing probing, R-Pingmesh can measure the           of time trying to find the root cause in the network.
+service network RTT. Finally, by monitoring service performance
+degradation and judging whether a problem lies in the service net-           We lack an efficient end-to-end RoCE network measurement tool.
+work, R-Pingmesh can assess the impact of problems on services.           Previously, methods for diagnosing service performance problems
+                                                                          can be roughly divided into two steps: (1) inspecting the servers
+   We have deployed R-Pingmesh for over 6 months on multiple              and switches in the service network for configurations, logs, and
+DML RoCE clusters totaling tens of thousands of RNICs. These              anomalous metrics (e.g., packet drops, Tx/Rx PFC pause frames); (2)
+clusters include both on-premises and public cloud clusters. During       running benchmark tools such as perftest [38] and nccl-test [37]
+deployment, R-Pingmesh can detect, categorize, and locate prob-           between the RNICs in the service network. This approach works
+lems in 20s and determine their impact on services. We evaluate           when the cluster size is small (e.g., tens to hundreds of RNICs).
+the performance of R-Pingmesh on a large-scale DML RoCE clus-             However, over the past year, the size of the service network has
+ter with thousands of GPU servers. Data collected from a recent           grown rapidly to tens of thousands of RNICs, and this growth
+month in the DML cluster shows that 85% of problems detected              continues. In this scenario, the above troubleshooting steps are time-
+and located by R-Pingmesh are accurate, where all 157 switch net-         consuming. In addition, it is not sufficient to measure the network
+work problems are accurate. R-Pingmesh can efficiently detect and         using only the RNICs used by the service, because the service may
+locate 14 types of problems caused by hardware failures, miscon-          randomly use a part of the network links in a cluster due to ECMP.
+figurations, network congestion, and intra-host bottlenecks during        Therefore, this tool should be able to measure the performance of
+deployment. We share our experience in dealing with these prob-           the network used by the service (i.e., the service network).
+lems. For example, for RNIC or switch port flapping, we increase
+the retransmission timeout and set the number of retransmissions          2.2 Frequent and Harmful Packet Drops
+to the maximum to prevent service failures. In summary, this paper
+makes the following contributions:                                        In theory, lossless RoCE networks do not drop packets due to
+                                                                          network congestion. However, we find that packet drops due to
+· We present the first RoCE network monitoring and diagnostic             network failures are common. These network failures include (1)
+  system based on end-to-end active probing. It can be easily de-         anomalous RNICs, such as flapping RNICs, and (2) anomalous in-
+  ployed in data center RoCE clusters with low overhead. Instead          network devices, such as flapping switch ports, damaged or aged
+  of passive flow tracing, R-Pingmesh achieves service awareness          fiber, and misconfigured switches.
+  by actively probing the service network. This approach is easy
+  to deploy and has low overhead.                                            In DML, all participating GPUs must periodically synchronize
+                                                                          their local gradients over the network [5, 19, 44]. The completion
+· R-Pingmesh innovatively proposes (1) a method to accurately             time of this process is determined by the slowest GPU (barrel effect).
+  measure network RTT and end-host processing delay with low              Since RDMA throughput is vulnerable to packet drops, either RNIC
+  overhead on commodity RNICs; (2) ToR-mesh probing to detect             or in-network packet drops can cause severe throughput degra-
+  abnormal RNICs and distinguish anomalous probes caused by               dation of multiple flows, which can further degrade the average
+  these RNICs in real time; and (3) an easy-to-deploy method to           throughput of the DML cluster due to the barrel effect. As shown
+  obtain the service flow 5-tuples in real time with low overhead.        in Figure 1, a single flapping RNIC or switch port severely degrades
+                                                                          the average training throughput of the DML cluster. However, we
+· We summarize the problems detected and located by R-Pingmesh            lack an effective monitoring and diagnostic system to quickly detect
+  and share our experience in dealing with them.                          packet drops and accurately locate the abnormal device.
+
+                                                                     555
+R-Pingmesh: A Service-Aware RoCE Network Monitoring and Diagnostic System                                                                  ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+Throughput (Gbps)                  Average Throughput                     Drop Rate  0.50     Drop Rate ()        Network RTT (ms)  100    P99 Network RTT                    Average Load  400  Average Load
+                   40
+                                                                                                                                    10
+                                                                                                                                                                                            200
+                   20                                                                  0.25                                         1
+
+                   0   0  5  10                        15             20  25         300.00                                         0.1 0  3  6             9                 12  15 0
+
+                                 Timestamp (minute)                                                                                                         Timestamp (hour)
+
+Throughput (Gbps)                  Average Throughput                     Drop Rate      100  Drop Rate (%)       Figure 2: P99 TCP RTT measured by Pingmesh in one of our clusters. The
+                   50                                                                                             measured software RTT fluctuates as the host average load changes.
+                   25
+                                                                                         50
+
+                   0      100 200 300 400 500 600 700 800 900 0                                                   RoCE networks cannot meet our requirements. In this section, we
+                    0                                                                                             present our targets and show the limitations of Pingmesh.
+                                                                                                                  Detect problems specific to RoCE networks. TCP probes in
+                                                       Timestamp (s)                                              Pingmesh cannot detect all RoCE network issues. RoCE networks
+                                                                                                                  typically require lossless Ethernet, while traditional TCP networks
+Figure 1: A single flapping (up) switch port or (down) RNIC severely degrades                                     are lossy. To ensure that RoCE and TCP traffic do not interfere with
+the average training throughput of the entire DML cluster, even to zero.                                          each other, data centers typically assign TCP and RoCE traffic to
+                                                                                                                  different traffic queues in both RNICs and switches, and enable PFC
+2.3 Hard to Detect and Locate Bottlenecks                                                                         in the RoCE queue [12]. As a result, TCP probes cannot detect prob-
+                                                                                                                  lems specific to RoCE queues, such as RoCE network congestion
+In addition to network failures, performance bottlenecks can also                                                 and packet drops caused by improper PFC configurations.
+degrade service performance. These bottlenecks can occur in end                                                   Distinguish between RNIC and in-network drops. By collect-
+hosts, such as CPU overload, and in inter-host networks, such as                                                  ing 5-tuples of dropped Pingmesh probes and tracing their paths,
+switch port congestion caused by uneven load balancing. And as                                                    operators can further locate anomalous network devices. However,
+cluster size grows, both the frequency and impact of performance                                                  Pingmesh cannot tell if a dropped probe is caused by a NIC or a
+bottlenecks increase. Here are two bottlenecks that occur in our                                                  switch, which limits the accuracy of using its path for troubleshoot-
+DML RoCE clusters.                                                                                                ing. For example, a failed switch link drops some probes. At the
+Case 1: Network congestion due to uneven load balancing.                                                          same time, several anomalous NICs also drop some probes. In this
+Our RoCE clusters use ECMP to hash training flows to parallel paths.                                              case, the NIC and switch drops can interfere with each other during
+As the number of hosts involved in training increases, the num-                                                   troubleshooting, leading to inaccurate localization of packet drops.
+ber of RDMA connections between hosts increases dramatically,                                                     As a result, it can take several to tens of minutes for operators to
+increasing the probability of hash collisions. When this happens, all                                             further confirm the true location of the packet drops. Therefore, we
+flows on the bottleneck link suffer throughput degradation, further                                               need to distinguish whether the RNIC or the switch is dropping
+degrading the throughput of the entire cluster.                                                                   packets in order to accurately locate RNIC and switch problems.
+Case 2: CPU overload. Before training begins, our hosts in the                                                    Accurately measure end-host processing delay and service
+training task need to load training models from the remote storage                                                network RTT. To detect and locate performance bottlenecks, we
+cluster. During this process, all participating hosts must complete                                               need to accurately measure the end-host processing delay and the
+the loading process before training can begin. The load process in                                                RTT of the paths used by the service. However, Pingmesh mea-
+our DML cluster is TCP-based, which is CPU intensive. A host with                                                 sures RTT at the software layer, and the measured RTT has three
+an overloaded CPU can slow down the loading process for all hosts,                                                components: network RTT, prober processing delay, and respon-
+thereby degrading the training rate.                                                                              der processing delay. As shown in Figure 2, although Pingmesh
+                                                                                                                  can detect an abnormal increase in RTT when performance bot-
+   These bottlenecks can be detected by latency metrics such as                                                   tlenecks occur, it is difficult to locate them because the increase can
+the RTT of paths used by the service and the end-host processing                                                  come from either end hosts or networks. In addition, as Pingmesh is
+delay. However, we lack an effective system to monitor these metrics.                                             service-oblivious, it cannot measure service network RTT.
+Furthermore, since the RoCE network RTT is typically in tens of                                                   Assess the impact of problems on services. Not all problems
+microseconds, we need to measure the network RTT accurately. As                                                   detected should be resolved immediately. Some problems do not
+shown in Figure 2, it is not enough to measure network latency at                                                 severely affect service, such as packet drops caused by transient
+the application layer, which can be affected by CPU load.                                                         flapping. Whether to fix these problems should be based on benefit,
+                                                                                                                  because fixing them may also cause network fluctuations (e.g., iso-
+2.4 Targets & Limitations of Pingmesh                                                                             lating the anomalous switch port) or even require a service restart
+                                                                                                                  (e.g., replacing the anomalous host). Therefore, we need to prior-
+We need an efficient RoCE network monitoring and diagnostic                                                       itize each detected problem based on its impact and determine a
+system to quickly detect and locate RoCE network failures and                                                     solution to minimize the loss of service performance:
+bottlenecks. It can also quickly determine if the network is to blame
+when service performance degrades. We are inspired by our TCP                                                     · P0 (Priority 0): This problem has a severe impact on service per-
+networks. Pingmesh [13] is a data center physical and TCP network                                                   formance and must be resolved immediately.
+monitoring and diagnostic system based on end-to-end RTT prob-
+ing. Pingmesh Agent has been deployed on most of the servers in                                                   · P1: The impact of this problem on the service is not severe.
+our data centers. Can we extend Pingmesh to RoCE networks to meet                                                   Whether to fix it should be based on benefit.
+our needs? This allows us to build on existing systems with minimal
+development and deployment effort. However, although RoCE NICs
+also support TCP communication, deploying Pingmesh directly in
+
+                                                                                                             556
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                 Liu et al.
+
+· P2: This problem is not in the service network. However, the                             Analyzer               Controller                      Probing & Tracing
+  anomalous device should be isolated or repaired to prevent ser-                                                                                 Pinglist Delivery
+  vice performance degradation.                                                              Cluster   Service    Communication      Pinglist     Data Uploading
+                                                                                           Monitoring  Tracing      Information    Generation     Service Info
+   The priority also helps determine if a service problem is caused
+by the network. If no P0 or P1 problems are detected when service                                                                           HOST
+performance degrades, we can confirm that the network is innocent.
+However, Pingmesh is service-oblivious, it cannot assess the impact                        Services                                Agent          RNIC 1
+of problems on services.                                                                   5-tuple 1
+                                                                                                          Data      Intra-ToR       Active        RNIC 2  Fabric
+3 R-PINGMESH OVERVIEW                                                                      5-tuple 2   Uploading                   Probing
+3.1 Challenges and Opportunities                                                                                     Inter-ToR                    RNIC 3
+                                                                                             ...         5-tuple                     Path
+To achieve these targets, we need to solve three challenges.                                            Monitor   Service Tracing  Tracing          ...
+Use commodity RNICs to accurately measure network la-                                      5-tuple N                  Pinglist
+tency and end-host processing delay. To ensure deployability,                                          Responder                                  RNIC M
+the measurement should use the standard interfaces of commod-
+ity RNICs without relying on special firmware or drivers. How-                             Figure 3: R-Pingmesh framework. Our RoCE servers have a TCP NIC for
+ever, commodity RNICs do not provide timestamps when they                                  management. Interaction between the three modules is over the TCP network.
+send/receive packets. They only provide timestamps when generat-
+ing Completion Queue Events (CQE). The challenge is to use these                           storage. There is no RDMA communication between our different
+implicit timestamps to determine the RNIC's send and receive times,                        clusters. Therefore, in R-Pingmesh, RNICs within a cluster probe
+and measure network latency and end-host processing delay. We                              each other, and there is no probing between different clusters. Since
+address this challenge in Section 4.2.1.                                                   a host can have multiple RNICs, the minimum probing granularity
+Probe service networks with low overhead. In order to accu-                                is RNIC-to-RNIC.
+rately measure service network RTT, we need to probe the paths
+used by services. An intuitive idea is to construct probes with the                           R-Pingmesh has three modules: Agent, Controller, and Analyzer.
+same 5-tuples2 as service flows. Then these probes will be routed                          Agent is a service on each RoCE host and is responsible for con-
+to the same paths as the service flows by ECMP. In TCP networks,                           structing RoCE packets to perform probing tasks and for tracing
+a flow corresponds to a process by its 5-tuple. While in RoCE net-                         the path of all probes it sends. Controller provides pinglists to all
+works, RDMA packets are encapsulated over UDP, and the process                             Agents to guide their probing targets. Analyzer is responsible for
+uses the internal 4-tuple3 to identify a flow. In addition, the verbs                      SLA tracking, detecting and locating anomalies, and assessing the
+API allows the application to determine the source port used in the                        impact of problems on services. R-Pingmesh has two functions:
+outer 5-tuple. In this way, RoCE packets can be easily routed to the                       Cluster Monitoring and Service Tracing.
+same paths as the service flow. The challenge then is to detect when
+service connections are established and closed in real time, and to                           The purpose of Cluster Monitoring is to monitor the network
+obtain the service flow 5-tuple with low overhead. We address this                         SLA of RoCE clusters and locate cluster network problems. Agent
+challenge in Section 4.2.2.                                                                constructs a UD (Unreliable Datagram) QP (Queue Pair) on each
+Categorize anomalous data accurately. First, not all detected                              RNIC for probing and responding. The probe is a regular RoCE
+anomalies can be attributed to networks. For example, a timeout                            packet and suffers from all RoCE network problems. Probing with
+may be caused by a down host, which is not network-related. Using                          UD QP reduces the consumption of RNIC connectivity resources
+this data to locate network problems can be misleading. Thus, the                          and can accurately measure network RTT and end-host processing
+first challenge in data analysis is to accurately determine whether an                     delay. Controller provides two pinglists for each Agent: ToR-mesh
+anomaly is caused by networks. We address this challenge in Section                        pinglist and inter-ToR pinglist. ToR-mesh probing monitors the state
+4.3.1. In addition, network anomalies can be further attributed to                         of all RNICs under a ToR switch and identifies anomalous probes
+RNICs or switches. It is also a challenge to accurately categorize                         caused by RNICs in real time. Inter-ToR probing effectively covers
+network anomalies. We address this challenge in Section 4.3.2.                             all network links between ToR switches within the RoCE cluster
+                                                                                           to monitor switch and link problems. Cluster Monitoring tracks
+3.2 R-Pingmesh Framework                                                                   SLAs that include not only connectivity and packet drops, but also
+                                                                                           accurate network RTT and end-host processing delay. These metrics
+Figure 3 shows the framework of R-Pingmesh. R-Pingmesh is an                               allow R-Pingmesh to detect and locate performance bottlenecks in
+end-to-end RoCE network latency probing system. The coverage of                            addition to network failures. Cluster Monitoring is always on and
+R-Pingmesh is all RoCE NICs as well as switches and links where                            independent of services. Therefore, it can detect network problems
+RoCE traffic may exist. A RoCE cluster typically serves a specific                         before services are running.
+service team, such as distributed machine learning or distributed
+                                                                                              Service Tracing is independent of Cluster Monitoring and has
+2                                                                                          three goals: monitor service network SLAs, measure service net-
+                                                                                           work RTT, and assess the impact of problems on services. The main
+ Source IP and port, destination IP and port, and transport layer protocol. For RoCE       difference between these two functions is that the probing targets in
+packets, the destination port is 4791 and the protocol is UDP.                             Service Tracing are obtained by monitoring 5-tuples of service flows,
+3Source GID (Global Identifier), source QPN (Queue Pair Number), destination GID,          not from Controller. When Agent detects the establishment of RDMA
+and destination QPN.                                                                       connections, it parses the 5-tuples of these connections and con-
+                                                                                           structs packets with the same 5-tuples to probe the service network.
+                                                                                           The execution of Service Tracing depends on whether there are
+                                                                                           RDMA connections on the local host. By probing the paths used by
+
+                                                                                      557
+R-Pingmesh: A Service-Aware RoCE Network Monitoring and Diagnostic System            ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+service flows, R-Pingmesh can continuously track service network                     Table 1: Feature comparisons of the three QP types
+SLAs. In addition, by monitoring service performance degrada-
+tion and judging whether a problem lies in the service network,                      Features             RC UC UD
+R-Pingmesh can assess the impact of problems on services.
+                                                                                     Accurate RTT Measurement   
+4 R-PINGMESH DESIGN
+4.1 R-Pingmesh Controller                                                            Connection Overhead  High High Low
+
+Store the latest RNIC communication information. The first                           4.2 R-Pingmesh Agent
+function of Controller is to act as a central database to store the
+latest communication info for RNICs managed by Agents. When                          4.2.1 Probe RTT and Processing Delay with UD QP.
+an RNIC wants to communicate with a remote RNIC over RoCE                            The first design consideration for active probing is which QP type
+networks, it needs to obtain the remote RNIC's communication info,                   to choose. We have two requirements: (1) it is able to accurately
+including the Global Identifier (GID) and Queue Pair Number (QPN),                   measure network RTT and end-host processing delay, and (2) it has
+which are similar to the IP address and port number in the TCP                       low connection overhead. Table 1 compares the relevant features
+network. We can reserve a TCP port on all hosts for Pingmesh Agent                   of all three QP types.
+to listen on. However, the QPN can only be obtained after Agent
+starts and creates a QP on the RNIC. In addition, when an Agent                         First, as shown in Figure 4, accurate measurement of network
+restarts due to host reboot, the QPN of all RNICs it manages will                    RTT requires four timestamps:  prober RNIC sends the probe, 
+change. Therefore, Controller must store the latest communication                    responder RNIC receives the probe,  responder RNIC sends the
+info of all RNICs to ensure that the pinglist it provides to each                    ACK, and  prober RNIC receives the ACK. Then we could use
+Agent is valid. To meet this end, each time Agent starts, it reports                 (-)-(-) to get RTT without clock synchronization between
+the communication info of all RNICs in the host to Controller.                       prober and responder RNICs. However, instead of providing explicit
+Create ToR-mesh and inter-ToR pinglists for each RNIC in                             timestamps on sending and receiving packets, commodity RNICs
+Cluster Monitoring. For each RNIC, the ToR-mesh pinglist con-                        only provide timestamps when generating CQEs.
+tains the communication info of all RNICs within the same ToR
+switch. This allows R-Pingmesh to quickly identify anomalous                            For all three QP types, a CQE with an RNIC timestamp can be
+RNICs and determine whether anomalous probes are caused by                           generated when an RDMA message is successfully received ( and
+RNICs (described in Section 4.3.2). In addition, network links be-                   ). However, in RC, the sender RNIC only generates a CQE after it
+tween different ToR switches must also be covered with sufficient                    receives the ACKs of all the message packets it has sent to the des-
+probes. Since our data center networks are symmetric and use                         tination. As a result, we cannot get  and  in RC. In UC and UD,
+ECMP to hash flows to different paths, Controller first uses Equa-                   the sender RNIC does not guarantee data reliability, and the sender
+tion (1) [51] to calculate the number of 5-tuples each ToR switch                    RNIC generates a CQE immediately after the message is sent to the
+needs () to cover all cross-ToR links with high probability. In this                 wire. Therefore, with UC or UD QP, Agent can accurately measure
+equation,  is the number of parallel cross-ToR paths, and  is the                    all four timestamps (). On this basis, the responder's pro-
+probability that  5-tuples can cover all  paths based on ECMP.                       cessing delay can be calculated by -. And by measuring  and
+In practice, we set  to 0.99 to get .                                                 at the prober application, Agent can get the prober processing
+                                                                                     delay by (-)-(-) without clock synchronization between the
+                                                                                     host CPU and RNIC.
+
+arg min  (-1)+1             1 - , where                                    (1)          In terms of connection overhead, if Agent uses connection-based
+                  1-                                                                 QP (RC or UC), for each destination RNIC, the local RNIC must
+                                                                                     create a QP and connect it to the destination QP, which consumes
+ =1                                                                                  the limited QP context (QPC) cache in the RNIC [21­23]. To ensure
+                                                                                     coverage of network links within a cluster, an RNIC can probe hun-
+   Then, Controller randomly selects  inter-ToR 5-tuples for each                    dreds of other RNICs. With RC or UC QP, Agent will consume a lot
+ToR switch, aggregates them into inter-ToR pinglists based on the                    of QPC cache in the RNIC, increasing the probability of QPC cache
+source RNIC IP, and distributes these pinglists to the corresponding                 misses for service traffic, which will result in RNIC performance
+Agent. Based on the expected probe frequency on each link, Con-                      degradation. In contrast, UD is connectionless. With UD, Agent
+troller can further get the probe interval for each RNIC. In addition,               only needs to create one QP on each RNIC, significantly reducing
+Controller periodically changes the 5-tuples used in inter-ToR prob-                 the connection overhead. Therefore, Agent uses UD for active porb-
+ing to detect problems that can only be triggered by certain 5-tuples,               ing, which can accurately measure RTT and processing delay with
+such as silent packet drops for certain 5-tuples. Since probing is                   low connection overhead.
+performed within a RoCE cluster, this two-tier probing approach is
+sufficient in most scenarios.                                                           Next, we introduce the probing process for network RTT and
+Respond to Agent in Service Tracing. After the local Agent                           end-host processing delay. Each Agent acts as both a prober and a
+obtains 5-tuples used by service flows, it constructs RoCE packets                   responder. As a prober, Agent selects target RNICs from pinglists
+with the same 5-tuples for probing. To ensure that the target RNIC                   and constructs RoCE packets to probe these RNICs. As a responder,
+can recognize the probe, the local Agent needs to request the latest                 Agent responds to all received probes with ACKs, which carry
+communication info of the target RNIC from Controller.                               the processing delay on the responder. As shown in Figure 4, the
+                                                                                     probing steps are as follows.
+
+                                                                                558
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                      Liu et al.
+
+             Prober                                                 Responder                  service tracing pinglist will be empty and Service Tracing in Agent
+                                                                                               will be paused until a new connection is established.
+CPU               RNIC        RNIC                                       CPU
+                                                                                               4.2.3 Path Tracing and Data Uploading.
+1 Post Send          2 Send Finish                                                             The path tracing module is responsible for tracing the paths of
+   Poll CQE                               Probe                                                probes and their ACKs so that Analyzer can locate network prob-
+                                                                                               lems and assess their impact on service performance. This raises a
+             CQE                                     3 Recv Probe   CQE        Poll CQE        design discussion: should we trace probes continuously or only when
+                                                                    CQE        Post Send       they encounter a network problem? We choose the former, and for
+                                                     4 Send Finish             Poll CQE        each probe 5-tuple and its ACK, Agent periodically Traceroute
+             CQE     5 Recv ACK1                                               Post Send       their latest paths. Our reason is two-fold. First, in the case of a per-
+                                                                                               sistent failure, such as a link down, the replayed dropped packets
+                                          ACK1                                                 will be rehashed to other normal links, leading to inaccurate fault
+                                                                                               localization. In addition, continuous path tracing allows Analyzer
+6 Poll CQE                                                                                     to locate network problems immediately as they occur. However,
+                                                                                               since Traceroute consumes switch CPU, data center switches typ-
+Poll CQE     CQE        ACK2                                                                   ically limit the frequency of responses to it. Therefore, we limit
+                                                                                               the frequency of Traceroute in Agent to avoid overloading the
+Figure 4: Probing process for network RTT and end-host processing delay                        switches. The data uploading module is responsible for uploading
+with UD QP. The timestamps that need to be measured are marked with circles                    the network RTT, timeout events, end-host processing delay, and
+( on the prober and  on the responder).                                                        each probe's information and path to Analyzer for analysis.
+
+1 The prober sends a probe to the target RNIC and gets a CQE with                              4.3 R-Pingmesh Analyzer
+  timestamp  when the RNIC finishes sending.
+                                                                                               4.3.1 Is a Timeout Probe Caused by Network Problems?
+2 Upon receiving the probe, the responder gets a CQE with times-                               Among all uploaded end-to-end probe results, anomalous data can
+  tamp  and responds to the prober with an ACK packet. When                                    be categorized into two types: timeout and high RTT. High RTT
+  the RNIC finishes sending the ACK packet, the responder gets a                               is usually caused by network problems, such as network conges-
+  CQE with RNIC timestamp .                                                                    tion. However, timeout can be caused by network problems, such as
+                                                                                               flapping ports/RNICs, non-network problems, such as an accidental
+3 The responder obtains its processing delay according to -,                                   host down, and probe noise, such as QPN reset. QPN reset occurs
+  writes the delay into the second ACK packet's payload, and sends                             when the target host or Agent reboots, in which case the Agent
+  the packet to the prober.                                                                    QPN of the target RNIC changes. And if the probe is still using the
+                                                                                               outdated QPN, the remote RNIC will drop it and trigger a timeout.
+4 After receiving the first ACK, the prober gets a CQE with times-                             Using timeout caused by non-network problems and probe noise
+  tamp  and gets its processing delay: (-)-(-).                                                to troubleshoot network problems can be misleading. Therefore,
+                                                                                               Analyzer must first rule out non-network timeout and noise.
+5 After receiving the second ACK, the prober gets the responder's
+  processing delay -, and the network RTT : (-)-(-).                                              For a timeout probe, we can first check whether Agent on the
+   Note that the responder can only get the timestamp  after                                   target host is still uploading data. If not, the timeout probe is caused
+                                                                                               by host down. Next, for probe noise caused by QPN reset, an intuitive
+sending the first ACK. Therefore, the responder has to send the                                solution is to update all pinglists with the latest QPN in real time.
+second ACK to carry its processing delay. In addition, in steps 4 and                          However, this introduces a high processing overhead for both Agent
+5, if the prober does not receive all two ACKs in a certain period of                          and Controller. As a workaround, Analyzer can compare the target
+time, the probe or ACK packets may be dropped for some reason,                                 RNIC's QPN in the probe packet with the one stored in Controller.
+and this probing will be marked as a timeout.                                                  If they do not match, this timeout is caused by a QPN reset problem.
+                                                                                               And in the next round of pinglist updates, the outdated QPN will
+4.2.2 Monitor the 5-tuples of Service Flows.                                                   be replaced with the latest ones.
+To obtain the 5-tuple of service flows in real time with low over-
+head, we use eBPF (extended Berkeley Packet Filter) to trace the call                          4.3.2 Detect Anomalous RNICs in Real Time.
+to the kernel functions modify_qp and destroy_qp. Our services                                 After excluding non-network timeout and probe noise, all anoma-
+typically use RC QP to ensure reliable delivery. When connecting                               lous probes are caused by networks, including RNIC problems4 and
+RC QP on two RNICs, modify_qp is called to modify the QP at-                                   switch network problems. If we can detect anomalous RNICs, we
+tribute including the 5-tuple. In addition, when the service closes a                          can further filter out anomalous probes caused by RNICs and
+connection, it calls destroy_qp. By tracing these two verbs, Agent                             accurately locate switch network problems.
+can know exactly when a connection is established or closed and
+obtain its 5-tuple. Since these kernel verbs are called only when                              4
+connections are established or closed, which is not frequent, tracing
+these verbs has little impact on service performance. Note that this                            It is hard to use probing to directly judge whether the problem is in the RNIC, the
+method can easily be deployed on RDMA servers without relying                                  RNIC link, or the switch port connected to the RNIC. Thus, Analyzer considers all these
+on special hardware or firmware.                                                               problems as RNIC problems and other network problems as switch network problems.
+
+   After obtaining 5-tuples of service flows, Agent sends the des-
+tination RNIC IP to Controller to obtain its communication info.
+Agent then uses these 5-tuples and destination communication info
+to create pinglist entries and pushes them to the service tracing
+pinglist. When Agent's active probing module finds targets in this
+pinglist, it probes these targets using the given 5-tuples. If Agent
+detects that a connection is closed, it removes the corresponding
+entry from the pinglist. After all service connections are closed, the
+
+                                                                                          559
+R-Pingmesh: A Service-Aware RoCE Network Monitoring and Diagnostic System                                          ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+   Our experience in detecting anomalous RNICs is to introduce mini-                           Algorithm 1 Identify the Most Suspicious Switch Links
+mal uncertainty. In Cluster Monitoring, ToR-mesh probing monitors
+RNIC states in real time. Since probing within a ToR switch involves                           Input:  
+only two links, if a probe from RNIC A to RNIC B shows anomalies,                              Output:    
+the problem is either at A, B, or the ToR switch. If many probes to                             1: function DetectAbnormalLinks()
+an RNIC show anomalies at the same time, that RNIC is probably                                  2:  ()
+abnormal. Meanwhile, any anomalous probe data involving that
+RNIC should not be used to locate switch network problems. The                                 3:   for            in  abnormal      paths  do
+premise of this approach is that for each RNIC, there should be
+enough probes from other RNICs under the same ToR switch over a                                                  
+fine-grained period of time so that we can monitor the state of each
+RNIC in real time. Although Pingmesh has also adopted intra-ToR                                4:        for           in            do
+probing, it cannot detect anomalous RNICs in real time because it
+does not guarantee the sending frequency of probe packets.                                                                         
+
+4.3.3 Locate Switch Network Problems.                                                          5:         .  
+According to Sections 4.3.1 and 4.3.2, we can get anomalous
+probes caused only by switch network problems. As shown in                                     6:         ._ + +
+Algorithm 1, with the paths of these probes and their ACKs, we can
+use a simple voting mechanism to determine abnormal switches5                                  7: return   with the largest _
+and links. The core idea, derived from binary network tomography
+[4, 6, 17], is to find common links in the paths of anomaly probes,                            8: function InitLinkState()
+and these links are most likely to be anomalous. When Analyzer
+detects that the number of uploaded anomalous probes caused by                                 9: for  in all network links do
+switch network problems exceeds a threshold, it traverses the paths
+of these probes and their ACKs one by one and counts the number                                10:        .  
+of times each link is traversed. After this process, the link with
+the highest number of votes is the most suspicious. Note that for                              11:        ._  0
+anomalous probes uploaded by Cluster Monitoring and Service
+Tracing, Analyzer analyzes them individually.                                                  5 IMPLEMENTATION
+
+4.3.4 Assess the Impact of Problems on the Service.                                            In R-Pingmesh, Controller and Analyzer were quickly developed
+After the above analysis, it is straightforward to assess the im-                              based on Pingmesh. We spent most of our time on Agent, which was
+pact of a problem on services. First, to assess whether the service                            built from scratch. This section presents some key implementation
+performance is severely affected, we need to monitor its typical                               details and running parameters.
+performance metrics, such as the training rate or the average net-                             Agent is implemented based on the verbs API [28]. It launches
+work throughput in DML, and set a maximum tolerable threshold                                  four independent threads on each RNIC, responsible for ToR-mesh
+6 for metric degradation. If the metric degradation exceeds this                               probing, inter-ToR probing, service tracing probing, and responding
+threshold, we consider that the service performance is severely                                to probes. Each probing thread periodically selects a target RNIC
+affected and it is necessary to address this problem immediately.                              from the corresponding pinglist and probes it using the source port
+                                                                                               specified in the pinglist, which is done by setting the flow label in
+   If a problem is (1) detected by Service Tracing or (2) detected                             the verbs API. After receiving a probe, the responder uses the same
+by Cluster Monitoring and lies in the service network, then this                               source port as the probe to send ACKs, mimicking how the RNIC
+problem can affect the service performance (P0 or P1). At the same                             sends ACKs in RC QP used by services. All running parameters in
+time, if the performance metric degradation exceeds the threshold,                             Agent are set by Controller through pinglists. The timeout for each
+the problem should be resolved immediately (P0). Otherwise, op-                                probe is 500ms. And the payload of the probe and ACK is 50 bytes,
+erators should consider both the performance loss during solving                               including some necessary fields such as the responder processing
+this problem and the benefits gained after solving this problem to                             delay. To ensure that the communication info in the service tracing
+determine whether this problem should be resolved immediately                                  pinglist is valid, Agent pulls the latest communication info for all
+(P1). If a problem is detected by Cluster Monitoring and does not                              target RNICs from Controller every 5 minutes. Every 5 seconds,
+occur in the service network, then it is a problem that does not                               Agent uploads all probe information to Analyzer.
+affect service performance (P2). In addition, if no P0 or P1 problem                           Controller updates the ToR-mesh/inter-ToR pinglists in each Agent
+is detected when service performance degrades, then the service                                every 5 minutes to ensure that the target info is valid. And it changes
+network is innocent.                                                                           20% of the 5-tuples in each inter-ToR pinglist every hour. The ToR-
+                                                                                               mesh probing frequency is 10 packets per second to detect anoma-
+5By simply replacing all "" in Algorithm 1 with "", Analyzer can identify                      lous RNICs at 100ms granularity. The inter-ToR probing frequency
+the most suspicious switches.                                                                  varies with cluster network topologies. For each cluster, Controller
+                                                                                               calculates a probing frequency to ensure that each link above ToR
+6                                                                                              switches sends more than 10 probes per second per direction to
+                                                                                               detect switch network problems at 100ms granularity. And the
+ The form of the threshold is not fixed. For example, it could be "metric degradation to       probing interval in Service Tracing is 10ms to better capture net-
+a certain value" or "the total number/duration of metric degradations reaches a certain        work congestion. The probing frequency used in R-Pingmesh can
+value". The setting of this threshold needs to be discussed with the service team.             effectively detect service-impacting problems with low overhead
+                                                                                               and does not introduce probing noise due to oversensitivity.
+                                                                                               Analyzer uses 20s as the analysis period to detect and locate prob-
+                                                                                               lems in real time. Every 20s, it processes all data uploaded by Agents
+                                                                                               in the last 20s. It first checks each timeout probe. If an Agent has not
+                                                                                               uploaded data for more than 20s, that host is considered down, and
+                                                                                               all timeout probes to RNICs on that host are considered caused by
+                                                                                               host down. It then filters out timeout probes caused by QPN reset as
+                                                                                               described in Section 4.3.1. Next, it analyzes the ToR-mesh probing
+
+                                                                                          560
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                                                                           Liu et al.
+
+RTT (us) Throughput (Gbps)                  100                                                                                 175                                                          35                     RNIC1
+
+                                                                                                                                150  False Positive       157            RNIC Drop Rate (%)  30                     RNIC2
+                                                                                                                                125
+                                            50                                                                   Problem Count       Accurate                                                25                     RNIC3
+
+                                                                                                                                100                                                          20                     RNIC4
+
+                                                                                                                                75   50                                                      15                     RNIC5
+                                                                                                                                50                                                                                  RNIC6
+                                                                                                                                                                                             10
+                                            0                                                                                                                                                                       RNIC7
+
+                                                                                                                                25   20                                                      5                      RNIC8
+
+                                            100     P50      P99                  P999                                          0    RNIC            Switch Network                          0
+                                                                                                                                                                                              0 100 200 300 400 500
+                                                                                                                                         Problem Category                                          Timestamp (s)
+
+                                            50                                                                   Figure 6: (left) Problems detected and located by R-Pingmesh. (right) Occupa-
+                                                                                                                 tion of the Agent CPU by the service application causes probe packets to be
+                                            0                                                                    "dropped" simultaneously by multiple RNICs on a host.
+
+Drop Rate () Drop Rate () Proc. Delay (us)  600     P50      P99                  P999                                                                                                      20.0
+                                                                                                                                                                                            19.5
+                                            400                                                                                 5                                        Memory Usage (MB)
+
+                                                                                                                 CPU Usage (%)  4                                                           19.0
+
+                                            200                                                                                 3                                                           18.5
+
+                                            0                                                                                   2                                                           18.0
+
+                                            1.0     Switch Network Drop Rate            RNIC Drop Rate                          1                                                           17.5
+
+                                                                                                                                0        5           10              15                     17.00  5  10                   15
+                                                                                                                                         Timestamp (day)                                           Timestamp (day)
+                                            0.5
+                                                                                                                 Figure 7: CPU and memory usage of R-Pingmesh Agent in half a month. The
+                                            0.0                                                                  CPU usage is based on a single CPU core.
+
+                                            1.0     Switch Network Drop Rate            RNIC Drop Rate           SLA monitoring. Figure 5 shows the monitoring of both cluster
+                                                                                                                 network SLAs and service network SLAs over a period of time in the
+                                            0.5
+                                                                                                                 cluster. To ensure fault tolerance, (a) our hosts periodically use TCP
+                                            0.0  0  10   20  30               40        50  60          70
+                                                                                                                 to upload their trained models to the storage cluster in checkpoints.
+                                                             Timestamp (minute)
+                                                                                                                 During this time, the RoCE network is briefly idle, and (b) the net-
+Figure 5: The monitoring of network SLAs over a period of time. From top
+to bottom are (a) the average throughput of the training task; (b) the probed                                    work RTT simultaneously decreases. As TCP is CPU intensive, (c)
+RTT of the service network; (c) the measured end-host processing delay in                                        the end-host processing delay also increases. This indicates that
+the service network; (d) the probe drop rate of the service network; and (e) the                                 R-Pingmesh can accurately measure RTT and processing delay
+probe drop rate of the cluster network.                                                                          and use them to reflect service states. In addition to the check-
+                                                                                                                 points, (a) there are two anomalous throughput degradations during
+results over the last 20s to determine the state of each RNIC. If more
+than 10% of the probes to an RNIC experience a timeout, that RNIC                                                this period, and (b) the RTT also degrades. With Analyzer's real-
+is considered anomalous. In this analysis, and for the next minute,
+Analyzer considers all timeout probes to or from that RNIC caused                                                time analysis and accurate distinction between RNIC and switch
+by RNIC problems. After this step, the remaining timeout probes are
+considered caused by switch network problems. Next, in addition to                                               network problems via ToR-mesh probing, both (d) Service Trac-
+locating switch network problems, Analyzer aggregates all latency                                                ing and (e) Cluster Monitoring detect packet drops on switches in
+and timeout data in this analysis period to determine (1) RNIC drop                                              an analysis period (i.e., 20s). This confirms that both degradations
+rate, (2) switch network drop rate, and the distribution (P50 to P999)                                           are caused by packet drops in the service network (P0 or P1). In
+of both (3) end-host processing delay and (4) network RTT for each
+RoCE cluster and service network. In this way, Analyzer tracks                                                   addition, during this time, (e) Cluster Monitoring detects an anoma-
+SLAs for both cluster networks and service networks.
+                                                                                                                 lous RNIC that continues to drop packets. However, (d) Service
+6 EVALUATION
+                                                                                                                 Tracing does not see any RNIC drops. Therefore, we conclude that
+We have deployed R-Pingemsh for over 6 months on multiple DML
+RoCE clusters totaling tens of thousands of RDMA NICs. These                                                     the problem is outside the service network and does not affect the
+clusters include both on-premises and public cloud clusters. We                                                  service (P2). With SLA monitoring, we can detect and categorize
+evaluate the performance of R-Pingmesh on a large-scale DML                                                      problems in real time and determine their impact on services.
+RoCE cluster from the following perspectives: (1) SLA monitoring,                                                Localization accuracy. We use data from a recent month in the
+(2) localization accuracy, and (3) Agent overhead.                                                               DML cluster to evaluate the localization accuracy of R-Pingmesh.
+
+Network topology. The RoCE cluster has 3 tiers of switches to                                                    As shown in Figure 6 (left), R-Pingmesh reported 207 problems
+accommodate thousands of GPU servers, and different tiers are in-                                                that it detected and located in this month. All of these problems are
+terconnected in a CLOS-like topology. The switches use Broadcom                                                  quickly located in one analysis period (i.e., 20s). By identifying each
+Tomahawk 4 chips, and each switch has 64 × 400Gbps ports for a                                                   one, 85% of reported problems are accurate, where all 157 re-
+total bandwidth of 25.6Tbps. The oversubscription ratio at each tier                                             ported switch network problems are accurate due to the accurate
+is 1:1 (i.e., 32 ports for downlink and 32 ports for uplink).                                                    distinction between RNIC and switch network problems by ToR-mesh
+                                                                                                                 probing. However, only 20 of the 50 RNIC problems are confirmed,
+                                                                                                                 and we find no RNIC or host anomalies in the remaining 30 prob-
+
+                                                                                                                 lems. After analysis, we realize that the root cause is the occupation
+
+                                                                                                                 of Agent CPU by the service, resulting in a high processing delay
+
+                                                                                                                 in responding ACKs, and thus a timeout in the prober. As shown in
+                                                                                                                 Figure 6 (right), a common feature of these problems is that probes
+                                                                                                                 to multiple RNICs of a host are transiently "dropped" at the same time.
+                                                                                                                 Since the probability of multiple RNICs on a host being abnormal
+
+                                                                                                            561
+R-Pingmesh: A Service-Aware RoCE Network Monitoring and Diagnostic System                     ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+        Table 2: Problems found by R-Pingmesh during deployment. () indicates that this problem will cause services to fail.
+
+No.     Problem Categories                     Root Cause Categories                                                        Root Causes
+                                                   Hardware Failures           RNIC or switch port flapping.
+1
+                                                   Misconfigurations           Packet drops on RNICs or switches due to packet corruption.
+2                                                Network Congestion            Accident RNIC down. 
+                                                 Intra-host Bottlenecks        Accident host down. 
+3                                                                              PFC deadlock caused by anomalous switches. 
+                                                                               Lack of additional routing configurations for RNICs. 
+4                                                                              RNIC GID index missing. 
+                                                                               Switch ACL (Access Control List) configuration error. 
+5            Failures                                                          PFC unconfigured or misconfigured PFC headroom on switches.
+
+6                                                                              Uneven load balance.
+
+7                                                                              Interference between services.
+
+8                                                                              CPU overload.
+
+9                                                                              The speed or width of the RNIC or GPU PCIe link is downgraded.
+
+10                                                                             Incorrect PCIe or RNIC configurations (e.g., wrong ACS or ATS configurations [29]).
+
+11
+
+12      Performance Bottlenecks
+
+13
+
+14
+
+10 ms                                  1ms                                          600  P90  P99  P999                                                                                                                                   80  P90  P99            P999
+
+        P50                                    P50
+Process Delay                                                                       500                                                                                                                                                   70
+                                                                    Network RTTP90P90
+1 ms                                                                                                                                               Process Delay (ms)P99                                                                  60
+                                                                                                                                                                                                                        Network RTT (us)P99400
+                                       100us                                                                                                                                                                                              50
+
+100 us                                                                              300                                                                                                                                                   40
+
+                                                                                    200                                                                                                                                                   30
+
+                                       10us                                         100                                                                                                                                                   20
+                                            0                                                 30 60 90 120 150 180 210
+10 us0  200 400 600 800          1000          100 200 300 400 500                                     Timestamp (minute)                                                                                                                 10  30 60 90 120 150 180 210
+                 Timestamp (s)                           Timestamp (s)
+                                                                                                                                                                                                                                              Timestamp (minute)
+
+Figure 8: (left) CPU overload results in high processing delay on some hosts.       Figure 9: The service training throughput continues to decrease. At the same
+(right) A PFC storm results in a high P99 network RTT.                              time, the network RTT also decreases and the processing delay is stable, indi-
+                                                                                    cating that no network or CPU bottleneck occurs.
+
+at the same time is very low, we can use this feature to filter out                 Hardware failures. Of all the hardware failures, (#1) is the most
+probe noise. Another option is to check if the responder has an                     common. When flapping occurs, the state of the RNIC or switch port
+abnormally high processing delay. If so, the timeout is possibly                    changes frequently between up and down, causing packet drops.
+caused by CPU overload. In subsequent deployments, Analyzer                         Early in the deployment, we noticed frequent RNIC flapping. After
+uses these methods to effectively eliminate false positives caused                  a long-term analysis with our RNIC vendor, we realized that the
+by CPU overload and accurately measure network timeout.                             root cause was an incompatibility between the RNIC and the cable.
+                                                                                    After replacing the cable, the frequency of RNIC flapping decreased
+Agent overhead. In Agent, CPU is primarily consumed by send-                        significantly. Severe flapping can cause service flow timeout. In
+ing/receiving probes and ACKs. For each RNIC, the probe frequency                   this case, if the RDMA connection retransmits more than a certain
+is typically less than 150 packets per second, which is not CPU in-                 number of times but cannot succeed, it will be broken, causing
+tensive. Memory is primarily consumed by temporary local caching                    training tasks to fail. To ensure stable operation, our service team
+of probe results. Therefore, the overhead of Agent scales linearly                  sets the retransmission count to the maximum (i.e., 7 times in
+with the number of RNICs on the host. During deployment, we                         RDMA) and sets the retransmission timeout to a higher value to
+continuously monitored the Agent's CPU and memory usage. As                         avoid consuming all retransmission counts during flapping.
+shown in Figure 7, the average CPU and memory consump-
+tion of Agent on hosts with 8 RNICs is approximately 3% and                            Damaged or aged optical fibers and dust in the optical module
+18.5MB, respectively. In addition, because the probes and ACKs                      can cause packet corruption, resulting in packet drops on switches
+are small packets, the bandwidth consumption on each RNIC is less                   or RNICs (#2). These problems will degrade throughput and train-
+than 300Kbps, which is negligible for mainstream 100/200 Gb/s                       ing rates. In addition, hardware failures can cause an accidental
+RNICs in the data center.                                                           RNIC or host down (#3 and #4). When these problems occur in
+                                                                                    the service network, service connections will be broken, causing
+7 EXPERIENCES AND FUTURE WORK                                                       training tasks to fail. In public clouds, we found several network
+7.1 Problems Found by R-Pingmesh                                                    connectivity problems caused by PFC deadlock (#5). In one of them,
+                                                                                    two switch ports on a link continue to send PFC pause frames
+As shown in Table 2, we summarize the problems detected and                         to each other, completely blocking all traffic going through that
+located by R-Pingmesh during the deployment. Based on the phe-                      link. From the service perspective, some RDMA connections cannot
+nomena caused by these problems, we categorize them as failures                     communicate, and our tenant suspects that the root cause lies in
+and performance bottlenecks. Failures typically result in packet drops              the ACL (Access Control List) configuration on the switches. Mean-
+and unreachable hosts or RNICs. In these cases, Agent can detect                    while, R-Pingmesh detects a large number of timeout probes. Based
+probe packet timeout. On the other hand, performance bottlenecks                    on their 5-tuples, R-Pingmesh accurately diagnosed the abnormal
+result in increased network latency, increased processing delay,                    link. Normally, the PFC watchdog on switches will temporarily
+and degraded throughput. In these cases, Agent will detect high                     disable PFC when it detects a deadlock. However, these anomalous
+network RTT or processing delay. Based on the root cause of these                   switches were not functioning properly in these cases.
+problems, they can be further categorized as hardware failures,
+misconfigurations, network congestion, and intra-host bottlenecks.
+
+                                                                               562
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                                                                                                                                                                                          Liu et al.
+
+10 ms   Network RTT                            RNIC throughput   400             10 ms           3.4 ms                                                                                                                                    10 ms
+
+                                                                                                         P99                                                                                                                                                       P99
+Network RTT                                                                                                                                                                                                                                               3.4 ms   P999
+                                                                                                                                Throughput (Gbps)P999
+1 ms                                                                                                                                            Service Network RTT1 ms
+                                                                                                                                                                                                                      Service Network RTT537 us
+                                                                 200
+100 us                                                                                                                                                                                                                                     1 ms   537 us
+                                                                                                                 99 us
+10 us                                                                            100 us                  35 us                                                                                                                                                             322 us
+                                                                                                                                                                                                                                                                   153 us
+01000   1500  2000   2500 3000 3500 4000       4500        5000     0            10 us All2All (DCQCN) AllReduce (DCQCN)                                                                                                                   100 us All2All (DCQCN)
+                               Timestamp (ms)                    5500                                                                                                                                                                                              All2All (Our)
+
+Figure 10: Service Tracing probes sent by an RNIC can accurately capture         Figure 11: Network RTT measured by R-Pingmesh reflects (left) the degree
+periodic All2All traffic and network congestion in a DML cluster.                of network congestion in different communication modes and (right) the
+                                                                                 performance of congestion control algorithms.
+
+Misconfigurations. The most common misconfiguration is (#6).                     7.2 Is It a Network Problem?
+Our RoCE NICs require additional routing configuration for RDMA
+communication, which is configured by scripts after the host boots.              When a service fails, R-Pingmesh can determine if the root cause
+However, these configurations may fail for some reason. In addition,             is in the network by checking if there is a large number of probe
+our RoCE network uses a specific GID index for RDMA communica-                   timeout in the service network. And when service performance
+tion. However, (#7) RNICs may lose this index in some cases. In (#6)             degrades, R-Pingmesh can determine if there is a bottleneck in the
+and (#7), these anomalous RNICs are unreachable, and the task will               network or CPU by checking network RTT and end-host processing
+fail if it selects a host with these RNICs to participate in the training.       delay, as shown in Figure 8. In one case, the service training rate
+R-Pingmesh uses this specific GID index to probe and can quickly                 and average throughput continue to decrease, and our service team
+detect anomalous RNICs. In addition to RNIC misconfigurations,                   suspects that the network is congested due to uneven load balancing.
+switch misconfigurations occur occasionally. In our public cloud                 We then check the metrics in R-Pingmesh. As shown in Figure 9, the
+clusters, different tenants are isolated from each other by the switch           RTT is also decreasing and the processing delay is stable, proving
+ACL. As a cluster has multiple tenants, and tenants may frequently               that there is no bottleneck in network or CPU processing. Upon
+increase or decrease the number of hosts they own, the ACL needs                 further analysis, our service team finds bugs in the training code,
+to be configured frequently. And the ACL can be misconfigured due                which result in continuous degradation of compute performance
+to operator oversight or errors in the configuration script, resulting           and appear as continuous degradation of network throughput at
+in connectivity failures between different RNICs of the same tenant              coarse monitoring granularity.
+(#8). R-Pingemsh can effectively detect ACL anomalies by randomly
+probing between all RNICs within the cluster. In addition, operator                 There are some end-host problems that R-Pingmesh cannot di-
+oversights can lead to unconfigured PFC or misconfigured PFC                     rectly detect, such as GPU underclocking, GPU out of memory,
+headroom on switches (#9), resulting in packet drops during heavy                and GPU down, which can degrade training performance or even
+congestion. By analyzing the timeout 5-tuples, R-Pingmesh can                    cause training tasks to fail. Nevertheless, if Service Tracing finds no
+accurately locate abnormal switches.                                             anomalies in service networks, operators can be confident that the
+Network congestion. Network congestion is common in large                        problem is not caused by host down, CPU overload, anomalous RNICs
+clusters. In addition to the congestion caused by load imbalance                 or networks. In this way, R-Pingmesh effectively helps to narrow
+(#10) mentioned in Section 2.3, we also found congestion caused                  down the possible causes of service problems and avoid wasting
+by interference between different services. Although ACL isolates                time diagnosing root causes in the wrong directions.
+servers from different tenants in public clouds, traffic from different
+tenants can still share some network links and cause congestion                  7.3 RTT Measurement and Application
+(#11). During the deployment, R-Pingmesh found that the Service
+Tracing results from two different tenants indicated the same con-               Use service traffic characteristics to find hotspots. DML ser-
+gested link, and we quickly diagnosed the root cause of the problem.             vices constantly repeat computation and communication. During
+Furthermore, by detecting network hotspots and identifying the                   computation, the network is idle; while during communication, the
+flows passing through them, R-Pingmesh can guide the load bal-                   network is heavily loaded. Each cycle takes only a few seconds.
+ancing of service flows. We discuss this in Section 7.3.                         We have considered setting the probing interval in Service Tracing
+Intra-host bottlenecks. During deployment, R-Pingmesh detected                   to 1ms or even lower to effectively capture the network hotspot.
+three types of intra-host bottlenecks. The first is the CPU over-                However, this has a high probing overhead. In fact, we can still
+load (#12) mentioned in Section 2.3. As shown in Figure 8 (left),                efficiently detect hotspots with a lower probing frequency. In DML,
+R-Pingmesh can easily detect this problem by accurately measuring                connections remain unchanged during the training process, and
+the end-host processing delay. R-Pingmesh also detected intra-host               their paths are fixed unless some links or switches fail. Therefore,
+bandwidth degradation caused by PCIe downgrades (#13) and mis-                   if there is a network bottleneck, it will appear in every communi-
+configurations (#14), where PCIe downgrades can be caused by                     cation period. By probing for multiple rounds, the probes that go
+loose PCIe interfaces, dust on PCIe interfaces, or hardware failures.            through the hotspot must experience congestion several times, and
+Intra-host bandwidth degradation causes RNICs to send PFC pause                  the tail RTT of these probes will be high. A key insight is to probe
+frames and can result in a PFC storm [29]. R-Pingmesh has found                  randomly. We need to prevent probes for some paths from being
+several such cases, and Figure 8 (right) shows one of them. In this              sent only when the network is idle or heavily loaded. Therefore,
+case, Service Tracing found a high P99 network RTT, and ToR-mesh                 Agent shuffles the pinglist in each round of service tracing probing.
+probing also found a high RTT to an anomalous RNIC.                              Use tail RTT to reflect the degree of network congestion. Our
+                                                                                 DML services typically use two communication modes, AllReduce
+                                                                                 [18] and All2All [27], where AllReduce is less congested and All2All
+
+                                                                            563
+R-Pingmesh: A Service-Aware RoCE Network Monitoring and Diagnostic System                                                       ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+Spine Switch                Spine Switch 1              ...         Spine Switch M                     in Cluster Monitoring, we can have RNICs on a host probe each other.
+                                                                                                       With enough 5-tuples, all links in the cluster can be covered. Since
+Rail Switch   Rail 1 Swith         Rail 2 Swith              Rail 3 Swith  ...      Rail N Swith       the target RNIC is on the local host, Cluster Monitoring does not need
+                                                                                                       to rely on Controller to generate pinglists. In addition, the responder
+              NIC 1  NIC 2  NIC 3           ...  NIC N  ...  NIC 1  NIC 2  NIC 3    ...  NIC N         RNIC does not need to send ACKs, and Agent can detect one-way
+                                                                                                       timeout and measure one-way RTT. With one-way probe results,
+Servers                                                                                                R-Pingmesh can locate network problems more accurately.
+                                                                                                       Hierarchically aggregated probe results can be misleading.
+Figure 12: A two-tier rail-optimized cluster. Each host has multiple NICs                              In Cluster Monitoring, R-Pingmesh aggregates probe results at
+connected to different rail switches, and all rail switches are connected to all                       different tiers (e.g., servers, ToR switches, and clusters) to evaluate
+spine switches in a full-bisection fashion. Traffic between NICs on the same                           network SLAs at each tier, and we also tried to use hierarchical
+host traverses the top-tier switches in the cluster. The red lines with arrows                         aggregation in Service Tracing. However, the aggregated data in
+show such an example.                                                                                  Service Tracing can be misleading due to the uneven distribution
+                                                                                                       of servers in the service network. For example, a service may select
+can cause severe network congestion. Figure 10 shows that Service                                      only two servers under a ToR switch. In this case, if one of the two
+Tracing probes sent by an RNIC can accurately capture the periodic                                     servers fails, the aggregated drop rate for that ToR switch is 50%,
+All2All traffic and network congestion, ensuring that R-Pingmesh                                       misleading us to believe that the ToR switch is anomalous. The root
+can effectively detect network hotspots. As shown in Figure 11                                         cause of the misleading result is that the samples being aggregated
+(left), by continuously tracking the network RTT of services using                                     are too few. Therefore, in Service Tracing, we only evaluate SLAs
+All2All and AllReduce, R-Pingmesh can reflect their difference in                                      for the entire service network and for each server.
+network congestion with the tail RTT. Our experience shows that                                        Comparison of different path tracing methods. To ensure
+All2All has a large room for congestion control optimization. As                                       that R-Pingmesh can be easily deployed, it uses Traceroute for
+shown in Figure 11 (right), compared with the default DCQCN                                            path tracing instead of other advanced switch capabilities such
+algorithm [55] on commodity RNICs, our self-developed congestion                                       as ERSPAN (Encapsulated Remote Switch Port Analyzer) or INT
+control algorithm can effectively reduce the tail RTT and improve                                      (Inband Network Telemetry), which are not supported by some
+the training throughput. R-Pingmesh can effectively evaluate this                                      legacy switches. However, Traceroute consumes switch CPU and
+optimization using RTT metrics.                                                                        therefore the switch limits the response frequency to it. In contrast,
+Use Service Tracing to guide load balancing. With Service Trac-                                        ERSPAN and INT do not consume switch CPU, and switches do
+ing, R-Pingmesh can accurately measure the RTT of all paths used                                       not impose frequency constraints on them, allowing them to trace
+by a service and determine which service flows are contributing to                                     path information in more real time. In addition, INT allows R-
+the congested link. This information can be used to further guide                                      Pingmesh to obtain queuing information on switch ports, which
+load balancing: the service can modify the source port of some con-                                    can help locate bottlenecks more accurately when R-Pingmesh
+gested flows by calling modify_qp to reroute them to parallel paths                                    detects network congestion. We have decoupled the path tracing
+and alleviate congestion. This centralized load balancing mechanism                                    module from the active probing module so that R-Pingmesh can
+is not responsive enough, but it is still effective for the service that                               easily adopt these more powerful switch capabilities in new clusters.
+uses long connections, such as DML. In DML, connections are typi-
+cally established before training begins and closed when training                                      7.5 Limitations and Future Work
+is complete. In this scenario, congestion caused by hash collisions
+can be effectively resolved by rerouting congested flows.                                              Adapt R-Pingmesh to IB clusters. In addition to the dominant
+                                                                                                       RoCE clusters, we have some Infiniband (IB) clusters for DML ser-
+7.4 Discussion                                                                                         vices. Although IB clusters are highly integrated and use dedicated
+                                                                                                       RNICs and switches, our experience shows that they are far from
+Use the network topology feature to optimize the system.                                               trouble-free. IB clusters also suffer from RNIC and switch network
+The framework of R-Pingmesh introduced in this paper ensures                                           problems and require an effective network monitoring and diagnos-
+that it can adapt to clusters with any network topology. In practice,                                  tic system. Since IB clusters also support the verbs API, R-Pingmesh
+we can leverage the feature of network topology in a cluster to                                        can be deployed directly in IB clusters and is still effective in detect-
+simplify the system design and improve the localization accuracy.                                      ing IB network problems. However, IB clusters may use Adaptive
+For example, for hosts with multiple NICs, there is an emerging                                        Routing [35] for load balancing, and a packet may be randomly
+networking method called rail-optimized networking [9, 33, 34, 45].                                    routed to parallel paths, making it difficult to accurately trace probe
+Figure 12 shows a small-scale two-tier rail-optimized cluster. In                                      paths to further locate switch network problems. How to accu-
+this topology, instead of connecting all NICs on a host to the same                                    rately locate a switch network problem detected by R-Pingmesh in
+ToR switch, different NICs on a host are connected to different ToR                                    IB clusters is our future work.
+switches (rail switches), and NICs with the same index on different                                    Detect anomalous GPUs. R-Pingmesh uses CPU memory for
+hosts form a rail. This topology takes advantage of multiple NICs                                      RDMA probing. As a limitation, it cannot directly detect some GPU
+on a host and allows more hosts to be under the same ToR switch,                                       problems, such as GPU down and high GPU read/write latency due
+minimizing cross-ToR traffic and hash collisions. In a rail-optimized                                  to GPU failures. In training clusters, if R-Pingmesh can probe the
+cluster, inter-rail traffic (e.g., probes between NICs on the same                                     path of training traffic within RDMA servers (i.e., RNIC <-> GPU) in
+host) must traverse the top-tier switches in the cluster. Therefore,
+
+                                                                                                  564
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                           Liu et al.
+
+Figure 13: Two of the most common causes of congestion detected by R-               8 RELATED WORK
+Pingmesh: many-to-one incast and uplink congestion caused by hash collisions.
+                                                                                    Traditional network monitoring and diagnosis. There is a
+real time, it can further effectively detect these GPU problems. An                 large body of literature on monitoring and diagnosing physical
+intuitive solution is using GPU memory to perform RDMA probing.                     networks [1, 3, 8, 11, 13­16, 26, 31, 39, 41, 43, 46, 48, 49, 52, 53, 56].
+However, a GPU process uses at least a few hundred MB of GPU                        With the growth of cloud services in recent years, there is also a
+memory (measured on an Nvidia A100 GPU [32], and varies by GPU                      need to monitor and diagnose virtual networks, and some literature
+type), most of which is consumed by the process context. Because                    works on this [7, 42, 54]. However, these solutions do not focus on
+GPU memory is valuable, service teams typically cannot afford this                  monitoring RoCE packets or use RoCE packets for probing, and
+overhead. How to monitor the path between RNIC and GPU in the                       therefore cannot detect all RoCE network problems.
+end host with low overhead is our future work.                                      RDMA network monitoring and diagnosis. RDMA Pingmesh
+Automatically diagnose root causes. While R-Pingmesh can                            [12] is the first monitoring and diagnostic system proposed for
+quickly detect and locate anomalies, it is hard to diagnose the                     RDMA networks, but apart from using RDMA packets for probing,
+root cause solely from the probing results. For example, if ToR-                    there is no subsequent exploration and experience. R-Pingmesh
+mesh probing detects that an RNIC keeps dropping packets, the                       systematically illustrates how to build an efficient and stable RoCE
+anomaly may occur on the RNIC, the cable, or the switch port                        network monitoring and diagnostic system based on active probing,
+connected to the RNIC. In addition, packet drops on switches can                    including many critical design details and experiences, such as the
+be caused by port flapping or packet corruption. Currently, inferring               choice of QP type, how to accurately measure network latency, how
+the root cause of these anomalies requires our operators to further                 to deal with probe noise, and how to probe service networks. Estat
+examine anomalous counters and logs and rely on their experience.                   [2] tracks the state of the service network by recording key trans-
+Integrating the probing results with more information, such as                      mission timestamps in RDMA operations. R-Pingmesh achieves
+counters and logs, and using efficient methods, such as decision                    the same target by actively probing the service network. X-RDMA
+trees, for automatic root cause diagnosis is our future work.                       [30] pings all machines in the ToR layer to reflect network states.
+Minimize the impact of hardware failures. Although R-Pingmesh                       Pangu [10] detects and locates RDMA network problems by track-
+can effectively detect hardware failures such as RNIC down, RNIC                    ing NACK events.
+or port flapping, and packet corruption, if these problems occur                    Diagnosing RNICs and RDMA servers. End hosts and RNICs
+during service runtime, they can cause severe service performance                   have become potential bottlenecks in RDMA communication. Some
+degradation or even task failure. Resolving these problems to re-                   literature is devoted to finding, understanding, and diagnosing
+store service performance typically requires operator intervention                  problems in RNICs and RDMA servers. Collie [25] helps RDMA
+or even a task restart, which is inefficient. To minimize the impact                operators and developers uncover performance anomalies in RNICs.
+of hardware failures on service performance, we have three direc-                   Husky [24] is a test suite for systematically evaluating RNIC per-
+tions for future work. (1) Monitor anomalous metrics on RNICs and                   formance isolation solutions. Lumina [50] tests the correctness and
+switch ports, such as CRC (Cyclic Redundancy Check) errors, to                      performance of RDMA hardware network stacks. Hostping [29]
+predict or detect anomalous RNICs and ports as early as possible and                exploits the feature of RNIC loopback traffic to detect and diagnose
+replace or isolate them. (2) If a switch port drops packets anoma-                  intra-host network bottlenecks.
+lously, automatically determine whether to isolate the anomalous port
+based on the impact of the problem to minimize performance loss.                    9 CONCLUSION
+(3) If an RNIC goes down or drops packets anomalously, isolate the
+anomalous RNIC in the service application without restarting the                    In this paper, we propose R-Pingmesh, the first service-aware RoCE
+training task.                                                                      network monitoring and diagnostic system based on end-to-end
+Congestion alleviation and link isolation. During the deploy-                       active probing. It is based on end-host and commodity RNICs, and
+ment of R-Pingmesh, we found that more effort is needed to op-                      can therefore be easily deployed in data center RoCE clusters with
+timize network performance. As shown in Figure 13, of all the                       low overhead. R-Pingmesh helps to accurately detect and locate fail-
+network congestion detected by R-Pingmesh, two causes are the                       ures and performance bottlenecks in both networks and end hosts.
+most common. The first is ToR switch downlink congestion caused                     R-Pingmesh can also quickly determine if a problem is network-
+by many-to-one incast, which should be alleviated by tuning param-                  related and assess its impact on services. We have deployed R-
+eters in congestion control algorithms or designing better conges-                  Pingmesh on tens of thousands of RNICs and it has become the
+tion control algorithms. The second is ToR switch uplink congestion                 most important monitoring and diagnostic system for our RoCE
+caused by ECMP hash collision, which can be avoided or mitigated                    networks. This work does not raise any ethical issues.
+by designing better load balancing algorithms. Furthermore, in a
+public cloud, in addition to isolating the servers of different ten-                ACKNOWLEDGMENTS
+ants, their network links also need to be isolated to prevent traffic
+contention between different tenants.                                               We are grateful to our shepherd, Gianni Antichi, and the anony-
+                                                                                    mous reviewers who helped us improve the quality of this paper.
+                                                                                    This work is partly supported by the National Natural Science Foun-
+                                                                                    dation of China (NSFC) under Grant No. 62132022 and 62372053
+                                                                                    and the Natural Science Foundation of Shandong Province under
+                                                                                    Grant No. ZR2023LZH011.
+
+                                                                               565
+R-Pingmesh: A Service-Aware RoCE Network Monitoring and Diagnostic System                                               ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia
+
+REFERENCES                                                                                           USENIX Symposium on Networked Systems Design and Implementation (NSDI 24).
+                                                                                                     745­760.
+ [1] Behnaz Arzani, Selim Ciraci, Luiz Chamon, Yibo Zhu, Hongqiang Harry Liu, Jitu
+                                                                                               [21] Anuj Kalia, Michael Kaminsky, and David Andersen. 2019. Datacenter RPCs can
+      Padhye, Boon Thau Loo, and Geoff Outhred. 2018. 007: Democratically finding                    be General and Fast. In 16th USENIX Symposium on Networked Systems Design
+      the cause of packet drops. In 15th USENIX Symposium on Networked Systems                       and Implementation (NSDI 19). 1­16.
+      Design and Implementation (NSDI 18). 419­435.
+ [2] Wei Bai, Shanim Sainul Abdeen, Ankit Agrawal, Krishan Kumar Attre, Paramvir               [22] Anuj Kalia, Michael Kaminsky, and David G Andersen. 2014. Using RDMA
+                                                                                                     Efficiently for Key-Value Services. In Proceedings of the 2014 ACM Conference on
+      Bahl, Ameya Bhagat, Gowri Bhaskara, Tanya Brokhman, Lei Cao, Ahmad Cheema,                     SIGCOMM. 295­306.
+      et al. 2023. Empowering azure storage with RDMA. In 20th USENIX Symposium
+      on Networked Systems Design and Implementation (NSDI 23). 49­67.                         [23] Anuj Kalia, Michael Kaminsky, and David G Andersen. 2016. FaSST: Fast, Scalable
+ [3] Ran Ben Basat, Sivaramakrishnan Ramanathan, Yuliang Li, Gianni Antichi,                         and Simple Distributed Transactions with Two-Sided Datagram RPCs. In 12th
+                                                                                                     USENIX Symposium on Operating Systems Design and Implementation (OSDI 16).
+      Minian Yu, and Michael Mitzenmacher. 2020. PINT: Probabilistic in-band network                 185­201.
+      telemetry. In Proceedings of the Annual conference of the ACM Special Interest
+      Group on Data Communication on the applications, technologies, architectures, and        [24] Xinhao Kong, Jingrong Chen, Wei Bai, Yechen Xu, Mahmoud Elhaddad, Shachar
+      protocols for computer communication. 662­680.
+ [4] Ítalo Cunha, Renata Teixeira, Nick Feamster, and Christophe Diot. 2009. Mea-                    Raindel, Jitendra Padhye, Alvin R Lebeck, and Danyang Zhuo. 2023. Under-
+                                                                                                     standing RDMA microarchitecture resources for performance isolation. In 20th
+      surement Methods for Fast and Accurate Blackhole Identification with Binary                    USENIX Symposium on Networked Systems Design and Implementation (NSDI 23).
+      Tomography. In Proceedings of the 9th ACM SIGCOMM conference on Internet                       31­48.
+      measurement. 254­266.
+ [5] Jianbo Dong, Zheng Cao, Tao Zhang, Jianxi Ye, Shaochuang Wang, Fei Feng, Li               [25] Xinhao Kong, Yibo Zhu, Huaping Zhou, Zhuo Jiang, Jianxi Ye, Chuanxiong Guo,
+
+      Zhao, Xiaoyong Liu, Liuyihan Song, Liwei Peng, et al. 2020. EFLOPS: Algorithm                  and Danyang Zhuo. 2022. Collie: Finding Performance Anomalies in RDMA
+                                                                                                     Subsystems. In 19th USENIX Symposium on Networked Systems Design and Imple-
+      and System Co-Design for a High Performance Distributed Training Platform. In                  mentation (NSDI 22). 287­305.
+      2020 IEEE International Symposium on High Performance Computer Architecture              [26] Jonatan Langlet, Ran Ben Basat, Gabriele Oliaro, Michael Mitzenmacher, Minlan
+      (HPCA). IEEE, 610­622.                                                                         Yu, and Gianni Antichi. 2023. Direct Telemetry Access. In Proceedings of the ACM
+ [6] Nick Duffield. 2006. Network Tomography of Binary Network Performance                           SIGCOMM 2023 Conference. 832­849.
+      Characteristics. IEEE Transactions on Information Theory 52, 12 (2006), 5373­            [27] Mu Li, David G Andersen, Jun Woo Park, Alexander J Smola, Amr Ahmed,
+      5388.
+                                                                                                     Vanja Josifovski, James Long, Eugene J Shekita, and Bor-Yiing Su. 2014. Scaling
+ [7] Chongrong Fang, Haoyu Liu, Mao Miao, Jie Ye, Lei Wang, Wansheng Zhang,                          Distributed Machine Learning with the Parameter Server. In OSDI. 583­598.
+                                                                                               [28] Linux. 2024. rdma-core. https://github.com/linux-rdma/rdma-core.
+      Daxiang Kang, Biao Lyv, Peng Cheng, and Jiming Chen. 2020. VTrace: Automatic
+                                                                                               [29] Kefei Liu, Zhuo Jiang, Jiao Zhang, Haoran Wei, Xiaolong Zhong, Lizhuang Tan,
+      diagnostic system for persistent packet loss in cloud-scale overlay network. In
+      Proceedings of the Annual conference of the ACM Special Interest Group on Data                 Tian Pan, and Tao Huang. 2023. Hostping: Diagnosing intra-host network bot-
+      Communication on the applications, technologies, architectures, and protocols for              tlenecks in RDMA servers. In 20th USENIX Symposium on Networked Systems
+      computer communication. 31­43.                                                                 Design and Implementation (NSDI 23). 15­29.
+ [8] Seyed K Fayaz, Tushar Sharma, Ari Fogel, Ratul Mahajan, Todd Millstein, Vyas              [30] Teng Ma, Tao Ma, Zhuo Song, Jingxuan Li, Huaixin Chang, Kang Chen, Hai
+
+      Sekar, and George Varghese. 2016. Efficient network reachability analysis using                Jiang, and Yongwei Wu. 2019. X-rdma: Effective rdma middleware in large-
+      a succinct control plane representation. In 12th USENIX Symposium on Operating                 scale production environments. In 2019 IEEE International Conference on Cluster
+      Systems Design and Implementation (OSDI 16). 217­232.                                          Computing (CLUSTER). IEEE, 1­12.
+ [9] Hao Gao and Nikolai Sakharnykh. 2021. Scaling Joins to a Thousand GPUs.. In               [31] Masoud Moshref, Minlan Yu, Ramesh Govindan, and Amin Vahdat. 2016. Trumpet:
+      ADMS@ VLDB. 55­64.                                                                             Timely and precise triggers in data centers. In Proceedings of the 2016 ACM
+[10] Yixiao Gao, Qiang Li, Lingbo Tang, Yongqing Xi, Pengcheng Zhang, Wenwen                         SIGCOMM Conference. 129­143.
+                                                                                               [32] NVIDIA. 2022. Nvidia DGX A100. https://images.nvidia.com/aem-dam/Solutions/
+      Peng, Bo Li, Yaohui Wu, Shaozong Liu, Lei Yan, et al. 2021. When Cloud Storage
+      Meets RDMA. In 18th USENIX Symposium on Networked Systems Design and                           Data- Center/nvidia- dgx- a100- datasheet.pdf .
+      Implementation (NSDI 21). 519­533.
+[11] Yilong Geng, Shiyu Liu, Zi Yin, Ashish Naik, Balaji Prabhakar, Mendel Rosenblum,          [33] NVIDIA. 2023. Doubling all2all Performance with NVIDIA Collective Com-
+
+      and Amin Vahdat. 2019. SIMON: A simple and scalable method for sensing,                        munication Library 2.12. https://developer.nvidia.com/blog/doubling-all2all-
+      inference and measurement in data center networks. In 16th USENIX Symposium
+      on Networked Systems Design and Implementation (NSDI 19). 549­564.                             performance- with- nvidia- collective- communication- library- 2- 12/.
+[12] Chuanxiong Guo, Haitao Wu, Zhong Deng, Gaurav Soni, Jianxi Ye, Jitu Padhye,
+                                                                                               [34] NVIDIA. 2023. NVIDIA DGX SuperPOD: Next Generation Scalable Infrastructure
+      and Marina Lipshteyn. 2016. RDMA over Commodity Ethernet at Scale. In
+      Proceedings of the 2016 ACM SIGCOMM Conference. 202­215.                                       for AI Leadership. https://docs.nvidia.com/https:/docs.nvidia.com/dgx-superpod-
+[13] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave
+                                                                                                     reference- architecture- dgx- h100.pdf .
+      Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, and Hua and Chen. 2015. Pingmesh: A
+                                                                                               [35] NVIDIA. 2023. NVIDIA InfiniBand Adaptive Routing Technology--Accelerating
+      Large-Scale System for Data Center Network Latency Measurement and Analysis.
+      Computer communication review 45, 4 (2015), 139­152.                                           HPC and AI Applications. https://resources.nvidia.com/en-us-cloud-native-
+[14] Arpit Gupta, Rob Harrison, Marco Canini, Nick Feamster, Jennifer Rexford, and
+                                                                                                     supercomputing- dpus- campaign/infiniband- white- paper- adaptive- routing.
+      Walter Willinger. 2018. Sonata: Query-driven streaming network telemetry.
+      In Proceedings of the 2018 conference of the ACM special interest group on data          [36] NVIDIA. 2024. NCCL. https://github.com/NVIDIA/nccl.
+      communication. 357­371.
+[15] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David Mazières, and                [37] NVIDIA. 2024. nccl-test. https://github.com/NVIDIA/nccl-tests.
+
+      Nick McKeown. 2014. I know what your packet did last hop: Using packet                   [38] OFED. 2024. perftest. https://github.com/linux-rdma/perftest.
+      histories to troubleshoot networks. In 11th USENIX Symposium on Networked
+      Systems Design and Implementation (NSDI 14). 71­85.                                      [39] Yanghua Peng, Ji Yang, Chuan Wu, Chuanxiong Guo, Chengchen Hu, and Zong-
+[16] Qun Huang, Haifeng Sun, Patrick PC Lee, Wei Bai, Feng Zhu, and Yungang Bao.
+                                                                                                     peng Li. 2017. deTector: a Topology-aware Monitoring System for Data Center
+      2020. Omnimon: Re-architecting network telemetry with resource efficiency and                  Networks. In 2017 USENIX Annual Technical Conference (USENIX ATC 17). 55­68.
+      full accuracy. In Proceedings of the Annual conference of the ACM Special Interest       [40] Yanghua Peng, Yibo Zhu, Yangrui Chen, Yixin Bao, Bairen Yi, Chang Lan, Chuan
+      Group on Data Communication on the applications, technologies, architectures, and
+      protocols for computer communication. 404­421.                                                 Wu, and Chuanxiong Guo. 2019. A generic communication scheduler for dis-
+[17] Yiyi Huang, Nick Feamster, and Renata Teixeira. 2008. Practical Issues with                     tributed DNN training acceleration. In Proceedings of the 27th ACM Symposium
+      Using Network Tomography for Fault Diagnosis. ACM SIGCOMM Computer                             on Operating Systems Principles. 16­29.
+      Communication Review 38, 5 (2008), 53­58.                                                [41] Jeff Rasley, Brent Stephens, Colin Dixon, Eric Rozner, Wes Felter, Kanak Agarwal,
+[18] Sylvain Jeaugey. 2017. NCCL 2.0. In GPU Technology Conference (GTC).
+[19] Yimin Jiang, Yibo Zhu, Chang Lan, Bairen Yi, Yong Cui, and Chuanxiong Guo.                      John Carter, and Rodrigo Fonseca. 2014. Planck: Millisecond-scale monitoring
+                                                                                                     and control for commodity networks. ACM SIGCOMM Computer Communication
+      2020. A Unified Architecture for Accelerating Distributed DNN Training in                      Review 44, 4 (2014), 407­418.
+      Heterogeneous GPU/CPU Clusters. In 14th USENIX Symposium on Operating                    [42] Arjun Roy, Deepak Bansal, David Brumley, Harish Kumar Chandrappa, Parag
+      Systems Design and Implementation (OSDI 20). 463­479.
+[20] Ziheng Jiang, Haibin Lin, Yinmin Zhong, Qi Huang, Yangrui Chen, Zhi Zhang,                      Sharma, Rishabh Tewari, Behnaz Arzani, and Alex C Snoeren. 2018. Cloud
+      Yanghua Peng, Xiang Li, Cong Xie, Shibiao Nong, et al. 2024. {MegaScale}:                      datacenter sdn monitoring: Experiences and challenges. In Proceedings of the
+      Scaling Large Language Model Training to More Than 10,000 {GPUs}. In 21st                      Internet Measurement Conference 2018. 464­470.
+                                                                                               [43] Cheng Tan, Ze Jin, Chuanxiong Guo, Tianrong Zhang, Haitao Wu, Karl Deng,
+
+                                                                                                     Dongming Bi, and Dong Xiang. 2019. NetBouncer: Active Device and Link Failure
+                                                                                                     Localization in Data Center Networks. In 16th USENIX Symposium on Networked
+                                                                                                     Systems Design and Implementation (NSDI 19). 599­614.
+                                                                                               [44] Xinchen Wan, Hong Zhang, Hao Wang, Shuihai Hu, Junxue Zhang, and Kai
+
+                                                                                                     Chen. 2020. Rat-Resilient Allreduce Tree for Distributed Machine Learning. In
+                                                                                                     4th Asia-Pacific Workshop on Networking. 52­57.
+                                                                                               [45] Weiyang Wang, Manya Ghobadi, Kayvon Shakeri, Ying Zhang, and Naader
+
+                                                                                                     Hasani. 2023. Optimized Network Architectures for Large Language Model
+                                                                                                     Training with Billions of Parameters. arXiv preprint arXiv:2307.12169 (2023).
+
+                                                                                          566
+ACM SIGCOMM '24, August 4­8, 2024, Sydney, NSW, Australia                                  Liu et al.
+
+[46] Weitao Wang, Xinyu Crystal Wu, Praveen Tammana, Ang Chen, and TS Eu-                  [52] Yikai Zhao, Kaicheng Yang, Zirui Liu, Tong Yang, Li Chen, Shiyi Liu, Naiqian
+
+      gene Ng. 2022. Closed-loop network performance monitoring and diagnosis                    Zheng, Ruixin Wang, Hanbo Wu, Yi Wang, et al. 2021. LightGuardian: A full-
+      with SpiderMon. In 19th USENIX Symposium on Networked Systems Design and                   visibility, lightweight, in-band telemetry system using sketchlets. In 18th USENIX
+      Implementation (NSDI 22). 267­285.                                                         Symposium on Networked Systems Design and Implementation (NSDI 21). 991­
+[47] Jilong Xue, Youshan Miao, Cheng Chen, Ming Wu, Lintao Zhang, and Lidong                     1010.
+      Zhou. 2019. Fast Distributed Deep Learning over RDMA. In Proceedings of the
+      Fourteenth EuroSys Conference 2019. 1­14.                                            [53] Yu Zhou, Chen Sun, Hongqiang Harry Liu, Rui Miao, Shi Bai, Bo Li, Zhilong
+[48] Tong Yang, Jie Jiang, Peng Liu, Qun Huang, Junzhi Gong, Yang Zhou, Rui Miao,
+                                                                                                 Zheng, Lingjun Zhu, Zhen Shen, Yongqing Xi, et al. 2020. Flow event telemetry
+      Xiaoming Li, and Steve Uhlig. 2018. Elastic sketch: Adaptive and fast network-             on programmable data plane. In Proceedings of the Annual conference of the ACM
+      wide measurements. In Proceedings of the 2018 Conference of the ACM Special                Special Interest Group on Data Communication on the applications, technologies,
+      Interest Group on Data Communication. 561­575.                                             architectures, and protocols for computer communication. 76­89.
+[49] Da Yu, Yibo Zhu, Behnaz Arzani, Rodrigo Fonseca, Tianrong Zhang, Karl Deng,           [54] Shunmin Zhu, Jianyuan Lu, Biao Lyu, Tian Pan, Chenhao Jia, Xin Cheng, Daxiang
+
+      and Lihua Yuan. 2019. dShark: A General, Easy to Program and Scalable Frame-               Kang, Yilong Lv, Fukun Yang, Xiaobo Xue, et al. 2022. Zoonet: a proactive teleme-
+      work for Analyzing In-network Packet Traces. In 16th USENIX Symposium on                   try system for large-scale cloud networks. In Proceedings of the 18th International
+      Networked Systems Design and Implementation (NSDI 19). 207­220.                            Conference on emerging Networking EXperiments and Technologies. 321­336.
+[50] Zhuolong Yu, Bowen Su, Wei Bai, Shachar Raindel, Vladimir Braverman, and Xin          [55] Yibo Zhu, Haggai Eran, Daniel Firestone, Chuanxiong Guo, Marina Lipshteyn,
+
+      Jin. 2023. Understanding the micro-behaviors of hardware offloaded network                 Yehonatan Liron, Jitendra Padhye, Shachar Raindel, Mohamad Haj Yahia, and
+      stacks with lumina. In Proceedings of the ACM SIGCOMM 2023 Conference. 1074­
+      1087.                                                                                      Ming Zhang. 2015. Congestion Control for Large-Scale RDMA Deployments.
+                                                                                                 ACM SIGCOMM Computer Communication Review 45, 4 (2015), 523­536.
+[51] Hongyi Zeng, Ratul Mahajan, Nick McKeown, George Varghese, Lihua Yuan, and            [56] Yibo Zhu, Nanxi Kang, Jiaxin Cao, Albert Greenberg, Guohan Lu, Ratul Mahajan,
+
+      Ming Zhang. 2015. Measuring and troubleshooting large operational multipath                Dave Maltz, Lihua Yuan, Ming Zhang, Ben Y Zhao, et al. 2015. Packet-Level
+      networks with gray box testing. Mountain Safety Res., Seattle, WA, USA, Rep.               Telemetry in Large Datacenter Networks. In Proceedings of the 2015 ACM Confer-
+      MSR-TR-2015-55 (2015).                                                                     ence on Special Interest Group on Data Communication. 479­491.
+
+                                                                                      567
+

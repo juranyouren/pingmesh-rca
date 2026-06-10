@@ -1,0 +1,948 @@
+Pingmesh: A Large-Scale System for Data Center
+  Network Latency Measurement and Analysis
+
+Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave Maltz,
+        Zhaoyi Liu, Vin Wang, Bin Pang, Hua Chen, Zhi-Wei Lin, Varugis Kurien
+                                            Microsoft, Midfin Systems
+
+ {chguo, lyuan, dxiang, yidang, rayhuang, dmaltz, zhaoyil, vinwang, bipang, stchen,
+                     linzw}@microsoft.com, vkurien@midfinsystems.com
+
+ABSTRACT                                                                                 work interface cards (NICs), switches and routers, ca-
+                                                                                         bles and fibers, which form large-scale intra and inter
+Can we get network latency between any two servers                                       data center networks. The scale of the data center net-
+at any time in large-scale data center networks? The                                     works (DCNs) is growing even larger due to the rapid
+collected latency data can then be used to address a                                     development of cloud computing. On top of the phys-
+series of challenges: telling if an application perceived                                ical data center infrastructure, various large-scale, dis-
+latency issue is caused by the network or not, defin-                                    tributed services are built, e.g., Search [5], distributed
+ing and tracking network service level agreement (SLA),                                  file systems [17] and storage [7], MapReduce [11].
+and automatic network troubleshooting.
+                                                                                            These distributed services are large and evolving soft-
+   We have developed the Pingmesh system for large-                                      ware systems with many components and have complex
+scale data center network latency measurement and anal-                                  dependencies. All of these services are distributed and
+ysis to answer the above question affirmatively. Pingmesh                                many of their components need to interact via the net-
+has been running in Microsoft data centers for more                                      work either within a data center or across different data
+than four years, and it collects tens of terabytes of la-                                centers. In such large systems, software and hardware
+tency data per day. Pingmesh is widely used by not only                                  failures are the norm rather than the exception. As a
+network software developers and engineers, but also ap-                                  result, the network team faces several challenges.
+plication and service developers and operators.
+                                                                                            The first challenge is to determine if an issue is a
+CCS Concepts                                                                             network issue or not. Due to the distributed systems
+                                                                                         nature, many failures show as "network" problems, e.g.,
+·Networks  Network measurement; Cloud com-                                               some components can only be reached intermittently, or
+puting; Network monitoring; ·Computer systems                                            the end-to-end latency shows a sudden increase at the
+organization  Cloud computing;                                                           99th percentile, the network throughput degrades from
+                                                                                         20MB/s per server to less than 5MB/s. Our experience
+Keywords                                                                                 showed that about 50% of these "network" problems are
+                                                                                         not caused by the network. However it is not easy to
+Data center networking; Network troubleshooting; Silent                                  tell if a "network" problem is indeed caused by network
+packet drops                                                                             failures or not.
+
+1. INTRODUCTION                                                                             The second challenge is to define and track network
+                                                                                         service level agreements (SLAs). Many services need
+   In today's data centers there are hundreds of thou-                                   the network to provide certain performance guarantees.
+sands of servers. These servers are connected via net-                                   For example, a Search query may touch thousands of
+This work was performed when Varugis Kurien was                                          servers and the performance of a Search query is de-
+with Microsoft.                                                                          termined by the last response from the slowest server.
+                                                                                         These services are sensitive to network latency and packet
+Permission to make digital or hard copies of all or part of this work for personal       drops and they care about the network SLA. Network
+or classroom use is granted without fee provided that copies are not made or             SLA needs to be measured and tracked individually
+distributed for profit or commercial advantage and that copies bear this notice          for different services since they may use different set
+and the full citation on the first page. Copyrights for components of this work          of servers and different part of the network. This be-
+owned by others than ACM must be honored. Abstracting with credit is per-                comes a challenging task because of the huge number of
+mitted. To copy otherwise, or republish, to post on servers or to redistribute to        services and customers in the network.
+lists, requires prior specific permission and/or a fee. Request permissions from
+permissions@acm.org.                                                                        The third challenge is network troubleshooting. When
+                                                                                         network SLAs are broken due to various network fail-
+SIGCOMM '15, August 17 - 21, 2015, London, United Kingdom
+
+c 2015 ACM. ISBN 978-1-4503-3542-3/15/08. . . $15.00
+
+DOI: http://dx.doi.org/10.1145/2785956.2787496
+
+                                                                                    139
+ures, "live-site" incidents happen. A live-site incident is       2. BACKGROUND
+any event that results in an impact to the customers,
+partners or revenue. Live-site incidents need to be de-           2.1 Data center networks
+tected, mitigated, and resolved as soon as possible. But
+data center networks have hundreds of thousands to mil-              Data center networks connect servers with high speed
+lions of servers, hundreds of thousands of switches, and          and provide high server-to-server bandwidth. Today's
+millions of cables and fibers. Thus detecting where the           large data center networks are built from commodity
+problem is located is a hard problem.                             Ethernet switches and routers [1, 12, 2].
+
+   To address the above challenges, we have designed                 Figure 1 shows a typical data center network struc-
+and implemented Pingmesh, a large-scale system for                ture. The network has two parts: intra data center
+data center network latency measurement and analy-                (Intra-DC) network and inter data center (Inter-DC)
+sis. Pingmesh leverages all the servers to launch TCP             network. The intra-DC network is typically a Clos net-
+or HTTP pings to provide the maximum latency mea-                 work of several tiers similar to the network described
+surement coverage. Pingmesh forms multiple levels of              in [1, 12, 2]. At the first tier, tens of servers (e.g., 40)
+complete graphs. Within a data center, Pingmesh lets              use 10GbE or 40GbE Ethernet NICs to connect to a
+the servers within a rack form a complete graph and               top-of-rack (ToR) switch and form a Pod. Tens of ToR
+also uses the top-of-rack (ToR) switches as virtual nodes         switches (e.g., 20) are then connected to a second tier
+and let them form a second complete graph. Across                 of Leaf switches (e.g., 2-8). These servers and ToR and
+data centers, Pingmesh forms a third complete graph by            Leaf switches form a Podset. Multiple Podsets then
+treating each data center as a virtual node. The calcula-         connect to a third tier of Spine switches (tens to hun-
+tion of the complete graphs and related ping parameters           dreds). Using existing Ethernet switches, an intra-DC
+are controlled by a central Pingmesh Controller.                  network can connect tens of thousands or more servers
+                                                                  with high network capacity.
+   The measured latency data are collected and stored,
+aggregated and analyzed by a data storage and analy-                 One nice property of the intra-DC network is that
+sis pipeline. From the latency data, network SLAs are             multiple Leaf and Spine switches provide a multi-path
+defined and tracked at both the macro level (i.e., data           network with redundancy. ECMP (equal cost multi-
+center level) and the micro level (e.g., per-server and           path) is used to load-balance traffic across all the paths.
+per-rack levels). The network SLAs for all the services           ECMP uses the hash value of the TCP/UDP five-tuple
+and applications are calculated by mapping the services           for next hop selection. As a result, the exact path of
+and applications to the servers they use.                         a TCP connection is unknown at the server side even
+                                                                  if the five-tuple of the connection is known. For this
+   Pingmesh has been running in tens of globally dis-             reason, locating a faulty Spine switch is not easy.
+tributed data centers of Microsoft for four years. It
+produces 24 terabytes of data and more than 200 bil-                 The inter-DC network is to interconnect the intra-DC
+lion probes per day. Because of the universal availability        networks and to connect the inter-DC networks to the
+of the Pingmesh data, answering if a live-site incident           Internet. The inter-DC network uses high-speed, long
+is because of the network becomes easier: If Pingmesh             haul fibers to connect data centers networks at different
+data does not indicate a network problem, then the live-          geolocations. Software defined networking (SWAN [13],
+site incident is not caused by the network.                       B4 [16]) are further introduced for better wide area net-
+                                                                  work traffic engineering.
+   Pingmesh is heavily used for network troubleshooting
+to locate where the problem is. By visualization and au-             Our data center network is a large, sophisticated dis-
+tomatic pattern detection, we are able to answer when             tributed systems. It is composed of hundreds of thou-
+and where packet drops and/or latency increases hap-              sands of servers, tens of thousands switches and routers,
+pen, identify silent switch packet drops and black-holes          and millions of cables and fibers. It is managed by Au-
+in the network. The results produced by Pingmesh is               topilot [20], our home-grown data center management
+also used by application developers and service opera-            software stack, and the switches and NICs run soft-
+tors for better server selection by considering network           ware and firmware provided by different switch and NIC
+latency and packet drop rate.                                     providers. The applications run on top of the network
+                                                                  may introduce complex traffic patterns.
+   This paper makes the following contributions: We
+show the feasibility of building a large-scale network la-        2.2 Network latency and packet drops
+tency measurement and analysis system by designing
+and implementing Pingmesh. By letting every server                   In this paper we use the term "network latency" from
+participate, we provide latency data for all the servers          application's point of view. When an application A at
+all the time. We show that Pingmesh helps us better un-           a server sends a message to an application B at a peer
+derstand data center networks by defining and tracking            server, the network latency is defined as the time in-
+network SLA at both macro and micro scopes, and that              terval from the time A sends the message to the time
+Pingmesh helps reveal and locate switch packet drops              B receives the message. In practice we measure round-
+including packet black-holes and silent random packet             trip-time (RTT) since RTT measurement does not need
+drops, which were less understood previously.                     to synchronize the server clocks.
+
+                                                             140
+DC2                      DC3                                    a set of Autopilot services including Device Manager
+                                                                (DM), which manages the machine state, Deployment
+   Intra-DC    Inter-DC                                         Service (DS) which does service deployment for both
+   network     network                                          Autopilot and various applications, Provisioning Ser-
+                                                                vice (PS) which installs Server OS images, Watchdog
+DC1                           Spine                             Service (WS) which monitors and reports the health
+       Podset                  Leaf                             status of various hardware and software, Repair Service
+        Pod                    ToR                              (RS) which performs repair action by taking commands
+                                                                from DM, etc.
+                              Servers
+                                                                   Autopilot provides a shared service mode. A shared
+Figure 1: Data center network structure.                        service is a piece of code that runs on every autopilot
+                                                                managed server. For example, a Service Manager is a
+   RTT is composed of application processing latency,           shared service that manages the life-cycle and resource
+OS kernel TCP/IP stack and driver processing latency,           usage of other applications, a Perfcounter Collector is a
+NIC introduced latency (e.g., DMA operations, inter-            shared service that collects the local perf counters and
+rupt modulation) [22], packet transmission delay, prop-         then uploads the counters to Autopilot. Shared ser-
+agation delay, and queuing delay introduced by packet           vices must be light-weight with low CPU, memory, and
+buffering at the switches along the path.                       bandwidth resource usage, and they need to be reliable
+                                                                without resource leakage and crashes.
+   One may argue the latencies introduced by applica-
+tions and kernel stack are not really from the network.            Pingmesh uses our home-grown data storage and anal-
+In practice, our experiences have taught us that our            ysis system, Cosmos/SCOPE, for latency data storage
+customers and service developers do not care. Once a            and analysis. Cosmos is Microsoft's BigData system
+latency problem is observed, it is usually called a "net-       similar to Hadoop [3] which provides a distributed file
+work" problem. It is the responsibility of the network          system like GFS [17] and MapReduce [11]. Files in Cos-
+team to show if the problem is indeed a network prob-           mos are append-only and a file is split into multiple
+lem, and if it is, mitigate and root-cause the problem.         `extents' and an extent is stored in multiple servers to
+                                                                provide high reliability. A Cosmos cluster may have
+   User perceived latency may increase due to various           tens of thousands of servers or more, and gives users
+reasons, e.g., queuing delay due to network congestion,         almost `infinite' storage space.
+busy server CPU, application bugs, network routing
+issues, etc. We also note that packet drops increase               SCOPE [15] is a declarative and extensible scripting
+user perceived latency, since dropped packets need to           language, which is built on top of Cosmos, to analyze
+be retransmitted. Packet drops may happen at differ-            massive data sets. SCOPE is designed to be easy to
+ent places due to various reasons, e.g., fiber FCS (frame       use. It enables users to focus on their data instead
+check sequence) errors, switching ASIC defects, switch          of the underlying storage and network infrastructure.
+fabric flaw, switch software bug, NIC configuration is-         Users only need to write scripts similar to SQL without
+sue, network congestions, etc. We have seen all these           worrying about parallel execution, data partition, and
+types of issues in our production networks.                     failure handling. All these complexities are handled by
+                                                                SCOPE and Cosmos.
+2.3 Data center management and data pro-
+      cessing systems                                           3. DESIGN AND IMPLEMENTATION
+
+   Next we introduce Autopilot [20] and Cosmos and              3.1 Design goal
+SCOPE [15]. Data centers are managed by centralized
+data center management systems, e.g., Autopilot [20] or            The goal of Pingmesh is to build a network latency
+Borg [23]. These management systems provide frame-              measurement and analysis system to address the chal-
+works on how resources including physical servers are           lenges we have described in Section 1. Pingmesh needs
+managed, how services are deployed, scheduled, moni-            to be always-on and be able to provide network latency
+tored and managed. Pingmesh is built within the frame-          data for all the servers. It needs to be always on be-
+work of Autopilot.                                              cause we need to track the network status all the time.
+                                                                It needs to produce network latency data for all the
+   Autopilot is Microsoft's software stack for automatic        servers because the maximum possible network latency
+data center management. Its philosophy is to run soft-          data coverage is essential for us to better understand,
+ware to automate all data center management tasks,              manage, and troubleshoot our network infrastructure.
+including failure recovery, with as minimal human in-
+volvement as possible. Using the Autopilot terminol-               From the beginning, we differentiated Pingmesh from
+ogy, a cluster, which is a set of servers connected by          various public and proprietary network tools (e.g., tracer-
+a local data center network, is managed by an Au-               oute, TcpPing, etc.). We realized that network tools do
+topilot environment. An Autopilot environment has               not work for us because of the following reasons. First,
+                                                                these tools are not always-on and they only produce
+
+                                                           141
+Pingmesh Controller                                      Data Storage and Analysis       the ping results in local memory. Once a timer times
+                                                         (DSA)                           out or the size of the measurement results exceeds a
+                                                                                         threshold, the Pingmesh Agent uploads the results to
+     Pingmesh                 Network                    Visuali-     Alert              Cosmos for data storage and analysis. The Pingmesh
+     generator                 graph                     zation                          Agent also exposes a set of performance counters which
+                                                                                         are periodically collected by a Perfcounter Aggregator
+                Pinglist.xml       Web                   Perfcounter  Database           (PA) service of Autopilot.
+Pingmesh Agent                    service                Aggregator                      Data Storage and Analysis (DSA). The latency
+                                                                                         data from Pingmesh Agents are stored and processed
+                              vip                                                        in a data storage and analysis (DSA) pipeline. La-
+                                                                                         tency data is stored in Cosmos. SCOPE jobs are de-
+Pingmesh                      Tcp/Http          Servers  SCOPE                           veloped to analyze the data. SCOPE jobs are written
+  agent                       probings                     Jobs                          in declarative language similar to SQL. The analyzed
+                                           Pingmesh                                      results are then stored in an SQL database. Visualiza-
+                                             agent       Cosmos                          tion, reports and alerts are generated based on the data
+                                                          Store                          in this database and the PA counters.
+log                                        log
+                                                           vip                           3.3 Pingmesh Controller
+
+              Figure 2: Pingmesh architecture.                                           3.3.1 The pinglist generation algorithm
+
+data when we run them. Second, the data they produce                                        The core of the Pingmesh Controller is its Pingmesh
+does not have the needed coverage. Because these tools                                   Generator. The Pingmesh Generator runs an algorithm
+are not always-on, we cannot count on them to track                                      to decide which server should ping which set of servers.
+the network status. These tools are usually used for                                     As aforementioned, we would like Pingmesh to have as
+network troubleshooting when a source-destination pair                                   large coverage as possible. The largest possible coverage
+is known. This, however, does not work well for large-                                   is a server-level complete graph, in which every server
+scale data center networks: when a network incident                                      probes the rest of the servers. A server-level complete
+happens, we may not even know the source-destination                                     graph, however, is not feasible because a server needs
+pair. Furthermore, for transient network issues, the                                     to probe n - 1 servers, where n is the number of servers.
+problem may be gone before we run the tools.                                             In a data center n can be as large as hundreds of thou-
+                                                                                         sands. Also a server-level complete graph is not nec-
+3.2 Pingmesh architecture                                                                essary since tens of servers connect to the rest of the
+                                                                                         world through the same ToR switch.
+   Based on its design goal, Pingmesh needs to meet
+the requirements as follows. First, because Pingmesh                                        We then come up with a design of multiple level of
+aims to provide the largest possible coverage and mea-                                   complete graphs. Within a Pod, we let all the servers
+sure network latency from applications' point of view,                                   under the same ToR switch form a complete graph. At
+a Pingmesh Agent is thus needed on every server. This                                    intra-DC level, we treat each ToR switch as a virtual
+has to be done carefully so that the CPU, memory, and                                    node, and let the ToR switches form a complete graph.
+bandwidth overhead introduced by Pingmesh Agent is                                       At inter-DC level, each data center acts as a virtual
+small and affordable.                                                                    node, and all the data centers form a complete graph.
+
+   Second, the behavior of the Pingmesh Agent should                                        In our design, only servers do pings. When we say a
+be under control and configurable. A highly reliable                                     ToR as a virtual node, it is the servers under the ToR
+control plane is needed to control how the servers should                                that carry out the pings. Similarly, for a data center
+carry out network latency measurement.                                                   as a virtual node, it is the selected servers in the data
+                                                                                         center that launch the probings.
+   Third, the latency data should be aggregated, ana-
+lyzed, and reported in near real-time and stored and                                        At the intra-DC level, we once thought that we only
+archived for deeper analysis. Based on the require-                                      need to select a configurable number of servers to par-
+ments, we have designed the architecture of Pingmesh                                     ticipate in Pingmesh. But how to select the servers
+as illustrated in Figure 2. Pingmesh has three compo-                                    becomes a problem. Further, the small number of se-
+nents as we describe as follows.                                                         lected servers may not well represent the rest of the
+Pingmesh Controller. It is the brain of the whole sys-                                   servers. We finally come up with the idea of letting all
+tem, as it decides how servers should probe each other.                                  the servers participate. The intra-DC algorithm is: for
+Within the Pingmesh Controller, a Pingmesh Generator                                     any ToR-pair (ToRx, ToRy), let server i in ToRx ping
+generates a pinglist file for every server. The pinglist file                            server i in ToRy. In Pingmesh, even when two servers
+contains the list of peer servers and related parameters.                                are in the pinglists of each other, they measure net-
+The pinglist files are generated based on the network                                    work latency separately. By doing so, every server can
+topology. Servers get their corresponding pinglist via a                                 calculate its own packet drop rate and network latency
+RESTful Web interface.                                                                   locally and independently.
+Pingmesh Agent. Every server runs a Pingmesh Agent.
+The Agent downloads the pinglist from the Pingmesh
+Controller, and then launches TCP/HTTP pings to the
+peer servers in the pinglist. The Pingmesh Agent stores
+
+                                                                                    142
+At the inter-DC level, all the DCs form yet another               Because we need to differentiate if a `network' issue is
+
+complete graph. In each DC, we select a number of because of the network or the applications themselves,
+
+servers (with several servers selected from each Podset). Pingmesh Agent does not use any network libraries used
+
+Combining the three complete graphs, a server in by the applications. Instead, we have developed our
+
+Pingmesh needs to ping 2000-5000 peer servers depend- own light-weight network library specifically designed
+
+ing on the size of the data center. The Pingmesh Con- for network latency measurement.
+
+troller uses threshold values to limit the total number of        The Pingmesh Agent can be configured to send out
+
+probes of a server and the minimal time interval of two and respond to probing packets of different lengths,
+
+successive probes for a source destination server pair.           other than the TCP SYN/SYN-ACK packets. As a re-
+
+3.3.2 Pingmesh Controller implementation                          sult, the Pingmesh Agent needs to act as both client and
+                                                                  server. The client part launches pings and the server
+
+The Pingmesh Controller is implemented as an Au- part responds to the pings.
+
+topilot service and becomes part of the Autopilot man-            Every probing needs to be a new connection and
+
+agement stack. It generates Pinglist file for every server uses a new TCP source port. This is to explore the
+
+by running the Pingmesh generation algorithm. The multi-path nature of the network as much as possible,
+
+files are then stored in SSD and served to the servers and more importantly, reduce the number of concurrent
+
+via a Pingmesh Web service. The Pingmesh Controller TCP connections created by Pingmesh.
+
+provides a simple RESTful Web API for the Pingmesh                3.4.2 Pingmesh Agent implementation
+Agents to retrieve their Pinglist files respectively. The
+
+Pingmesh Agents need to periodically ask the Controller           Though the task is simple, the Pingmesh Agent is one
+
+for Pinglist files and the Pingmesh Controller does not of the most challenging part to implement. It must meet
+
+push any data to the Pingmesh Agents. By doing so, the safety and performance requirements as follows.
+
+Pingmesh Controller becomes stateless and easy to scale.          First, the Pingmesh Agent must be fail-closed and
+
+As the brain of the whole Pingmesh system, the Pingmesh not create live-site incidents. Since the Pingmesh Agent
+
+Controller needs to serve hundreds of thousands of Pingmesh runs on every server, it has the potential to bring down
+
+Agents. Hence the Pingmesh Controller needs to be all the servers if it malfunctions (e.g., uses large portion
+
+fault-tolerant and scalable. We use Software Load-Balancer of CPU and memory resources, generates large volume
+
+(SLB) [14] to provide fault-tolerance and scalability for of probing traffic, etc.). To avoid bad things from hap-
+
+the Pingmesh Controller. See [9, 14] for the details of pening, several safety features have been implemented
+
+how SLB works. A Pingmesh Controller has a set of into the Pingmesh Agent:
+
+servers behind a single VIP (virtual IP address). SLB             · The CPU and maximum memory usages of the
+distributes the requests from the Pingmesh Agents to                Pingmesh Agent are confined by the OS. Once
+the Pingmesh Controller servers. Every Pingmesh Con-                the maximum memory usage exceeds the cap, the
+troller server runs the same piece of code and gener-               Pingmesh Agent will be terminated.
+ates the same set of Pinglist files for all the servers
+
+and is able to serve requests from any Pingmesh Agent.            · The minimum probe interval between any two servers
+The Pingmesh Controller can then easily scale out by                is limited to 10 seconds, and the probe payload
+adding more servers behind the same VIP. Also once a                length is limited to 64 kilobytes. These limits are
+Pingmesh Controller server stops functioning, it is auto-           hard coded in the source code. By doing so, we
+matically removed from rotation by the SLB. We have                 put a hard limit on the worst-case traffic volume
+setup two Pingmesh Controllers in two different data                that Pingmesh can bring into the network.
+center clusters to make the controller even more fault
+
+tolerant geographically.                                          · If a Pingmesh Agent cannot connect to its con-
+
+3.4 Pingmesh Agent                                                troller for 3 times, or if the controller is up but
+                                                                  there is no pinglist file available, the Pingmesh
+
+3.4.1 Pingmesh Agent design considerations                        Agent will remove all its existing ping peers and
+                                                                  stop all its ping activities. (It will still react to
+   The Pingmesh Agent runs on all the servers. Its task           pings though.) Due to this feature, we can stop
+is simple: downloads pinglist from the Pingmesh Con-              the Pingmesh Agent from working by simply re-
+troller; pings the servers in the pinglist; then uploads          moving all the pinglist files from the controller.
+the ping result to DSA.
+
+Based on the requirement that Pingmesh needs to be                · If a server cannot upload its latency data, it will
+
+able to distinguish if a user perceived latency increase is       retry several times. After that it will stop trying
+
+due to network or not, Pingmesh should use the same               and discard the in-memory data. This is to en-
+
+type of packets generated by the applications. Since              sure the Pingmesh Agent uses bounded memory
+
+almost all the applications in our data centers use TCP           resource. The Pingmesh Agent also writes the la-
+
+and HTTP, Pingmesh uses TCP and HTTP instead of                   tency data to local disk as log files. The size of log
+
+ICMP or UDP for probing.                                          files is limited to a configurable size.
+
+                                                             143
+(a) CPU usage  (b) Memory usage                               Agent performs local calculation on the latency data
+                                                              and produces a set of performance counters including
+Figure 3: CPU and memory usages of Pingmesh Agent.            the packet drop rate, the network latency at 50th the
+                                                              99th percentile, etc. All these performance counters are
+   Second, a Pingmesh Agent needs to launch pings to          collected and aggregated and stored by the PA service
+several thousand of servers by design. But as a shared        of Autopilot.
+service, the Pingmesh Agent should minimize its re-
+sources (CPU, memory, and disk space) usage. It should           Once the results are in Cosmos, we run a set of SCOPE
+use close to zero CPU time and as small memory foot-          jobs for data processing. We have 10-min, 1-hour, 1-day
+print as possible, so as to minimize its interference with    jobs at different time scales. The 10-min jobs are our
+customers' applications.                                      near real-time ones. For the 10-min jobs, the time in-
+                                                              terval from when the latency data is generated to when
+   In order to achieve the performance goal and improve       the data is consumed (e.g., alert fired, dashboard fig-
+Pingmesh's latency measurement accuracy, we use C++           ure generated) is around 20 minutes. The 1-hour and
+instead of Java or C# to write Pingmesh Agent. This           1-day pipelines are for non real-time tasks including
+is to avoid the common language runtime or Java vir-          network SLA tracking, network black-hole detection,
+tual machine overhead. We have developed a network            packet drop detection, etc. All our jobs are automati-
+library specifically for Pingmesh. The goal of the li-        cally and periodically submitted by a Job Manager to
+brary is solely for network latency measurement, and          SCOPE without user intervention. The results of the
+it is designed to be light-weight and to handle a large       SCOPE jobs are stored in a SQL database, from which
+number of concurrent TCP connections. The library             visualization, reports, and alerts are generated.
+is directly based on the Winsock API, and it uses the
+Windows IO Completion Port programming model for                 In practice, we found this 20-minute delay works fine
+efficient asynchronous network IO processing. The li-         for system level SLA tracking. In order to further re-
+brary acts as both client and server, and it distributes      duce response time, we in parallel use the Autopilot
+the probing processing load to all the CPU cores evenly.      PA pipeline to collect and aggregate a set of Pingmesh
+                                                              counters. The Autopilot PA pipeline is a distributed de-
+   We have done extensive measurements to understand          sign with every data center has its own pipeline. The PA
+and optimize Pingmesh Agent's performance. Figure 3           counter collection latency is 5 minutes, which is faster
+shows the CPU and memory usages of the Pingmesh               than our Cosmos/SCOPE pipeline. The PA pipeline is
+Agent on a typical server. During the measurement,            faster than Cosmos/SCOPE, whereas Cosmos/SCOPE
+this Pingmesh Agent was actively probing around 2500          is more expressive than PA for data processing. By
+servers. The server has 128GB memory and two In-              using both of them, we provide higher availability for
+tel Xeon E5-2450 processors, each with 8 cores. The           Pingmesh than either of them.
+average memory footprint is less than 45MB, and the
+average CPU usage is 0.26%.                                      We differentiate Pingmesh as an always-on service
+                                                              from a set of scripts that run periodically. All the com-
+   We note that the probing traffic generated by a Pingmesh   ponents of Pingmesh have watchdogs to watch whether
+Agent is small, typically tens of Kb/s. As a comparison,      they are running correctly or not, e.g., whether pinglists
+our data center network provides several Gb/s through-        are generated correctly, whether the CPU and mem-
+put between any two servers in a data center.                 ory usages are within budget, whether pingmesh data
+                                                              are reported and stored, whether DSA reports network
+                                                              SLAs in time, etc. Furthermore, the Pingmesh Agent is
+                                                              designed to probe thousands of peers in a light-weight
+                                                              and safe way.
+
+                                                                 All the Pingmesh Agents upload 24 terabytes latency
+                                                              measurement results to Cosmos per day. This is more
+                                                              than 2Gb/s upload rate. Though these look like large
+                                                              numbers, they are only a negligible fraction of the total
+                                                              capacity provided by our network and Cosmos.
+
+3.5 Data Storage and Analysis                                 4. LATENCY DATA ANALYSIS
+
+   For Pingmesh data storage and analysis, we use the            In this section, we introduce how Pingmesh helps us
+well established existing systems, Cosmos/SCOPE and           better understand network latency and packet drops,
+Autopilot's Perfcounter Aggregator (PA) service, in-          define and track the network SLA, and determine if a
+stead of reinventing the wheel.                               live-site incident is because of network issues or not. All
+                                                              the data centers we describe in this section have similar
+   The Pingmesh Agent periodically uploads the aggre-         network architecture as we have introduced in Figure
+gated records to Cosmos. Similar to the Pingmesh Con-         1, though they may vary in size and may be built at
+troller, the front-end of Cosmos uses load-balancer and       different times.
+VIP to scale out. At the same time, the Pingmesh
+
+                                                         144
+4.1 Network latency                                              Data center             Packet drop rate
+
+   Figure 4 shows the intra-DC latency distribution of           DC1 (US West)     Intra-pod Inter-pod
+two representative data centers DC1 in US West and               DC2 (US Central)  1.31 × 10-5 7.55 × 10-5
+DC2 in US Central. DC1 is used by distributed storage            DC3 (US East)     2.10 × 10-5 7.63 × 10-5
+and MapReduce and DC2 is by an interactive Search                DC4 (Europe)      9.58 × 10-6 4.00 × 10-5
+service. Servers in DC1 are throughput intensive and             DC5 (Asia)        1.52 × 10-5 5.32 × 10-5
+the average server CPU utilization is as high as 90%.                              9.82 × 10-6 1.54 × 10-5
+Servers in DC1 use the network heavily and transmit
+and receive several hundreds of Mb/s data on average               Table 1: Intra-pod and inter-pod packet drop rates.
+all the time. DC2 is latency sensitive and servers have
+high fan-in and fan-out in that a server needs to com-           introduce tens of microsecond latency due to queuing
+municate with a large number of other servers to service         delay. But the queuing delay is small. Hence we can in-
+a Search query. The average CPU utilization in DC2 is            fer that the network provides enough network capacity.
+moderate and the average network throughput is low
+but the traffic is bursty.                                          Figure 4(d) shows the latency difference with and
+                                                                 without payload. With payload, the latency increases
+   The CDFs in Figure 4 are calculated from latency              from 268us to 326us at P50, and from 1.34ms to 2.43ms
+data of one normal working day, when there were no               at P99, respectively. The increase is mainly because of
+network incidents detected and no live-site incidents be-        the increased transmission delay 1 and the user space
+cause of the network. We track both intra-pod and                processing overhead for the receiving servers to echo
+inter-pod latency distributions, with and without TCP            back the message. In most cases, the latency distribu-
+payload. If not specifically mentioned, the latency we           tions with and without payload are similar. We intro-
+use in the paper is the inter-pod TCP SYN/SYN-ACK                duced payload ping because it can help detect packet
+RTT without payload.                                             drops that are related to packet length (e.g., fiber FCS
+                                                                 errors and switch SerDes errors that are related to bit
+   Figure 4(a) shows the overall inter-pod latency dis-          error rate).
+tributions and Figure 4(b) shows the inter-pod distri-
+bution at high percentile. We once expected that the                Based on the Pingmesh data, we are able to calculate
+latency of DC1 should be much larger than DC2 since              not only the latency distributions of the data centers,
+servers and the network in DC1 are highly loaded. But            but also the latency CDFs for all the applications and
+this turned out not the case for latencies at the 90th or        services. From these results, we are able to track net-
+lower percentile.                                                work latency for all of them all the time.
+
+   But DC1 does have much higher latency at the high             4.2 Packet drop rate
+percentile as shown in Figure 4(b). At P99.9, the inter-
+pod latencies are 23.35ms and 11.07ms for DC1 and                   Pingmesh does not directly measure packet drop rate.
+DC2, respectively. At P99.99, the inter-pod latencies            However, we can infer packet drop rate from the TCP
+become 1397.63ms and 105.84ms. Our measurement                   connection setup time. When the first SYN packet is
+result shows it is hard to provide low latency (e.g., sub-       dropped, TCP sender will retransmit the packet after
+milliseconds level) at three or four 9s, even when the           an initial timeout. For the rest successive retries, TCP
+servers and network are both light-loaded at macro time          will double the timeout value every time. In our data
+scale. This is because the server OS is not a real-time          centers, the initial timeout value is 3 seconds, and the
+operating system and the traffic in our network is burst.        sender will retry SYN two times. Hence if the measured
+We see 10-5 packet drop rate for intra-pod communica-            TCP connection RTT is around 3 seconds, there is one
+tions (Section 4.2) even when average network utiliza-           packet drop; if the RTT is around 9 seconds, there are
+tion is low to moderate.                                         two packet drops. We use the following heuristic to
+                                                                 estimate packet drop rate:
+   Figure 4(c) compares the intra-pod and inter-pod la-
+tency distributions, and Figure 4(d) studies the inter-                   probes with 3s rtt + probes with 9s rtt
+pod latency with and without payload, all in DC1. For                                                                           .
+latency measurement with payload, after TCP connec-
+tion setup, we let the client send a message (typically                              total successf ul probes
+800-1200 bytes within one packet). The client measures
+the payload latency once it receives the echoed back                Note that we only use the total number of successful
+message from the server.                                         TCP probes instead of the total probes as the denom-
+                                                                 inator. This is because for failed probes, we cannot
+   As shown in Figure 4(c), intra-pod latency is always          differentiate between packet drops and receiving server
+smaller than inter-pod latency as expected. The 50th             failure. In the numerator, we only count one packet
+(P50) and the 99th (P99) intra-pod and inter-pod laten-          drop instead of two for every connection with 9 second
+cies are (216us, 1.26ms) and (268us, 1.34ms) for DC1.            RTT. This is because successive packet drops within a
+The differences at P50 and P99 are 52us and 80us, re-            connection are not independent: the probability the sec-
+spectively. These numbers show that the network does             ond SYN is dropped is much higher if the first SYN is
+
+                                                                 1We have disabled cut-through switching at the
+                                                                 switches in our data centers. This is to stop FCS er-
+                                                                 rors from propagation.
+
+                                                            145
+(a)  (b)                                                          (c)  (d)
+
+Figure 4: (a)Inter-pod latency of two data centers. (b) Inter-pod latency at high percentile. (c) Intra-pod and
+inter-pod latency comparison. (d) Latency comparison with and without payload.
+
+dropped. We have verified the accuracy of the heuristic           (a) The 99th percentile la- (b) Packet drop rate
+for a single ToR network by counting the NIC and ToR              tency
+packet drops.
+                                                                  Figure 5: The 99th network latency and packet drop
+   In our network, SYN packets are treated the same as            rate metrics for a service.
+other packets. Hence the drop rate of SYN packets can
+be considered representative drop rate of the other data          nections used. Applications have introduced several ap-
+packets in normal condition. This assumption, however,            plication level tricks to deal with packet drops [10].
+may not be true when packet drop rate is related to
+packet size, e.g., due to FCS errors. We did see packets             From the per server latency data, we can calculate
+of larger size may experience higher drop rate in FCS             and track network SLAs at server, pod, podset, and
+error related incidents. In what follows, the results we          data center levels. Similarly, we can calculate and track
+present are when the networks were in normal condition.           network SLA for individual services.
+
+   Our network does not differentiate packets of different        4.3 Is it a network issue?
+IP protocols (e.g., TCP vs. UDP). Hence, our packet
+drop calculation holds for non-TCP traffic as well.                  In large distributed data center systems, many parts
+                                                                  may go wrong. When a live-site incident happens, it
+   Table 1 shows the packet drop rates of five data cen-          is not easy to identify which part causes the problem.
+ters. We show both the intra-pod and inter-pod packet             There are occasions that all the components seem fine
+drop rates. For intra-pod packet drops, those are drops           but the whole system is broken. If the network cannot
+at ToR switch, NIC, and end-host network stack. The               prove it is innocent, the problem will then be called a
+inter-pod packet drops may come from the Leaf and                 "network problem": I did not do anything wrong to my
+Spine switches and the corresponding links, in addition           service, it must be the fault of the network.
+to the ToR, NIC, and end-host stack.
+                                                                     The network team is then engaged to investigate. A
+   From Table 1, several observations can be made. First,         typical procedure is as follows. The network on-call
+the packet drop rates are in the range of 10-4 - 10-5.            engineer asks the service which is experiencing issues
+We track the packet drop rates for all our data cen-              for detailed symptoms and source-destination pairs; he
+ters every day and we find the drop rate is in this               then logs into the source and/or destination servers and
+range unless network incidents happen. Second, the                runs various network tools to reproduce the issue; he
+inter-pod packet drop rate is typically several times             may also look at the switch counters along the possible
+higher than that of intra-pod. This indicates most of             paths for anomaly; if he cannot reproduce, he may ask
+the packet drops happen in the network instead of the             for more source-destination pairs. The procedure may
+hosts. Third, the intra-pod drop rate is around 10-5,             need several rounds of iterations.
+which is larger than we have expected.
+                                                                     The above approach does not work well for us, since
+   Our experience tells us packet drops may occur due             it is a manual process and does not scale. If the issue
+to many reasons, e.g., switch buffer overflow, NIC re-            turns out not to be caused by the network, the service
+ceiving buffer overflow, optical fiber FCS errors, switch-        owners waste their time in engaging with the wrong
+ing ASIC malfunction, etc. Though our measurement
+results suggest that the packet drop rate at normal con-
+dition is around 10-4 - 10-5, we are still at the early
+phase in understanding why it stays in this range.
+
+   Many data center applications, e.g., Search, may use
+hundreds or even thousands of TCP connections simul-
+taneously. For these applications, high latency tail there-
+fore becomes the norm due to the large number of con-
+
+                                                             146
+team. If the issue is indeed because of the network,          Figure 6: The number of switches with packet black-
+the manual process causes long time-to-detect (TTD),          holes detected.
+time-to-mitigate (TTM), and time-to-resolve (TTR).
+                                                              5.1 Packet black-hole
+   Pingmesh changed the situation. Because Pingmesh
+collects latency data from all the servers, we can always        Packet black-hole is a special type of switch packet
+pull out Pingmesh data to tell if a specific service has      drops. For a switch that is experiencing packet black-
+network issue or not. If Pingmesh data does not cor-          holes, packets that meet certain `patterns' are dropped
+relate to the issue perceived by the applications, then       deterministically (i.e., 100%) by the switch. We have
+it is not a network issue. If Pingmesh data shows it is       identified two types of packet black-holes. In the first
+indeed a network issue, we can further get detailed data      type of black-hole, packets with specific source destina-
+from Pingmesh, e.g., the scale of the problem (e.g., how      tion IP address pairs get dropped. The symptom is as
+many servers and applications are affected), the source-      following: server A cannot talk to server B, but it can
+destination server IP addresses and TCP port numbers,         talk to servers C and D just fine. All the servers A-D
+for further investigation.                                    are healthy.
+
+   We define network SLA as a set of metrics includ-             In the second type of black-hole, packets with spe-
+ing packet drop rate, network latency at the 50th per-        cific source destination addresses and transport port
+centile and the 99th percentile. Network SLA can then         numbers are dropped. Note that for this type of black-
+be tracked at different scopes including per server, per      hole, packets with the same source destination address
+pod/podset, per service, per data center, by using the        pair but different source destination port numbers are
+Pingmesh data. In practice we found two network SLA           treated differently. For example, Server A can talk to
+metrics: packet drop rate and network latency at the          Server B's destination port Y using source port X, but
+99th percentile are useful for telling if an issue is caused  not source port Z.
+by the network or not. Figure 5 shows these two met-
+rics for a service in one normal week. The packet drop           The first type of black-holes is typically caused by
+rate is around 4 × 10-5 and the 99th percentile latency       TCAM deficits (e.g., parity error) in the switching ASIC.
+in a data center is 500-560us. (The latency shows a pe-       Some TCAM entries in the TCAM table may get cor-
+riodical pattern. This is because this service performs       rupted, and the corruption causes only packets with
+high throughput data sync periodically which increases        certain source and destination address patterns been
+the 99th percentile latency.) If these two metrics change     dropped. (Since only destination address is used for
+significantly, then it is a network issue.                    next-hop lookup for IP routing, on may wonder why
+                                                              source IP address plays an role. Our guess is that a
+   We currently use a simple threshold based approach         TCAM entry includes not only destination address but
+for network SLA violation detection. If the packet drop       also source address and other meta data.)
+rate is greater than 10-3 or the 99th percentile latency
+is larger than 5ms, we will categorize this as a network         We know less about the root causes of the second
+problem and fire alerts. 10-3 and 5ms are much larger         type of black-hole. We suspect it may be because of
+than the normal values. We keep Pingmesh historical           errors related to ECMP which uses source and destina-
+data for 2 months, and we run various data analysis           tion IP addresses and port numbers to decide the next
+on top of the Pingmesh data to track the network SLAs         forwarding hop.
+for different data centers and customers. There are huge
+opportunities in using data mining and machine learn-            Based on our experience, these two types of packet
+ing to get more value out of the Pingmesh data.               black-holes can be fixed by reloading the switch. Hence
+                                                              the question becomes how to detect the switches with
+   In Section 5, we will study one specific packet drop       black-holes.
+in detail: switch silent packet drops.
+                                                                 We have devised a ToR switch black-hole detection
+5. SILENT PACKET DROP DETECTION                               algorithm based on Pingmesh data. The idea of the
+                                                              algorithm is that if many servers under a ToR switch
+   In this section, we introduce how Pingmesh helps de-       experience the black-hole symptom, then we mark the
+tect switch silent packet drops. When silent packet
+drops happen, the switches for various reasons do not
+show information about these packet drops and the switches
+seem innocent. But applications suffer from increased
+latency and packet drops. How to quickly identify if
+an ongoing live-site incident is caused by switch silent
+packet drops therefore becomes critical.
+
+   In the past, we have identified two types of switch
+silent packet drops: packet black-hole and silent random
+packet drops. Next, we introduce how we use Pingmesh
+to detect them.
+
+147
+                                                               in that data center has increased significantly and the
+
+                                                               drops were not deterministic. Fig. 7 shows the packet
+
+                                                               drop rate change of a service. Under normal condi-
+
+                                                               tion, the percentage of latency should be at around
+                                                               10-4 - 10-5. But it suddenly jumped up to around
+                                                               2 × 10-3.
+
+                                                               Using Pingmesh, we could soon figure out that only
+
+                                                               one data center was affected, and the other data centers
+
+                                                               were fine. Packet drops at ToR and Leaf layers cannot
+
+                                                               cause the latency increase for all our customers due to
+
+                                                               the much smaller number of servers under them. The
+
+                                                               latency increase pattern shown in Figure 8(d) pointed
+
+                                                               the problem to the Spine switch layer.
+
+                                                               But we could not find any packet drop hint (FCS
+
+Figure 7: Silent random packet drops of a Spine switch         errors, input/output packet discards, syslog errors, etc.)
+detected by Pingmesh during an incident.                       at those switches. We then suspected that this is likely a
+                                                               case of silent packet drops. The next step was to locate
+
+ToR switch as a black-hole candidate and assign it a           the switches that were dropping packets.
+
+                                                               Again, by using Pingmesh, we could figure out several
+score which is the ratio of servers with black-hole symp- source and destination pairs that experienced around
+tom. We then select the switches with black-hole score 1%-2% random packet drops. We then launched TCP
+larger than a threshold as the candidates. Within a pod- traceroute against those pairs, and finally pinpointed
+set, if only part of the ToRs experience the black-hole one Spine switch. The silent random packet drops were
+symptom, then those ToRs are blacking hole packets. gone after we isolated the switch from serving live traf-
+We then invoke a network repairing service to safely fic. The postmortem analysis with the switch provider
+restart the ToRs. If all the ToRs in a podset experience revealed that the packet drops were due to bit flips of a
+the black-hole symptom, then the problem may be in fabric module of that switch.
+the Leaf or Spine layer. Network engineers are notified
+                                                               The above case is one of the first silent random packet
+to do further investigation.
+                                                               drop cases we met and it took us long time to resolve.
+Figure 6 shows the number of ToR switches with After that we ran into more cases and we have improved
+black-holes the algorithm detected. As we can see from both Pingmesh data analysis and other tools for better
+the figure, the number of the switches with packet black- automatic random silent packet drop detection. Our
+holes decreases once algorithm began to run. In our experiences told us that random silent packet drops may
+algorithm, we limit the algorithm to reload at most 20 be because of different reasons, e.g., switching fabric
+switches per day. This is to limit the maximum num- CRC checksum error, switching ASIC deficit, linecard
+ber of switch reboots. As we can see, after a period of not well seated, etc. These types of switch silent packet
+time, the number of switches detected dropped to only drops cannot be fixed by switch reload and we have
+several per day.
+                                                               to RMA (return merchandise authorization) the faulty
+We would like to note that the TCP source port of switch or components.
+the Pingmesh Agent varies for every probing. With
+                                                               Compared to packet drops due to network congestion
+the large number of source/destination IP address pairs, and link FCS errors, packet black-holes and silent ran-
+Pingmesh scans a big portion of the whole source/destination dom drops are new and less understood to us. Due to
+address and port space. After Pingmesh black-hole de- the whole coverage and always-on properties of Pingmesh,
+tection came online, our customers did not complain we are able to confirm that switch silent packet drops
+about packet black-holes anymore.
+                                                               do happen in real-world and categorize different silent
+
+5.2 Silent random packet drops                                 packet drop types, and further locate where the silent
+                                                               packet drops happen.
+
+The higher the tier a switch is located in the net-
+
+work, the more severe impact it will have when it begins       6. EXPERIENCES LEARNED
+to drop packets. When a Spine switch drops packets
+
+silently, tens of thousands of servers and many services       Pingmesh is designed to be scalable. We understand
+
+will be impacted and live-site incidents with high sever- that not all the networks are of our size. We believe
+
+ity will be triggered.                                         that the lessons we learned from Pingmesh are bene-
+
+Here we introduce how Pingmesh helped locate silent ficial to networks of both large and small scales. One
+
+random packet drops of a Spine switch. In one inci- of the lessons we learned is the value of trustworthy
+
+dent, all the users in a data center began to experience       latency data of full coverage. If the data is not trust-
+increased network latency at the 99th percentile. Us-          worthy, then the results built on top of it cannot be
+
+ing Pingmesh, we could confirm that the packet drops trusted. Our experience told us that not all SNMP
+
+                                                          148
+data are trustworthy. A switch may drop packets even         files, via standard Web API. Pingmesh Agent provides
+though its SNMP tells us everything is fine. We trust        latency data as both CSV files and standard perfor-
+Pingmesh data because we wrote the code, tested and          mance counters.
+ran it. When there are bugs, we fixed them. After sev-
+eral iterations, we knew we can trust the data. Because         Due to its loosely coupled design, Pingmesh could be
+of the full coverage and trustworthy of its latency data,    built step by step in three phases. In the first phase,
+Pingmesh could carry out accurate black-hole and silent      we focused on Pingmesh Agent. We built a simple
+packet drop detection. As a comparison, simply using         Pingmesh Controller which statically generates pinglist
+switch SNMP and syslog data does not work since they         files using a simplified pinglist generation algorithm.
+do not tell us about packet black-holes and silent drops.    The latency data was simply put into Cosmos without
+                                                             automatic analysis. This phase demonstrated the feasi-
+   In what follows, we introduce several additional lessons  bility of Pingmesh. At the end of this phase, the latency
+we have learned from building and running Pingmesh,          data was already used for network SLA calculation.
+which we believe can be applied to networks of different
+scales as well.                                                 In the second phase, we built a full fledged Pingmesh
+                                                             Controller which automatically updates pinglists once
+6.1 Pingmesh as an always-on service                         network topology is updated or configuration is adjusted.
+                                                             The new version of Pingmesh Controller is also of higher
+   From the beginning of the project, we believed that       capacity and more fault tolerant by setting up multiple
+Pingmesh needs to cover all the servers and be always-       controllers in geo-distributed data centers.
+on. But not everyone agreed. There were arguments
+that latency data should only be collected on-demand;           In the third phase, we focused on data analysis and
+that we should only let a few selected servers participate   visualization. We built a data processing pipeline which
+in latency measurement, so as to reduce the overhead.        automatically analyzes the collected latency data in ev-
+We disagree with both of them.                               ery 10 minutes, one hour, one day, respectively. The
+                                                             processed results are then stored in database for visu-
+   In its essence, the first argument is always-on vs on-    alization, report and alert services.
+demand. One may argue that it is a waste of resource if
+the always-on latency data is not used, hence we should         The major tasks of these three phases were finished in
+only collect latency data when it is needed.This argu-       June 2012. After that, many new features were added
+ment has two issues. First, we cannot predict when           into Pingmesh:
+the latency data will be needed since we do not know         Inter-DC Pingmesh. Pingmesh originally worked for
+when a live-site incident will happen. When a live-site      intra-DC. However, extending it to cover Inter-DC is
+incident occurs, having network latency data readily at      easy. We extended the Pingmesh Controller's pinglist
+hands instead of collecting them at that time is a much      generation algorithm so as to select a set of servers from
+better choice. Second, when something bad happens,           every data center and let them carry out Inter-DC ping
+we typically do not know which network devices caused        and the job was done. There is no single line of code or
+the trouble, hence we do not even have the source des-       configuration change of the Pingmesh Agent. We did
+tination pairs to launch latency measurement.                add a new inter-DC data processing pipeline though.
+                                                             QoS monitoring. After Pingmesh was deployed, net-
+   Using only a small number of selected servers for         work QoS was introduced into our data center which dif-
+latency measurement limits the coverage of Pingmesh          ferentiates high priority and low priority packets based
+data, and poses challenges on which servers should be        on DSCP (differentiated service code point). Again, we
+chosen. As we have demonstrated in the paper, letting        extended the Pingmesh Generator to generate pinglists
+all the servers participate gives us the maximum pos-        for both high and low priority classes. In this case, we
+sible coverage, and easily balance the probing activity      did need a simple configuration change of the Pingmesh
+among all the servers. As we have demonstrated in the        Agent to let it listen to an additional TCP port which
+paper, the CPU, memory and bandwidth overhead in-            is configured for low priority traffic.
+troduced by Pingmesh is affordable.                          VIP monitoring. Pingmesh was originally designed
+                                                             to measure network latency of physical networks. In
+   Having latency data that is always-on brings benefits     our data centers, load-balancing and IP address virtu-
+that we did not recognize in the beginning. After experi-    alization is widely used. Address virtualization exposes
+encing a few live-site incidents due to packet black-hole    a logical Virtual IP address (VIP) to users, and the VIP
+and switch silent packet drops, we found that we could       is mapped to a set of physical servers. The physical IP
+use the Pingmesh data to automatically detect these          addresses of these servers are called DIP (destination
+types of switch failures, because of the whole coverage      IP). In our load-balancing system, there is a control
+and always-on nature of Pingmesh data (Section 5).           plan maintains the VIP to DIP mapping and a data
+                                                             plan that delivers packets that target for a VIP to the
+6.2 Loosely coupled components help evolve-                  DIPs via packet encapsulation. When Pingmesh got
+      ment                                                   deployed, a natural extension is let Pingmesh to moni-
+                                                             tor the availability of the VIPs. This again is done by
+   Pingmesh benefits from a loosely coupled system de-       extending the Pingmesh Generation algorithm to cover
+sign. Pingmesh Controller and Pingmesh Agent interact
+only through the pinglist files, which are standard XML
+
+149
+(a) Normal  (b) Podset down                                     (c) Podset failure  (d) Spine failure
+
+            Figure 8: Network latency patterns through visualization.
+
+the VIPs as the target, without touching the rest of the           Figure 8(b) shows a pattern of a white-cross. The
+Pingmesh pipeline.                                              width of the white-cross corresponds to a Podset, which
+Silent packet drop detection. As we have discussed              contains around 20 pods. This pattern shows a Podset-
+in Section 5, we have been using Pingmesh for silent            down scenario. Podset-down typically is due to the loss
+packet drop detection. Since the latency data is already        of power of the whole Podset.
+there, we only need to figure out the detection algorithm
+and implement the algorithm in the DSA pipeline with-              Figure 8(c) shows a pattern of a red-cross. The width
+out touching other Pingmesh components.                         of the red-cross again corresponds to a Podset. The
+Network metrics for services. Two Pingmesh met-                 red-cross shows high network latency from and to the
+rics have been used by service developers to design and         Podset. This pattern shows there is a network issue
+implement better services. The Pingmesh Agent ex-               within the Podset, since the network latency of other
+poses two PA counters for every server: the 99th latency        Podsets are normal. There may be several causes of the
+and the packet drop rate. Service developers can use the        Podset red-cross. If both Leaf and ToR switches are all
+99th latency to get better understanding of data center         L3 switches, then at least one of the Leaf switches is
+network latency at server level. The per-server packet          dropping packets. If the whole Podset is a L2 domain,
+drop rate has been used by several services as one of the       then it is possibly caused by broadcast storm, e.g., due
+metrics for server selection.                                   to some switches loss their configuration.
+
+   For the above extensions, only inter-DC Pingmesh                Figure 8(d) shows a pattern of red-color with green-
+and QoS monitoring were by design, the rest three just          squares along the diagonal. Here each small green-
+happened out of our expectation. Thanks to Pingmesh's           square is a Podset. It shows that the network latencies
+loosely coupled design, all these features were added           within the Podsets are normal, but cross-Podset latency
+smoothly without adjusting its architecture.                    are all out of network SLA. It shows a network issue at
+                                                                the Spine switch layer.
+6.3 Visualization for pattern discovery
+                                                                   The success of the visualization is beyond our expec-
+   We have invested heavily in Pingmesh data analysis           tation. It has become a habit for many of us to open
+and visualization. Our happy findings are that data             the visualization portal regularly to see if the network
+speaks for themselves and that visualization helps us           is fine. The visualization portal has been used not only
+better understand and detect various latency patterns.          by network developers and engineers, but also by our
+                                                                customers to learn if there is a network issue or not.
+   Figure 8 shows several typical visualized latency pat-       We also observed an interesting usage pattern: When
+terns. In the figure, a small green, yellow, or red block       the visualization system was first put into use, it was
+or pixel shows the network latency at the 99th percentile       typically used by the network team to `prove' to our cus-
+between a source-destination pod-pair. Green means              tomers that the network was fine. Now our customers
+the latency is less than 4ms, yellow means the latency          usually use the visualization to show that there is in-
+is between 4-5ms, and red is for latency larger than 5ms.       deed an on-going network issue. This is a usage pattern
+A white block means there is no latency data available.         change that we are happy to see.
+
+   Figure 8(a) shows an (almost) all-green pattern, which       6.4 Pingmesh limitations
+means the network works fine. Though looks straight-
+forward, this all-green pattern is one of the most widely          During the period of running Pingmesh, we have un-
+used feature of Pingmesh. Using this pattern, we can            covered two limitations of Pingmesh. First, though
+easily tell the global healthy status of the network.           Pingmesh is able to detect which tier a faulty network
+
+                                                           150
+device is located in, it cannot tell the exact location. In       UDP, TCP, and HTTP packets. IPSLA collects net-
+our network, there are tens to hundreds of switches at            work latency, jitter, packet loss, server response time,
+the Spine layer. Knowing the Spine layer is experiencing          and even voice quality scores. The results are stored lo-
+some issue is good but not enough. We need methods to             cally at the switches and can be retrieved via SNMP or
+locate and isolate the faulty devices as fast as possible.        CLI (command-line interface). Pingmesh differs from
+This is a known limitation of Pingmesh from beginning.            IPSLA in several ways. First, Pingmesh uses server
+As described in Section 5.2, we combine Pingmesh and              instead of switches for data collection. By doing so,
+TCP traceroute to address this issue.                             Pingmesh becomes network device independent whereas
+                                                                  IPSLA works only for Cisco devices. Second, Pingmesh
+   The second limitation comes from Pingmesh's current            focuses on both measurement and latency data analysis.
+latency measurement. Though the Pingmesh Agent can                To achieve its goal, Pingmesh has not only Pingmesh
+send and receive probing messages of up to 64 KB, we              Agent for data collection, but also a control plane for
+only use SYN/SYN-ACK and a single packet for sin-                 centralized control and a data storage and analysis pipeline.
+gle RTT measurement. Single packet RTT is good at                 IPSLA does not have such a control plane and data stor-
+detecting network reachability and packet-level latency           age and analysis pipeline.
+issues. But it does not cover the case when multiple
+round trips are needed. We recently experienced a live-              NetSight [19] tracks packet history by introducing
+site incident caused by TCP parameter tuning. A bug               postcard filters at the switches to generate captured
+introduced in our TCP parameter configuration soft-               packet events called postcard. Several network trou-
+ware rewrote the TCP parameters to their default value.           bleshooting services, nprof, netshark, netwatch, ndb,
+As a result, for some of our services, the initial conges-        can be built on top of NetSight. Compared with Net-
+tion window (ICW) reduced from 16 to 4. For long                  Sight, Pingmesh is server-based in that it does not need
+distance TCP sessions, the session finish time increased          to introduce additional rules into the switches. Further
+by several hundreds of milliseconds if the sessions need          Pingmesh is capable of detecting switch silent packet
+multiple round trips. Pingmesh did not catch this be-             drops. It is not clear how silent packet drop rules can
+cause it only measures single packet RTT.                         be written for NetSight, since it is not known in advance
+                                                                  which type of packets may be dropped.
+7. RELATED WORK
+                                                                     ATPG [25] determines a minimal set of probing pack-
+   Our experiences running one of the largest data cen-           ets that cover all the network links and forwarding rules.
+ter networks in the world taught us that all the compo-           Pingmesh does not try to minimize the number of prob-
+nents including applications, OS kernel, NIC, switching           ings. As long as the overhead is affordable, we prefer
+ASIC and firmware, and fibers may cause communica-                to let Pingmesh run all the time. Further it is not clear
+tion failures. See [4] for a summary of various failures          how ATPG can deal with packet black-holes where the
+that may cause network partition.                                 rules for black-holes cannot be determined in advance.
+
+   [21] and [6] studied traffic and flow characteristics of          Pingmesh focused on physical network and it uses ac-
+different types of data centers, by collecting network            tive probings by installing the Pingmesh Agent in the
+traces. Pingmesh focuses on network latency and is                servers. For third party VMs and virtual networks, how-
+complementary to these works.                                     ever, installing the Pingmesh Agent may not be feasi-
+                                                                  ble. In this case passive traffic collection as explored by
+   Both Pingmesh and [18] are designed to detect packet           VND [24] may be used.
+drops in the network. Both use active probing packets
+and are capable of covering the whole network. The                8. CONCLUSION
+approaches, though, are different. [18] uses RSVP-TE
+base source routing to pinpoint the routing path of a                We have presented the design and implementation of
+probing packet. It hence needs to create the routing              Pingmesh for data center network latency measurement
+paths and maps in advance. It also means that the                 and analysis. Pingmesh is always-on and it provides
+probing packets are traversing the network in LSPs (la-           network latency data by all the servers and for all the
+bel switched paths) different from those used by the              servers. Pingmesh has been running in Microsoft data
+non-probing packets. Second, RSVP-TE is based on                  centers for more than four years. It helps us answer if a
+MPLS, which, though is widely used for WAN traffic en-            service issue is caused by the network or not, define and
+gineering, is not used within the data centers. Pingmesh          track network SLA at both macro and micro levels, and
+can be used for both intra-DC and inter-DC networks.              it has become to be an indispensable service for network
+Using source routing does provide an advantage: [18]              troubleshooting.
+can directly pinpoint the switches or links that drop
+packets. We have shown in Section 5.2 Pingmesh can                   Due to its loosely coupled design, Pingmesh turned
+localize faulty devices together with traceroute.                 out to be easily extensible. Many new features have
+                                                                  been added while the architecture of Pingmesh is still
+   Cisco IPSLA [8] also uses active packets for network           the same. By studying the Pingmesh latency data and
+performance monitoring. IPSLA is configured to run                learning from the latency patterns via visualization and
+at Cisco switches, and is capable of sending ICMP, IP,            data mining, we are able to continuously improve the
+
+                                                             151
+quality of our network, e.g., by automatically fixing              [12] Albert Greenberg et al. VL2: A Scalable and
+packet black-holes and detecting switch silent random                    Flexible Data Center Network. In SIGCOMM,
+packet drops.                                                            August 2009.
+
+9. ACKNOWLEDGEMENT                                                 [13] Chi-Yao Hong et al. Achieving High Utilization
+                                                                         with Software-Driven WAN. In SIGCOMM, 2013.
+   We thank Lijiang Fang, Albert Greenberg, Wilson
+Lee, Randy Kern, Kelvin Yiu, Dongmei Zhang, Yong-                  [14] Parveen Patel et al. Ananta: Cloud Scale Load
+guang Zhang, Feng Zhao, the members of the Wireless                      Balancing. In ACM SIGCOMMM. ACM, 2013.
+and Networking Group of Microsoft Research Asia for
+their support at various stages of this project. We thank          [15] R. Chaiken et al. SCOPE: Easy and Efficient
+our shepherd Sujata Banerjee and the anonymous SIG-                      Parallel Processing of Massive Data Sets. In
+COMM reviewers for their valuable and detailed feed-                     VLDB'08, 2008.
+back and comments.
+                                                                   [16] Sushant Jain et al. B4: Experience with a
+10. REFERENCES                                                           Globally-Deployed Software Defined WAN. In
+                                                                         SIGCOMM, 2013.
+ [1] M. Al-Fares, A. Loukissas, and A. Vahdat. A
+      Scalable, Commodity Data Center Network                      [17] Sanjay Ghemawat, Howard Gobioff, and
+      Architecture. In Proc. SIGCOMM, 2008.                              Shun-Tak Leung. The Google File System. In
+                                                                         ACM SOSP. ACM, 2003.
+ [2] Alexey Andreyev. Introducing data center fabric,
+      the next-generation Facebook data center                     [18] Nicolas Guilbaud and Ross Cartlidge. Google
+      network. https:                                                    Backbone Monitoring, Localizing Packet Loss in a
+      //code.facebook.com/posts/360346274145943/,                        Large Complex Network, Feburary 2013.
+      Nov 2014.                                                          Nanog57.
+
+ [3] Hadoop. http://hadoop.apache.org/.                            [19] Nikhil Handigol, Brandon Heller, Vimalkumar
+ [4] Peter Bailis and Kyle Kingsbury. The Network is                     Jeyakumar, David Mazie`res, and Nick McKeown.
+                                                                         I Know What Your Packet Did Last Hop: Using
+      Reliable: An Informal Survey of Real-World                         Packet Histories to Troubleshoot Networks. In
+      Communications Failures. ACM Queue, 2014.                          NSDI, 2014.
+ [5] Luiz Barroso, Jeffrey Dean, and Urs Ho¨lzle. Web
+      Search for a Planet: The Google Cluster                      [20] Michael Isard. Autopilot: Automatic Data Center
+      Architecture. IEEE Micro, March-April 2003.                        Management. ACM SIGOPS Operating Systems
+ [6] Theophilus Benson, Aditya Akella, and David A.                      Review, 2007.
+      Maltz. Network Traffic Characteristics of Data
+      Centers in the Wild. In Internet Measurement                 [21] Srikanth Kandula, Sudipta Sengupta, Albert
+      Conference, November 2010.                                         Greenberg, Parveen Patel, and Ronnie Chaiken.
+ [7] et.al Brad Calder. Windows Azure Storage: A                         The nature of data center traffic: Measurements
+      Highly Available Cloud Storage Service with                        & analysis. In Proceedings of the 9th ACM
+      Strong Consistency. In SOSP, 2011.                                 SIGCOMM Conference on Internet Measurement
+ [8] Cisco. IP SLAs Configuration Guide, Cisco IOS                       Conference, IMC '09, 2009.
+      Release 12.4T.
+      http://www.cisco.com/c/en/us/td/docs/ios-xml/                [22] Rishi Kapoor, Alex C. Snoeren, Geoffrey M.
+      ios/ipsla/configuration/12- 4t/sla- 12- 4t- book.pdf .             Voelker, and George Porter. Bullet Trains: A
+ [9] Citrix. What is Load Balancing? http:                               Study of NIC Burst Behavior at Microsecond
+      //www.citrix.com/glossary/load-balancing.html.                     Timescales. In ACM CoNEXT, 2013.
+[10] Jeffrey Dean and Luiz Andre´ Barroso. The Tail at
+      Scale. CACM, Februry 2013.                                   [23] Cade Metz. Return of the Borg: How Twitter
+[11] Jeffrey Dean and Sanjay Ghemawat. MapReduce:                        Rebuilt Google's Secret Weapon.
+      Simplified Data Processing on Large Clusters. In                   http://www.wired.com/2013/03/
+      OSDI, 2004.                                                        google-borg-twitter-mesos/all/, March 2013.
+
+                                                                   [24] Wenfei Wu, Guohui Wang, Aditya Akella, and
+                                                                         Anees Shaikh. Virtual Network Diagnosis as a
+                                                                         Service. In SoCC, 2013.
+
+                                                                   [25] Hongyi Zeng, Peyman Kazemian, George
+                                                                         Varghese, and Nick McKeown. Automatic Test
+
+                                                                   Packet Generation. In CoNEXT, 2012.
+
+                                                              152
+

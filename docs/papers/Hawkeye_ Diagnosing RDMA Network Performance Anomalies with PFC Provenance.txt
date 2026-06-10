@@ -1,0 +1,1196 @@
+Hawkeye: Diagnosing RDMA Network Performance Anomalies
+
+                            with PFC Provenance
+
+      Shicheng Wang1, Menghao Zhang2, Xiao Li3, Qiyang Peng2, Haoyuan Yu3, Zhiliang Wang1,
+                            Mingwei Xu1, Xiaohe Hu4, Jiahai Yang1,5, Xingang Shi1
+
+                           1Institute for Network Sciences and Cyberspace, BNRist, Tsinghua University
+                                                  2School of Software, Beihang University
+
+                              3Department of Computer Science and Technology, Tsinghua University
+                                                  4Infrawaves 5Quan Cheng Laboratory
+
+Abstract                                                                               1 Introduction
+
+RDMA is becoming increasingly prevalent from private data centers                      Remote Direct Memory Access (RDMA) has become a pivotal tech-
+to public multi-tenant clouds, due to its remarkable performance im-                   nology for network applications to achieve ultra-low latency and
+provement. However, its lossless traffic control, i.e., PFC, introduces                ultra-high throughput. With the advent of RoCEv2 (RDMA over
+new complexities in network performance anomalies (NPAs) due to                        Converged Ethernet version 2) [29], RDMA has been increasingly
+its cascading congestion spreading property, which usually incurs                      used for many distributed applications in industrial large-scale
+complaints from customers/applications about certain flows' per-                       data centers [6, 17, 20, 56, 80], especially in areas like distributed
+formance degradation. Existing studies fall short in fine-grained vis-                 deep learning training [9, 16, 30, 31, 51, 65, 69] and cloud stor-
+ibility of PFC impact and traceability of PFC causality, and are thus                  age [6, 11, 12, 15, 17, 32, 44, 70]. And currently it is becoming a
+ineffective in diagnosing the root causes for RDMA NPAs. In this                       trend to expand RDMA from private data centers to public multi-
+paper, we propose Hawkeye, an accurate and efficient RDMA NPA                          tenant clouds [1, 5, 6, 56].
+diagnosis system based on PFC provenance. Hawkeye comprises
+1) a fine-grained PFC-aware telemetry mechanism to record the                             However, RDMA also introduces new complexity for network
+PFC impact on flows; 2) an in-network PFC causality analysis and                       performance anomalies (NPAs), especially under the trend of de-
+tracing mechanism to quickly and efficiently collect causal teleme-                    ployment in multi-tenant public clouds. In RDMA networks, Prior-
+try for diagnosis; and 3) a provenance-based diagnosis algorithm to                    ity Flow Control (PFC) [28] is deployed to enable a loss-free network
+comprehensively present the anomaly breakdown, identifying the                         and guarantee high performance. Nevertheless, PFC introduces sev-
+anomaly type and root causes accurately. Through extensive evalu-                      eral performance issues. Once one port becomes congested, PFC
+ations on both NS-3 simulations and a Tofino testbed, Hawkeye                          spreads the congestion across multiple hops and imposes perfor-
+can quickly and accurately diagnose multiple RDMA NPAs with                            mance degradation on other flows that may even not traverse the
+over 90% precision and 1-4 orders of magnitude lower overhead                          initial congested point. Therefore, various performance anomalies
+than baselines.                                                                        can be raised, such as head-of-line blocking, unfairness, PFC storm
+                                                                                       and even PFC deadlock [20, 26]. Even with fine-grained conges-
+CCS Concepts                                                                           tion control [36, 45, 80] and advanced load balance [52, 59], PFC
+                                                                                       cannot be fully eliminated and still occurs frequently. Worse yet,
+· Networks  Programmable networks; Network monitoring;                                 these mechanisms can in turn be misled by PFC to make wrong
+Data center networks; Network performance analysis.                                    decisions [25, 63]. As a result, when customers/applications com-
+                                                                                       plain about certain flows' performance degradation, it is difficult
+Keywords                                                                               to diagnose the root causes for the RDMA NPAs, especially under
+                                                                                       increasingly complex traffic in multi-tenant public clouds.
+RDMA Networks, Performance diagnosis, Programmable Networks,
+Network Provenance                                                                        Current network performance anomaly diagnosis mechanisms
+                                                                                       cannot diagnose RDMA NPAs and the root causes effectively and
+ACM Reference Format:                                                                  efficiently. First, fine-grained PFC visibility is lacking in current
+Shicheng Wang, Menghao Zhang, Xiao Li, Qiyang Peng, Haoyuan Yu,                        monitoring and diagnosis systems, making inaccurate congestion
+Zhiliang Wang, Mingwei Xu, Xiaohe Hu, Jiahai Yang, Xingang Shi. 2025.                  identification. Existing NPA diagnosis studies, either on the host
+Hawkeye: Diagnosing RDMA Network Performance Anomalies with PFC                        side [19, 21, 41, 46] or the switch side [6, 17, 22, 24, 39, 47, 58, 66,
+Provenance. In ACM SIGCOMM 2025 Conference (SIGCOMM '25), Septem-                      79], lack the monitoring capability for flow-level PFC impact, and
+ber 8­11, 2025, Coimbra, Portugal. ACM, New York, NY, USA, 15 pages.                   thus cannot distinguish PFC-related anomalies from direct flow
+https://doi.org/10.1145/3718958.3750490                                                contention. Second, current monitoring and diagnosis systems fall
+                                                                                       short in quickly and efficiently tracing PFC causality. Due to the
+This work is licensed under a Creative Commons Attribution 4.0 International License.  cascading property of PFC, the congestion may not occur within a
+SIGCOMM '25, Coimbra, Portugal                                                         single queue independently. Therefore, tracing the PFC causality
+© 2025 Copyright held by the owner/author(s).                                          requires collecting the related telemetry on the PFC spreading path
+ACM ISBN 979-8-4007-1524-2/25/09                                                       efficiently. However, existing approaches either fail to capture the
+https://doi.org/10.1145/3718958.3750490                                                complete set of causal switches [22, 37, 47, 58, 66, 79] or suffer from
+                                                                                       high overhead [24, 55]. Third, current diagnosis algorithms, which
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                   Shicheng Wang et al.
+
+are mainly based on the flow-interaction paradigm [10, 37, 46, 66],                       Polling                                 P2               P1
+cannot support accurate root cause analysis on PFC anomalies.                             Packet
+They attribute the root cause to the flows contending with the                        S1                                                                    R1
+victim flow in the shared queue, instead of flows or hosts causing
+PFC originally. Therefore, both why (the root cause flows or hosts                           F1                                               SW3
+beyond the victim path) and how (the PFC spreading path) about
+the anomaly are largely ignored by current diagnosis paradigms.                       S2                                          P3               P1
+                                                                                             F2
+   In this paper, we present Hawkeye, an accurate and efficient                                                  P1 PAUSE P1                                R2
+RDMA NPA diagnosis system with PFC provenance. Hawkeye
+detects the victim flow encountering performance anomalies, con-                                          SW1                 SW2     PAUSE   SW4
+structs the complete anomaly provenance and locate the root causes:
+flows (e.g., problematic bursts) or hosts (e.g., host-side PFC injec-                                                                              congested
+tion), hence providing network operators with comprehensive un-
+derstanding of the anomalies. The accuracy and efficiency of Hawk-                                                                 F3-F6 A1 ...... A4
+eye are derived from the following three key techniques. First,
+Hawkeye augments telemetry systems by incorporating flow-level                        (a) PFC backpressure by flow contention (e.g., incast micro-bursts).
+PFC impact, delivers fine-grained PFC visibility and enables analysis
+of PFC-induced effects beyond conventional intra-queue flow inter-                                                                 P1              F1
+action. Second, Hawkeye supports accurate and efficient telemetry                                                                                            H2
+information collection across the network. By line-rate analyzing
+the victim flow path and the port-level PFC causality in the data                                  H1                P1       PAUSE SW2 PAUSE
+plane, Hawkeye quickly identifies the switches causally relevant                                          PAUSE
+to the anomaly, and efficiently collects the telemetry data through                                                                P1              F2
+the switch CPU asynchronously. Third, Hawkeye constructs a                                                                                                  H3
+heterogeneous provenance graph describing causality relationship
+between flows and ports. Hawkeye also proposes a signature-based                                                     SW1 PAUSE SW3 PAUSE
+anomaly diagnosis algorithm to match the behaviors and locate the
+root cause. We implement a prototype of Hawkeye at both Intel                                                    (b) PFC storm by host injection.
+Tofino hardware and NS-3, and make the code publicly available
+at Github [62]. Extensive evaluations on simulations and testbed                      F1                             P1 F2         F1                        P1 F2
+demonstrate that Hawkeye is able to accurately and robustly di-                               SW1                SW2                     SW1            SW2
+agnose multiple representative NPAs in RDMA networks, with >
+90% average precision and 100% recall. Hawkeye also presents                                       PAUSE             P2 Flow                                P2 PFC
+high efficiency in telemetry collection and diagnosis, whose band-                                                                                             Injection
+width and processing overhead are orders of magnitude lower than                                                      Contention                 PAUSE
+baselines. Hawkeye also fits well in current switch hardware with
+efficient resource usage.                                                                                             F5-F8
+Contributions. We analyze the complexity of diagnosing RDMA
+NPAs (§2) and propose Hawkeye, an accurate and efficient RDMA                         SW4                        SW3                   SW4              SW3
+NPA diagnosis system with PFC provenance (§3). We implement
+the prototype at both NS-3 simulation and Tofino hardware (§3.6).                     F4                         F3                          F4         F3
+Our evaluations demonstrate the effectiveness and efficiency of
+Hawkeye (§4).                                                                         (c) Deadlock by flow contention.                (d) Deadloc23k by PFC injection.
+Ethics: This work does not raise any ethical issues.
+                                                                                      Figure 1: PFC introduces complexity in congestion.
+2 Background and Motivation
+                                                                                      spread congestion in a cascading manner, causing issues like head-
+RDMA requires a lossless network to achieve high transport perfor-                    of-line blocking, unfairness, PFC storms, and even deadlock [20, 26].
+mance1. In particular, RoCEv2 deploys PFC [28], the hop-by-hop                        To alleviate the side effect of PFC, conventional wisdom introduces
+flow control, to achieve the loss-free property. With PFC, when a                     the end-to-end congestion control [36, 40, 45, 80] to mitigate the
+switch's ingress queue exceeds a threshold (   ) due to conges-                       congestion. However, PFC cannot be fully eliminated and still oc-
+tion, it sends a "PAUSE" frame to stop upstream packet transmission,                  curs frequently.
+and sends a "RESUME" frame when the queue drops below another
+threshold (). While PFC prevents packet loss, it can potentially                      2.1 RDMA NPAs
+
+1Although lossy networks are becoming popular currently, whether lossless or lossy    Hawkeye focuses on the performance anomalies caused by switch
+networks are better is still an open question and lossless networks are still widely  queue congestion in networks. However, these problem are chal-
+deployed.                                                                             lenging to diagnose in the context of RDMA. We here present
+                                                                                      several typical cases of RDMA NPAs to illustrate their complexity.
+                                                                                      PFC backpressure by flow contention. Flow contention, such as
+                                                                                      incast traffic, micro-bursts or ECMP load imbalance, is frequent in
+                                                                                      data center networks [6, 18, 20, 27, 59], which rarely occurs within
+                                                                                      a single switch in isolation. It typically causes PFC and spread
+                                                                                      congestion across multiple hops in RDMA networks. Therefore,
+                                                                                      victim flows even without any queue sharing with the conges-
+                                                                                      tion culprit may get blocked, such as F1 in Figure 1(a). Besides, the
+                                                                                      queue buildup caused by PFC falsifies the congestion signals such as
+                                                                                      queue length [80] and queuing delay [36], which may mislead con-
+                                                                                      gestion control to make long-term rate degradation on these victim
+                                                                                      flows [63]. PFC backpressure by flow contention can also be poten-
+                                                                                      tially exploited by attackers, such as LoRDMA attacks [63], thereby
+                                                                                      leading to performance degradation of innocent flows covertly.
+                                                                                      PFC storm. We define PFC storms as the cascading PFC backpres-
+                                                                                      sure that caused by continuous PFC injection by hosts (as shown in
+                                                                                      Figure 1(b)), potentially leading to significant degradation of overall
+                                                                                      network performance [6, 17, 20]. Host PFC injection may originate
+Hawkeye                                                                                                 SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+from diverse causes such as malfunctioning or buggy NICs, slow         Current solutions fall short in fine-grained PFC visibility.
+receiver issues caused by buffer exhaustion on the NIC, or even
+PCIe bottlenecks [20]. PFC storms thus present different durations     Current solutions in traditional TCP networks, either host-based [19,
+and the number of paused links. In such scenarios, even without        21, 46] or network-based [22, 24, 39, 47, 58, 66, 79], lack the visibility
+any flow contention, PFC injection can still lead to extensive or      of PFC-related information, such as port status and the PFC impact
+even network-wide traffic blocking.                                    on each flow. As a result, it is challenging for host-based solutions
+PFC deadlock. PFC deadlock occurs when the paused links form           (even RDMA-specific solutions [20, 41]) to accurately determine
+into a cycle [20]. No packets in the deadlock links can be transmit-   whether a flow has encountered PFC-related anomalies based solely
+ted, and the flows will be stopped entirely until the packets in the   on end-to-end metrics (e.g., latency). Many traditional in-network
+buffers are dropped manually. PFC deadlock requires cyclic buffer      systems also have no capability of effective PFC telemetry moni-
+dependency (CBD) [26, 27, 50, 55, 67] in the network, where each       toring, and thus are unable to detect PFC frames or PFC-related
+buffer waits for the next to drain out. Even in tree-based topology    anomalies. Although some emerging studies in RDMA networks
+with loop-free routing normally, CBD can also be caused by prob-       monitor the events such as PFC status [20], pause frames [79] and
+lematic routing on single/multiple flows such as link failure, port    NACK messages [17], fine-grained PFC visibility, including the PFC
+flaps and transient/persistent routing misconfigurations or routing    status at per-packet level and PFC impact on each flow, is still lack-
+loops [20, 27, 67]. Once one of the ports in the CBD becomes con-      ing. For example, PFC watchdog [6, 17, 20], a typical industrial
+gested, PFC pause frames will propagate and form into a cycle, i.e.,   monitoring tool, checks the PFC status of switch ports periodically.
+deadlock. PFC deadlock can be categorized into two types based         However, the polling period is hundreds of milliseconds or even
+on the initial congestion. The initiator-in-loop deadlock is caused    seconds, which may miss massive transient PFC congestion. Be-
+by the flow contention within the CBD. As shown in Figure 1(c),        sides, the port-level monitoring lacks fine-grained records of the
+SW2.P2 encounters micro-bursts and triggers PFC backpressure           performance impact on each flow, and thus cannot help identify
+along the CBD. The short-duration flow contention (<1ms) then          the root causes for the victim flows.
+leads to a persistent deadlock. The initiator-out-of-loop deadlock is
+caused by the PFC injection outside the CBD. SW2.P1 in Figure 1(d)     Current solutions fall short in fast and efficient PFC causality
+gets PFC frames injected and spreads congestion along the CBD,
+resulting in a deadlock.                                               tracing. Current diagnosis mechanisms fall short in identifying the
+                                                                       PFC-relevant switch and collecting its telemetry. Some fine-grained
+2.2 Complexity of RDMA NPAs                                            monitoring systems [22, 37, 47, 58, 79] mainly focus on the flows
+                                                                       within a single switch, which thus cannot find the PFC root cause
+There are two key complexities in RDMA NPA diagnosis.                  located hops away. A straw-man causality tracing method is to
+Frequent and transient queue congestion. The traffic in RDMA           collect the complete telemetry information from all switches in
+networks exhibits a wide and scattered pattern, especially the sig-    the network [24] and analyze the PFC causality relationship for
+nificant occurrence of bursty mice flows. Exacerbated by the preva-    the victim flow. However, full telemetry collection usually incurs
+lence of incast traffic patterns [18] and line-rate start of RDMA      high overhead for both collection and diagnosis. Another method
+congestion control [13, 57, 80], mice flows can easily overwhelm       is to collect the telemetry of the victim flow path's switches, such
+the shallow buffers of switches quickly [20], resulting in frequent    as SpiderMon [66]. Nevertheless, it may miss a part of the PFC
+and transient congestion. Worse yet, even with expensive emerging      spreading path, especially the initiator node, since the PFC path
+switching hardware such as NVIDIA Spectrum-X [49], fine-grained        does not always overlap completely with the victim flow path.
+load balance is still challenging in large RDMA networks [59],         Additionally, some solutions [20, 67] support loop detection on PFC
+which further increases the possibility of congestion.                 spreading paths. For example, PFC watchdog can only check the
+PFC complexity. PFC introduces a unique congestion pattern in          port PFC status on a single switch, and the operator should analyze
+RDMA networks. Unlike traditional TCP networks where switch            the PFC spreading path by manually checking multiple switches.
+queue congestion stems solely from local flow contention within        Besides, ITSY [67] sends probing packets to the upstream PFC
+queues, PFC-induced congestion spreads from downstream nodes           causal ports to detect PFC deadlock, but it ignores non-loop PFC
+independently of local queue conditions. This creates novel per-       backpressure and cannot diagnose the root cause of PFC anomalies.
+formance anomalies analyzed in §2.1. Worse yet, PFC invalidates
+conventional diagnostic approaches based on local flow interaction     Current solutions fall short in accurate anomaly diagnosis.
+analysis [66], and such methods cannot identify root causes located
+multiple hops away. As Figure 1(a) demonstrates, F1's degradation      Currently, traditional diagnosis studies usually analyze the flow
+at SW1.P1 actually originates from the bursts at SW4.P1 (propa-        contention within the switch queues on the victim flow path. They
+gated via PFC). Only analyzing local contention between F1 and F2      find the main contributor by flow statistics [4, 22, 39, 46, 58, 60],
+would miss the true root cause at SW4.P1, which is hops away and       queue measurement [10, 37], or provenance [66, 68]. However, these
+even out of F1's path.                                                 diagnosis solutions become less accurate in RDMA networks and
+                                                                       fail to completely describe the whole anomaly causality. First, the
+2.3 Problems of Current Work                                           diagnosis analyzer cannot identify whether congestion is caused
+                                                                       by local flow contention or remote PFC, and how badly the PFC
+In this subsection, we summarize why existing methods fall short       is pausing the victim flow due to the lack of PFC consideration
+in accurately and efficiently diagnosing RDMA NPAs.                    in diagnosis algorithms. Second, the diagnosis analyzer cannot
+                                                                       identify the true anomaly type due to the lack of PFC causality
+                                                                       understanding. For example, PFC deadlock will be misdiagnosed
+                                                                       if the loop is not recognized. Third, the diagnosis analyzer cannot
+                                                                       attribute the anomaly to the root-cause flow events, even with
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                        Shicheng Wang et al.
+
+Switch CPU                                                     Anomaly: PFC Deadlock                            InPort
+                  Collector Agent                              Root Cause: {, ... }                            OutPort
+
+Switch ASIC Notify                          Poll  Operator                                               P2     Port Meter PcIa3nuiPssaoPlFtrCot 1 InPort 2 InPort 3 ... InPort P  Port Status
+                                         Port
+    Infer Causality   Port     Infer  Telemetry   Analyzer                                           F1                              P1's flow                                        ON
+Update               Traffic  Update
+                                            Poll          Anomaly Diagnosis                                     OutPort 1 0000 0000 0000                    0000
+                                         Flow
+PFC                  Meter            Telemetry       Provenance Construction                        P1 P3      OutPort 2            1000       0000  0000  0000                   ON
+                                                                                                                TsdOEfSTusdtfPort 3  1000       0000  0000
+Read Status Update                                                                                       F2                                                 0000                   OFF
+                                                                                                     P5 F3 P4        ...
+                                                                                                                                                                                   ...
+
+                                                                           Report                    SW         OutPort P 0000 0000 0000                    0000                   OFF
+
+                                                                                     Normal Packet       PAUSE                                  P3 is PFC causal to P1
+                                                                                     PFC Frame
+                                                                                     Polling Packet            Figure 3: Hawkeye PFC causality structure.
+
+                  Figure 2: Hawkeye framework.                                                       polling packets to them. Simultaneously, the switch notifies its CPU
+                                                                                                     to perform asynchronous telemetry collection without compromis-
+extensive flow interaction analysis in current switches. For the root                                ing packet forwarding. Third, Hawkeye runs a provenance-based
+cause flows (e.g., bursts in SW4.P1 in Figure 1(a)) outside the victim                               offline diagnosis algorithm (§3.5). The analyzer constructs a hetero-
+flow path (e.g., F1 in Figure 1(a)), the diagnoser can only attribute                                geneous provenance graph describing the comprehensive anomaly
+the anomalies to flows sharing queues with the victim flow, and                                      breakdown, including the flow victimization extents, PFC causality,
+cannot catch the real root causes correctly.                                                         and each flow's contribution to this anomaly. Then it conducts a
+                                                                                                     diagnosis procedure to trace the congestion causality and pinpoint
+3 Hawkeye Design                                                                                     the root causes.
+
+3.1 Design Goal                                                                                      3.3 Telemetry Logging
+
+Based on the above analysis, diagnosing RDMA network perfor-                                         Awareness of PFC visibility and causality. To support PFC-
+mance anomalies should fulfill the following goals: 1) It should pro-                                related telemetry, Hawkeye sets up a PFC status register at the
+vide fine-grained PFC visibility. The monitor should capture flow                                    egress pipeline for each port, as shown in the "Port Status" column
+victimization characteristics, distinguishing between PFC-induced                                    in Figure 3. When receiving a PFC frame at the ingress pipeline of
+congestion and conventional flow contention while quantifying                                        a specific port, Hawkeye passes the frame into the egress pipeline,
+respective victimization extents. 2) It should efficiently collect the                               extracts the pause time encoded in the frame and updates the port
+telemetry relevant to the victim flows. The system must quickly                                      status and remaining pause time (refer to the red line in Figure 6)2.
+and exactly identify all causally relevant switches on both the vic-                                 Accordingly, when a data packet enqueues during the paused status
+tim flow path and PFC spreading path, to comprehensively cover                                       of the port, it is regarded as a paused packet, and the corresponding
+the anomaly provenance while minimizing the size of collected                                        telemetry is updated correspondingly. Furthermore, to analyze PFC
+telemetry. 3) It should accurately identify the anomaly and the cor-                                 causality, Hawkeye records the port-level traffic causality at the
+responding root cause. After collecting the telemetry, the analyzer                                  egress pipeline, as shown in Figure 3. Specially, to monitor the
+should comprehensively understand the anomaly, including the de-                                     PFC spreading contribution between ports, Hawkeye sets up a
+tailed anomaly scenario (e.g., PFC-related anomalies or normal flow                                  traffic meter for each port pair to record the traffic volume. This
+contention), how the PFC spreads (i.e., the PFC spreading path), and                                 is much finer grained than existing approaches like ITSY [67] that
+where the anomaly originates (e.g., micro-bursts, load imbalance                                     uses only a single bit to note the presence of traffic between ports.
+or host PFC injection).                                                                              For example, as shown in Figure 3, although both P3 and P4 are
+                                                                                                     PFC congested, P4 is irrelevant to the PFC backpressure at P1 be-
+3.2 Overview and Workflow                                                                            cause there is no traffic sending from P1 to P4, and thus P4 does
+                                                                                                     not contribute to the packet accumulation at P1. Therefore, once
+Figure 2 shows the overall framework of Hawkeye. First, Hawkeye                                      the upstream switch connected with P1 complains about its PFC
+passively records the telemetry with PFC visibility and causality                                    congestion, this switch can identify the causal ports relevant to the
+awareness (§3.3). It enables packet-level port PFC status visibility to                              PFC backpressure as P3.
+record PFC impact, and logs PFC causality to trace PFC spreading.                                    Epoch-based multi-granularity telemetry. Hawkeye logs flow-
+It then aggregates the detailed flow and port telemetry information                                  level and port-level telemetry in an epoch-based manner for fine-
+augmented with PFC impact for comprehensive diagnosis. Second,                                       grained monitoring, as shown in Figure 4. The switch maintains a
+Hawkeye deploys fast in-data-plane PFC causality analysis and                                        set of epochs in the egress pipeline as a ring buffer. To index the
+CPU-based telemetry collection (§3.4). To start diagnosis and trigger                                epoch to which a packet belongs at line rate, we utilize the times-
+the PFC causality analysis, we set a host-based agent monitoring                                     tamp in the packet metadata. Specifically, programmable switches
+the flow performance. Once performance degradation is detected,
+the detection agent will send a "polling" packet with the victim                                     2To enable PFC awareness of Hawkeye on Tofino, we have to pass PFC frames into
+flow information encoded into the network. When a Hawkeye                                            P4 pipelines and record PFC status using extra registers, since Tofino does not support
+switch receives the polling packet, it infers the causal neighboring                                 the monitoring of certain PFC features natively, such as the real-time PFC status of
+switches relevant to this anomaly at line rate and distributes the                                   each port.
+Hawkeye                                                                                                SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+                                        Epoch           Port Telemetry                       Table 1: Polling flag specifications.
+                     Timestamp Indexing
+                                               Epoch 0  Index Data      Polling Flag         Meaning
+         ...... 00000010 01 ......             Epoch 1
+               [ - : ) [:  + )                 Epoch 2  0    0110       00                   Useless tracing
+                 Cycle ID Epoch ID             Epoch 3                  01                   (Default) Only trace along victim flow path
+                                                        1    1101       10                   Only trace along PFC causality
+                                                                        11                   Trace both of them
+                                                        ...  ...
+
+Packet
+
+                                                        Flow Telemetry
+
+                   Packet Metadata                      Index Data
+         5-tuple Ingress Port Egress Port
+                                                        0    1001       Ingress Pipeline Pi   Traffic   Egress Pipeline Pk
+                                                                                             Manager
+                              Indexing by Hash          1    1100                PFC                                                   No            Forward
+                                                                            Pass Table        Update                        Is Pk on Victim  No
+                                                        ...  ...          Pass to Egress                      PFC Status
+                                                                                                                              Flow path?
+                                                                                                        Read  Update                   Yes
+
+                    Figure 4: Telemetry layout.                         Normal Packet                   Traffic meter       #Paused[Pk]>0? #Paused[Pk]>0?
+
+                                                                        Forward Table Forward
+
+         L2 Header            Polling Packet Header Format                                   Read       Read Update                           Yes
+                                                                                                                 Port
+                                                                        Polling Packet                                                       Meter[Pi][Pk]
+                                                                                                              Telemetry                           >0?
+                                                                        Forward Table
+DST MAC SRC MAC ETH TYPE POLLING FLAG EVENT ID VIC FLOW 5-TUPLE                                   Yes   Read Update         Yes No           Yes
+                                                                                                                 Flow
+                                                                        Flag==1* ?           Multicast
+                                                                                                              Telemetry
+                    Reserved  Indicating                                                                                    Flag=11 Flag=01  Flag=10 Egress
+                    ETH TYPE  Forwarding                                                                                                              Mirror
+                                                                                  No           Yes
+                                                                        Flag == 01 ?         Unicast          Is Mirrored
+                                                                                                                Packet?
+                                                                                                                            Yes, Send out (via CPU Port)
+
+           Figure 5: Hawkeye polling packet format.                                Figure 6: Hawkeye PFC causality analysis.
+
+assign each enqueued packet a unique 48-bit timestamp with nanosec-     end-to-end performance of flows (e.g., RTT), and triggers an anom-
+ond granularity, where the least significant bit corresponds to 1 ns.   aly diagnosis event when the performance degradation exceeds
+Consequently, we can select several bits from this 48-bit times-        a threshold. This host-side triggering mechanism provides two
+tamp to demarcate the epoch. For example, assuming that the             key advantages over switch-triggering approaches. First, host-side
+epoch size is 1 ms, which is approximately 220 ns, we can uti-          triggering eliminates duplicated efforts of PFC tracing. Due to the
+lize timestamp[21:20] to identify indices of different epochs, as       cascading property of PFC congestion, there are usually multiple
+shown in Figure 4. In addition, to distinguish the sequential order of  switches on a PFC path detecting the anomaly simultaneously and
+different epochs in the ring buffer, Hawkeye also records the 8 bits    initiating the procedure of PFC causality analysis. In contrast, by
+preceding the epoch index as the epoch ID, e.g., timestamp[29:22].      sending polling packets from the source host and piggybacking
+Once the epoch ID in the incoming packet timestamp is newer than        PFC tracing instructions, each switch forwards the extra control
+that stored in the current epoch, which means a wrap-around, the        packets only once to completely cover PFC causality. Second, in-
+register value will be reset and start to count from zero.              network monitoring cannot obtain some high-level performance
+                                                                        metrics, such as RTT [36, 45], flow completion time [72] or job
+   For flow-level telemetry, Hawkeye records the flow 5-tuple,          completion time [53], which usually require massive information
+packet count, and egress queuing depth, similar to existing work [22,   from host-side applications.
+47]. Additionally, to enable fine-grained PFC visibility, Hawkeye
+also records the number of packets paused by PFC for each flow.            Once performance degradation is identified, the host-end detec-
+For each incoming packet, Hawkeye first locates the right flow          tion agent generates a polling packet into the network, which is
+telemetry table based on its epoch, and the slot in this table is in-   assigned to a separate queue that is not paused by PFC, to further
+dexed by the hash value of the packet's 5-tuple. Then a bit-wise        trigger the telemetry collection and diagnosis. The polling packet
+XOR between the packet's 5-tuple and the 5-tuple in the slot is         format is illustrated in Figure 5. By default, the polling flag is set to
+executed. The result 0 indicates this packet belongs to an existing     01 (see Table 1), instructing switches to forward the packet along
+flow and the telemetry will be updated accordingly; the result 1        the path of the victim flow, whose 5-tuple is encoded in the polling
+indicates this packet belongs to a new flow, and the existing entry     header. Once PFC is detected on the victim flow path, it will also
+will be evicted and stored at the controller. Moreover, since PFC       be forwarded to the PFC spreading path to trace the causality (flag
+spreads hop by hop, diagnosing the anomaly usually requires ag-         1*), so that the complete anomaly causality is covered. To avoid
+gregating flow-level data into port level, requiring considerable       duplicate detection for a single flow, Hawkeye drops polling pack-
+computation overhead on the data plane. We therefore record the         ets with the same 5-tuple within a certain time interval. All polling
+port-level telemetry in the egress pipeline, to avoid this expensive    packets are set to the same priority as control packets (e.g., CNP) to
+computation. For each port, Hawkeye records the number of pack-         avoid potential queuing delay. The forwarding of polling packets
+ets paused by PFC and egress queue depth. The port-level data is        is conducted exclusively by the switch data plane, as shown in the
+indexed by the port number in each epoch, and is also updated by        gold dotted line Figure 6.
+each incoming packet, similar to the flow-level data.                   In-data-plane causality analysis. Hawkeye presents a line-rate
+                                                                        causality analysis mechanism that can accurately locate all causally
+3.4 Telemetry Collection                                                relevant switches on the paths of the victim flow and PFC spreading,
+                                                                        without covering unnecessary ones or introducing additional over-
+Anomaly-driven detection agent. Rather than monitoring anom-            head. Specifically, each Hawkeye switch analyzes its PFC causality
+alies on switches [66, 79], Hawkeye detects the NPA by deploying
+a host-based detection agent. The detection agent monitors the
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                             Shicheng Wang et al.
+
+and further forwards the polling packet to the causally relevant         PFC at each hop and their corresponding impact extents; 2) how
+switches. The causality analysis workflow of polling packets inside      PFC spreads to the victim flow path and which flow contributes to
+a switch is demonstrated in Figure 6. First, when a switch on the        this spreading; 3) where is the initial congestion point and what
+victim flow path receives a polling packet marked as 01 (e.g., SW1       is the root cause. Hawkeye addresses these challenges through: 1)
+in Figure 1(a)), the polling packet is unicasted to the same port        constructing a heterogeneous wait-for provenance graph to compre-
+as the victim flow by extracting the IP address (in the 5-tuple) en-     hensively describe the congestion causality(§3.5.1); 2) identifying
+coded in the packet. The switch then checks the number of paused         the anomaly case and locating the root causes by analyzing the
+packets on the egress pipeline. If the victim flow is PFC paused, the    provenance and matching anomaly signatures (§3.5.2).
+higher bit of the polling flag is set, notifying the next switch (from
+which PFC frames spread) to analyze its PFC causality. The ingress       3.5.1 Provenance Graph Construction. The heterogeneous wait-for
+pipeline of the downstream switch (e.g., SW2), multicasts the 1*
+polling packet to each egress port, so that every port analyze wether    provenance graph encodes the congestion causality between flows
+it is related to the anomaly. They check the PFC causality structure
+(maintained as Figure 3) and only emits the polling packets on           and ports. Specifically, flows and ports are represented as the nodes
+the ports causally relevant to this PFC congestion (e.g., SW2.P3).
+Such PFC causality analysis procedure is conducted recursively hop       in the graph, and directed weighted edges between the nodes are
+by hop, until the last switch whose egress port is connected to a
+host or has no PFC paused packets, which respectively means the          defined to present their wait-for relationship [76]. Hawkeye first
+PFC comes from host injection or the flow contention within this
+queue. Note that, once receiving the polling packet, each switch         adds port-level edges presenting the PFC causality, then adds flow-
+will also notify its controller through mirroring the polling packet
+to the CPU port, triggering the asynchronous telemetry collection.       port edges demonstrating the PFC pausing impact on flows, and
+Consequently, all the telemetry data on the PFC spreading path
+and victim flow path will be collected, and the polling packet is        finally adds port-flow edges indicating flow contention. The formal
+transmitted at line rate without disrupting the collection.
+Controller-assisted data collection. Upon receiving the polling          procedure is described in Algorithm 1.
+packet, the switch reports the telemetry it stored to the analyzer
+server. Although programmable switches are able to generate pack-        Port-level edges. We define the port-level provenance graph to
+ets and take telemetry data as the payload, it is cumbersome to
+dump all the data fully using data plane packet generation. Since        describe PFC causality including the spreading path and the initial
+each stage only allows one memory access, dumping the telemetry
+for all flows requires numerous recirculations. Besides, due to the      congestion point. For a port  paused by PFC, it actually waits for
+limited PHV field size of programmable switches, a large number
+of packets need to be generated to dump all the data. Consequently,      the downstream congested ports to drain out the queues. There-
+in-data-plane packet generation will impose a non-negligible over-
+head on traffic forwarding. To alleviate these problems, we design       fore, we define a wait-for directed edge from a congested egress
+a controller-assisted data collection mechanism that enables the
+asynchronous telemetry collection without affecting the data plane       port  (e.g., SW2.P3 in Figure 1(a)) to each downstream congested
+forwarding. Once receiving the mirrored polling packet, the con-
+troller then starts to read the telemetry register, filters out useless  egress port  (e.g., SW4.P1 in Figure 1(a)). For  , its contribu-
+telemetry such as zero-value data slots, and aggregates the data
+into a large packet reporting to the analyzer. The packet size can       tion to the PFC congestion at  is determined by the traffic rate
+be as large as the Maximum Transmission Unit (MTU), thereby
+reducing the number of telemetry packets. To prevent duplicate           between  and  ,  [ ] [ ], and the queue buildup of  ,
+data collection on one switch caused by multiple flows' polling
+packets (e.g., F1-F4 in Figure 1(c)), Hawkeye set a time interval        [ ]. Therefore, we define the edge weight from  to  as
+between two telemetry collections. Note that Hawkeye can easily
+support multiple NPAs concurrently. If two NPAs do not have the            = _[ ]            [ ] [ ]             [ ].  For    with
+path overlap, their telemetry data can be collected and diagnosed                             [ ] [ ]
+independently.
+                                                                          packets enqueuing over a period, [ ] can be calculated
+3.5 Provenance-based Diagnosis
+                                                                         as the average  1     [1, ]( ).
+Hawkeye proposes a diagnosis paradigm that can completely an-                            
+alyze the anomaly causality. Due to the PFC complexity (§2.2),
+diagnosing RDMA NPAs should answer the following questions:              Flow-port edges. We define flow-port edges to represent which
+1) whether the victim flow encounters normal flow contention or
+                                                                         ports pause a certain flow and the corresponding severity. Specifi-
+
+                                                                         cally, for a flow  which traverses through a PFC-paused port  ,
+
+                                                                         such as F1 in SW1.P1 in Figure 1(a),  is waiting for  to restart
+
+                                                                         packet forwarding. We hence add an edge from  to  , and set
+
+                                                                         the weight as the number of paused packets for  at  , denoted as
+
+                                                                         _(,  ).
+
+                                                                         Port-flow edges. Conversely, for some ports encountering flow
+
+                                                                         contention, they are actually waiting for the flows to be drained
+
+                                                                         from their queues. We characterize the wait-for relationship from
+
+                                                                         a port to a flow using the flow's contribution to the overall flow
+
+                                                                         contention in the port. When a packet  of flow  enqueues with
+
+                                                                         (), a flow-level wait-for edge from  to  can be defined
+
+                                                                         with the weight as the number of  's packets in (), de-
+
+                                                                         noted by   (). Therefore, the average wait-for edge from  to 
+
+                                                                         over a period can be calculated as  (,  ) =     ( )/ ,
+                                                                         where  is the number of  's packets in this period. This wait-for
+
+                                                                         weight is exactly the congestion contribution of flow  to  . How-
+
+                                                                         ever,  's contribution to the overall flow contention can not be
+
+                                                                         described by directly aggregating the wait-for weights to  from
+
+                                                                         every  , since  may also be blocked by other flows. For example,
+
+                                                                         a large flow blocked by short micro-bursts may have a high wait-
+
+                                                                         for weight from other flows, although it is actually a victim [37].
+
+                                                                         Therefore, the wait-for weight from  to other flows should be
+
+                                                                         subtracted. We hence finally denote the port-flow wait-for weight
+
+                                                                         to  as  (,  ) -  ( ,  ). Flows with positive and negative
+Hawkeye                                                                                                  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+Algorithm 1: Provenance Construction Procedure.                                     including the root causes and PFC-spreading ones. The formal diag-
+                                                                                    nosis procedure is shown in Algorithm 2. The supported signatures
+    Input:  - Port list in reported telemetry;  - Flow list in reported telemetry;  can be extended if more anomalies are identified.
+
+          - Epoch size;  - Network topology                                                         Table 2: Representative signatures.
+
+    Output:  - Provenance graph
+
+1 # Construct port-level provenance
+
+2 for    do
+3  .AddVertex(,   )
+
+4  [ ] = _ [ ]/ _ [ ]
+
+    _ [ ] =    . _  [ ] [  ]                                                             Anomaly            Root Cause                                   Signatures
+                                                                                                          Flow contention
+5                                                                                   Micro-bursts incast    (Micro-bursts)
+
+6 for    do                                                                                In-loop        Flow contention       ,    :
+                                                                                          deadlock                           (out-deg () = 0
+7   for     . _ :  [ ] [  ] > 0 do                                                                        Flow contention      (  ,    :
+                                                                                        Out-of-loop                          (,  )  
+8            = _[ ]   [ ] [  ]                                                            deadlock       Host PFC injection    weight(,  ) > 0  burst-flow( )))
+                                                                                                         Host PFC injection
+             [  ]/_ [ ]                                                                 Out-of-loop
+                                                                                          deadlock        Flow contention
+9            .AddEdge( (    ),  )
+                                                                                         PFC storm
+                                                                                        Normal flow                             : (   :
+                                                                                         contention
+10 for    do                                                                                                                 (out-deg () = 1
+11  .AddVertex( ,    )
+                                                                                                                                         :  (, )                       loop))
+
+                                                                                                                                                             
+
+12 # Construct flow-port provenance                                                                                           (  ,   ,    :
+
+13 for (  ,   )   ×  : _ (  ,   ) > 0 do                                                                                     (        )                  weight(,      )  >  0)
+
+                                                                                                                                 ,
+
+14   .AddEdge( (     ), _ ( ,   ) )                                                                                             ,   ,  :
+
+15 # Construct port-flow provenance                                                                                          (out-degP () > 1
+                                                                                                                              (, )   : out-deg () = 0
+16 for    do
+
+17   = ReplayQueue( )
+
+18  =Contribution()                                                                                                           (  ,    :
+
+    for    do                                                                                                                (       )                   weight(       )  >  0))
+
+                                                                                                                                ,                                 ,
+
+19
+
+20           .AddEdge( (   ),  [  ] )                                                                                           ,   ,  :
+
+21 Function ReplayQueue(p):                                                                                                  (out-degP () > 1
+
+    for    do                                                                                                                 (, )   : out-deg () = 0
+
+22                                                                                                                                                                           
+
+            for    _ ( ,  ) do                                                                                                        :     (  ,    )        weight(         ,      )    0)
+
+23
+
+24             =    / _ ( ,  )                                                                                                  ,    :
+                                                                                                                             (out-deg () = 0
+25            _ + = ( ,  )                                                                                                      : (,  )    weight(,  )  0)
+
+26 Sort _ by ascending order of                                                                                              (,    :     (, )   )
+27 return [  _ ]                                                                                                              (   ,   ,    :
+                                                                                                                             ((,  )    weight(,  ) > 0))
+28 Function Contribution(Seq):
+
+29  = { }  = { {0} }  = { {0} }
+
+30  for    do
+
+31          for    ( ) do
+
+32             [  ( ) ] [  ( ) ]+ = 1                                               PFC backpressure by flow contention. This anomaly case is
+                                                                                    characterized by 1) a high number of paused packets of the victim
+33  for (  ,  )   ×  do                                                             flow, 2) a PFC path on the port-level sub-graph, and 3) flow con-
+                                                                                    tention at the initially congested port. As shown in Figure 12(a), F1
+34           [  ] [  ] =  [  ] [  ]/ _ [  ]                                         is paused at SW1.P1 by PFC instead of normal flow contention (the
+                                                                                    dotted flow-port lines). And the initial node at the PFC path has
+35  for    do                                                                       a large number of outgoing port-flow edges, remarking that the
+                                                                                    root cause is flow contention. The major contributing flows are also
+36           [  ] =  (  ,  ) -  (  ,  )                                             remarked by the positive weights (marked in red) directed to them.
+                                                                                    The flow contention cause can be further analyzed. For example,
+37 return                                                                           incast bursts can be identified by analyzing the contributing flows'
+                                                                                    paths and throughput [46, 79], and load imbalance can be located
+38 return                                                                           by calculating ECMP imbalance ratio. We omit these details orthog-
+                                                                                    onal to our work which can be further integrated into Hawkeye.
+weights are contention contributors and victims, respectively. Note                 Besides the root-cause flows, other anomaly-contributing flows can
+that in real networks, the queue may experience PFC pause and                       be identified. For example, F2 is responsible for the PFC spreading
+flow contention simultaneously. The packets in the queue may also                   from SW2.P3 to SW1.P1, since it is paused at both ports.
+includes paused packets, which is not congested by local flow con-                  PFC storm. Similarly, Hawkeye locates the initially congested port
+tention. In this case, the port-flow edge construction excludes the                 node along the port-level edges in the provenance graph. However,
+paused packets in queues.                                                           since PFC storm is usually caused by host PFC injection, the initial
+                                                                                    port node has no flow contention, i.e., no positive outgoing port-
+3.5.2 Anomaly Breakdown and Diagnosis. The provenance graph                         flow edges. Therefore, the root cause can be located as host issues,
+provides a comprehensive breakdown for the anomaly causality,                       as shown in Figure 12(b).
+including the victimization extent from flow contention and PFC                     Initiator-in/out-of-loop deadlock. Hawkeye detects PFC dead-
+at each hop, the PFC spreading causality, and each flow's contri-                   locks by searching for loops starting from the port pausing the
+bution. We present the signatures of representative RDMA NPAs                       victim flow. Hawkeye further identifies the deadlock types and
+mentioned in §2.1, describing the corresponding graph feature of
+each anomaly. Their detailed formal definitions are shown in Ta-
+ble 2, and their example provenance graphs are demonstrated in
+Figure 12. Hawkeye traverses the graph and matches the signatures
+to identify the anomaly and locate the anomaly-contributing flows,
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                               Shicheng Wang et al.
+
+root causes by analyzing the port-port and port-flow edges. Specifi-       Algorithm 2: Provenance Analysis Procedure.
+cally, on one hand, the initially congested queue may be located in
+the port within the deadlock loop (i.e., initiator-in-loop deadlock),          Data:   ( ) - Neighboring flow nodes of port ;   ( ) -
+which is usually caused by the accidental flow contention. In this                    Neighboring port nodes of port ; outdegP ( ) - Port-level outdegree
+case, one of the port nodes in the loop will have multiple outgoing                   for port 
+positive edges to a set of flows, as shown in Figure 12(c). On the
+other hand, PFC can be injected by a host or caused by flow con-             Input:  - Provenance graph;  - Network topology;  - Victim flow
+tention in a port out of the loop (i.e., initiator-out-of-loop deadlock).  1 Function AnalyzeFlowContention(p):
+In this case, there will be a port node in the loop with multiple neigh-
+boring port nodes, which leads to a PFC path ending at the initial         2   # Flow contention analysis
+congestion node, as shown in Figure 12(d). Analyzing the port-flow
+edges on it can identify whether the root cause is flow contention         3   if max   () weight(,  )  0 then
+or PFC injection. The PFC spreading causality of Hawkeye also
+enables analysis on circular buffer dependency (CBD) for deadlock          4         # No flow contention
+prevention and resolution [20, 27, 67]. As shown in Figure 12(c),
+F1-F4 causes the PFC spreading loop. Further troubleshooting, such         5         check PFC injection from port 's peer device
+as routing configuration checking [7] can be conducted.
+Traditional congestion by flow contention. Although flow con-              6 else
+tention congestion in RDMA networks is almost impossible without
+generating PFC, it can also be diagnosed by Hawkeye, which degen-          7         for     ( ) : weight(,  ) > 0 do
+erates into a traditional congestion diagnosis. In this case, there is
+no port-level edges because of no PFC spreading path. But there is a       8         # check flow contention causes
+set of port nodes containing port-flow edges with positive weights
+which point to the contributors of flow contention.                        9         check flow throughput
+
+3.6 Implementation                                                         10        check flow priority
+
+We implement a prototype of Hawkeye at Intel Tofino hardware               11        check ECMP imbalance ratio
+using 2500 lines of P4 code and 3000 lines of C code. We also
+implement an NS-3 version based on HPCC simulator [2]. The root            12 Function DeadlockDiagnose(_ ):
+cause analyzer is implemented in Python. We implement a detection
+agent prototype on NVIDIA BlueField-3 DPU. The source code is              13  # Root cause
+publicly available at Github [62].
+Host detection agent. The detection agent prototype is imple-              14  if   _ : outdeg ( ) > 1 then
+mented on NVIDIA BlueField-3 DPU, based on PCC (Programmable
+Congestion Control) in DOCA [48]. The agent monitors each flow's           15        # Initial node out of loop
+RTT on the data-path accelerator via PCC's API. Once the RTT of a
+specific flow exceeds the threshold, the agent sends a polling packet      16        for   Neibr ( )  ¬  _ do
+encoding the victim flow 5-tuple and start a diagnosis. Note that,
+we use RTT as an example performance metric, and more metrics              17        CheckPortNode( , [ ])
+such as throughput, flow-completion time and even job-completion
+time can be integrated to support flexible detection.                      18  else
+Enable PFC awareness for P4. In Tofino, PFC port control is
+orthogonal to P4 application logic, and PFC frames are filtered out        19        # Initial node in loop
+by MAC without sending to the P4 pipeline by default, leading
+to limited PFC visibility. To enable awareness of PFC status, we           20        for    _ do
+set the filterpf bit to 0 in rxconfig register on MAC so that
+PFC frames can be passed to the application logic. Once receiv-            21        AnalyzeFlowContention( )
+ing a PFC frame at the ingress P4 pipeline, the PFC frame is then
+passed to the egress pipeline so that the corresponding port sta-          22  # Buffer dependency analysis
+tus register can be updated. Then the PFC-related telemetry can
+be maintained accordingly. Fortunately, emerging RDMA-native               23  print port-nodes in loops
+switches support significantly enhanced monitoring capabilities
+and expose interfaces for monitoring PFC status at switch ports,           24 Function CheckPortNode(,  _ ):
+eliminating the need for additional PFC frame processing, thereby
+easing Hawkeye's implementation.                                           25  # DFS-based check port
+
+                                                                           26  check whether loop exists
+
+                                                                           27 if  _ contains loop then
+
+                                                                           28        # Deadlock
+
+                                                                           29        DeadlockDiagnose( _ )
+
+                                                                           30  if outdeg ( ) == 0 then
+
+                                                                           31        # Initial nodes of PFC spreading
+
+                                                                           32        AnalyzeFlowContention( )
+
+                                                                           33  for   Neibr ( ) do
+
+                                                                           34        CheckPortNode(,  _ + )
+
+                                                                           35 for     do
+
+                                                                           36  if weight( ,  ) > 0 then
+
+                                                                           37        # check PFC causality
+
+                                                                           38        CheckPortNode( , [ ])
+
+                                                                           39  else
+
+                                                                           40        # normal flow contention
+
+                                                                           41        AnalyzeFlowContention( )
+
+                                                                           Hawkeye in Tofino hardware. The polling packet forwarding
+                                                                           logic is implemented in the ingress pipeline to determine which
+                                                                           port(s) to forward the polling packet. The port status, the PFC
+                                                                           causality meter, and the telemetry are collectively implemented in
+                                                                           the egress pipeline. To accelerate the bulk register read performance
+                                                                           on CPU, we utilize the REGISTER_SYNC table operation provided by
+                                                                           BF_Runtime, the runtime library on the controller, which utilizes
+                                                                           DMA transfer to quickly synchronize the whole register array to
+                                                                           the control plane. Then the register value can be quickly read inside
+                                                                           the software.
+
+                                                                           4 Evaluation
+
+                                                                           We evaluate Hawkeye in both large-scale simulation and real
+                                                                           testbed experiments to answer the following questions:
+Hawkeye                                                                                                  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+     · Can Hawkeye accurately diagnose RDMA NPAs (§4.2)?                recall, since Hawkeye triggers diagnosis once RTT exceeds the
+     · How efficiently does Hawkeye collect the telemetry and           threshold, nearly all the anomalies can be reported and thus false
+                                                                        negativeness is rare.
+        diagnose the root cause (§4.3)?                                 Precision& recall v.s. baselines. We compare the precision and
+     · Can Hawkeye cover common RDMA NPAs (§4.4)?                       recall between Hawkeye and other baselines in diagnosing PFC-
+     · Can Hawkeye be efficiently implemented on current net-           related anomalies and normal flow contention. We deploy Spider-
+                                                                        Mon [66] and NetSight [24] as the baselines from traditional net-
+        work hardware (§4.5)?                                           works. SpiderMon monitors the queuing delay of every packet and
+                                                                        reactively analyzes the flow interaction within the queues on the
+4.1 Experimental Setup                                                  victim flow path; NetSight collects per-packet postcards at each
+                                                                        switch across the network. Since traditional solutions cannot handle
+Topology. We set up a Fat-Tree (K=4) topology [14] with 20 switches     RDMA NPAs well, we also propose another 2 baselines derived from
+on NS-3 simulation. The link bandwidth is 100 Gbps and the link         Hawkeye. The "full polling" method collects the complete telemetry
+delay is 2 . Our hardware testbed partitions 2 pipelines of a Tofino    across all the switches in the network. The "victim-only" method
+switch into 2 logical switches. The logical links between them are      only polls the telemetry on the victim flow path without tracing
+emulated by directly attached cables. Two Dell PowerEdge R7525          the switches on PFC spreading paths. As the sub-optimal results
+servers are connected to each logical switch.                           of Hawkeye are already presented in Figure 7, we demonstrates
+Workload. We set up an empirical RoCEv2 workload to evaluate            the upper bound of precision and recall each method presents over
+Hawkeye, which comes from an industrial operating data center           different anomalies with its optimal parameters, as depicted in Fig-
+and displays a long-tailed flow size distribution [54]. Specifically,   ure 8. Hawkeye shows an upper bound of accuracy at the same
+< 80% of flows are smaller than 10 MB, < 90% of flows are smaller       level as the full polling method, since it also covers the complete
+than 100 MB, and about 10% flows are 100 MB  300 MB. The                causal telemetry. However, only collecting telemetry on the vic-
+arrival time of flows is based on a Poisson process, the arrival        tim flows presents much lower precision, especially on deadlock
+rate of flows is varied based on the link load of the network, and      diagnosis, since the causality coverage is limited. Specifically, when
+the source and destination of flows are selected randomly. For          diagnosing burst-induced PFC backpressure, PFC storm, and nor-
+each anomaly scenario, we craft 100 traffic traces following the        mal flow contention, the victim flow triggering the diagnosis may
+described traffic patterns with different link load. We inject a group  pass through the initial congestion point, which means the PFC
+of synchronized short-lived bursts passing through the same link        path is exactly the victim flow path. Therefore, the precision of
+to craft PFC backpressure by flow contention, configure a host          the victim-only method is closed to Hawkeye. In PFC deadlock
+to continuously inject PFC frames and cause PFC storm. We also          scenarios, each flow typically occupies only a part of the loop. As a
+simulate routing misconfigurations to trigger the initiator-in/out-     result, tracing only the victim flow path results in incomplete prove-
+of-loop deadlocks.                                                      nance graph and lower accuracy. Furthermore, since traditional
+                                                                        baselines do not have the visibility for PFC, they can hardly diag-
+4.2 Overall Effectiveness                                               nose the PFC-related NPAs, despite high effectiveness on normal
+                                                                        flow contention.
+In this subsection, we evaluate the effectiveness of Hawkeye. We
+first evaluate Hawkeye's diagnosis accuracy with different param-       4.3 Efficiency Breakdown
+eters, and compare the accuracy with other baselines using NS-3
+simulation.                                                             We evaluate the efficiency of each component in Hawkeye.
+Precision & recall with different parameters. We define a true          Telemetry logging effectiveness. Hawkeye logs port-level and
+positive result iff it identifies both the exact anomaly case (e.g., a  flow-level telemetry to construct complete causality and make fine-
+deadlock) and the corresponding root causes (e.g., the burst flows).    grained diagnosis. We evaluate the effectiveness of the telemetry
+False positives mean incorrect anomaly cases or root causes are         at different granularity. We set up 2 baselines: 1) Port-level only
+reported, while false negatives occur when an existing anomaly is       telemetry system, which only stores the port-level telemetry in-
+not reported. We evaluate the precision and recall over different       cluding the paused packet count at each port and the port-level
+PFC anomalies, as mentioned in §3.5.2, with different combinations      traffic meter. The port-only method still supports in-network PFC
+of parameters: detection threshold and epoch size. The threshold        causality analysis. 2) Flow-level only telemetry system, which only
+is normalized as percentage of RTT (i.e., 200%  500% RTT), and          stores the flow-level telemetry including the paused packet count
+the epoch size varies from 100us to 2ms. As shown in Figure 7,          and queue depth for each flow. The flow-only method is thus un-
+Hawkeye can achieve 100% precision and recall with correctly            able to trace PFC due to the lack of port-level traffic causality.
+configured parameters, and the precision is mainly affected by the      Figure 10 demonstrates the precision and recall of different meth-
+epoch size of the telemetry. Specifically, as the epoch increases,      ods for monitoring traffic containing mixed different anomalies.
+the accuracy of flow contention identification decreases, thereby       Two baselines present much lower performance, due to the lack
+reducing the locating precision of transient burst flows and the        of complete causality. Specifically, the port-level method cannot
+diagnosis precision. Besides, a too long epoch may mistakenly           identify the flow contention and therefore misses the root causes,
+correlate two events and make wrong causality. For example, a           although it can detect the PFC path. And the flow-level method can
+slight flow contention ending before the host PFC injection within
+the same epoch maybe mistakenly regarded as one NPA. Then the
+diagnosis may be misled into attributing the PFC causes to flow
+contention, reducing the precision consequently. Considering the
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                        Shicheng Wang et al.
+
+(a) PFC backpressure by flow contention. (b) PFC storm by host injection.  (c) Initiator-in-loop deadlock.  (d) Initiator-out-of-loop deadlock.
+
+Figure 7: Precision & recall of typical anomaly cases over different epoch sizes and thresholds.
+
+(a) Precision v.s. baselines.  (b) Recall v.s. baselines.                  Figure 10: Diagnosis effec- Figure 11: Count of Col-
+
+                                                                           tiveness of different teleme- lected switch & causal switch
+
+Figure 8: Precision & recall upper bound v.s. baselines.
+
+                                                                           try systems.                     coverage ratio.
+
+(a) Processing overhead.       (b) Bandwidth overhead.                     very low bandwidth overhead. The victim-only method presents
+                                                                           approximately lower bandwidth overhead because the polling pack-
+Figure 9: Overhead v.s. baselines.                                         ets are only forwarded to the switches on the victim flow path. The
+                                                                           full polling method causes no extra bandwidth since it does not
+not identify PFC path, leading to wrong diagnosis, as analyzed in          need polling packets to trigger the telemetry collection on switches.
+§2.3.                                                                      SpiderMon adds an extra 16-bit header field in every packet to
+Processing overhead. We compare the processing overhead us-                record the cumulative delay, leading to higher bandwidth overhead.
+ing the size of the telemetry collected for diagnosis. As shown in         NetSight generates considerable per-packet additional bandwidth
+Figure 9(a), the full polling method collects the telemetry on all         overhead, with about 15 bytes per packet and per average hop count
+switches, which includes a huge amount of irrelevant telemetry             due to the postcard for the packets at every switch.
+data. The victim-only method merely collects the telemetry on the          Telemetry-collected switch. Hawkeye collects the telemetry on
+victim flow path, showing much lower processing overhead despite           the switches related to the anomaly via in-network PFC causality
+lower accuracy. Hawkeye collects the telemetry on the switches             analysis. We evaluate the collected switch count and the coverage
+along both victim flow paths and PFC spreading paths, thus exhibit-        ratio of the causally relevant switches, as Figure 11 shows. Com-
+ing approximately higher processing overhead than the victim-only          pared to full polling, Hawkeye collects a much smaller number of
+method. SpiderMon collects the flow telemetry along the victim             switches while ensuring 100% coverage of causal switches. In con-
+flow path with 36 bytes per flow, showing similar telemetry amount         trast, the victim-only method exhibits low causality coverage due
+to the victim-only method. NetSight collects all the postcards for         to not tracing the PFC, despite a lower count of switches collected.
+every packet at each hop, and consequently results in significant          Therefore, the complete provenance cannot be constructed, and
+overhead.                                                                  the accuracy is thus lower. To summarize, through in-network PFC
+Monitoring bandwidth overhead. We measure the additional                   causality analysis, Hawkeye efficiently collects the anomaly causal
+bandwidth overhead during the monitoring introduced by differ-             switches with low collection scale.
+ent methods in Figure 9(b). Hawkeye monitors and records the
+telemetry passively without extra traffic, and it only generates addi-     4.4 Case Study
+tional polling packets to the switches on victim flow paths and PFC
+spreading paths when an anomaly is detected. Therefore, it presents        We demonstrate Hawkeye's diagnosis effectiveness by constructing
+                                                                           the provenance graphs of the typical NPAs in §2.1.
+                                                                           PFC by incast micro-bursts. As shown in Figure 1(a), multiple
+                                                                           line-rate micro-burst flows are injected into SW4.P1 by devices
+                                                                           A1A4 and spread PFC to SW1.P1. As Figure 12(a) shows, the
+                                                                           victim flows F2 and F1 are paused at SW1.P1 and SW2.P3 by PFC
+                                                                           (dotted edges to port nodes), and the port-level graph indicates that
+                                                                           the initial congestion point is SW4.P1. Inside SW4.P1, the main
+Hawkeye                                                                                                 SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+F1                                    F3                    F1  SW2.                       F1 -15     F5 F6
+                                15                               P1                                24 14
+                                             SW1.
+                                      19 F4   P1                SW3.                                   20 F7                            F1
+                                                                 P1                  SW1.      SW2. 30
+                             SW4.                           F2                        P1                                SW2.      SW1.      SW2.
+                              P1                                                                                         P1
+    SW1.  SW2.                                                                                     P2 -73 F8                      P1        P2
+     P1    P3                        18 F5
+                               16                                                F4                    F2                     F4                             F2
+
+                        -68           F6                                             SW4.      SW3.                               SW4.      SW3.
+          F2
+                                                                                     P4            P3                             P4        P3
+
+                                                                                           F3                                           F3
+
+         (a) PFC by incast micro-bursts.     (b) PFC storm.                          (c) Initiator-in-loop deadlock.    (d) Initiator-out-of-loop deadlock.
+
+    Figure 12: Provenance graphs for typical anomalies. Port-flow and port-level edge weights are omitted for simplicity.
+
+    (a) Resource usage summary.           (b) Resource usage with 2 & 4 epochs.          (a) Telemetry size reduction.            (b) Telemetry packet reduction.
+
+          Figure 13: Hardware resource usage.                                              Figure 14: CPU reduces telemetry collected.
+
+contributor flows F3-F6 (connected with red edges) are identified                    the data of 64 ports and 4096 flows. Since CPU polling and line-
+as root causes.                                                                      rate polling packet forwarding are asynchronous, the telemetry
+PFC storm. The PFC injection from H1 in Figure 1(b) causes PFC                       collection on multiple individual switches starts in parallel within
+storm in the network. Figure 12(b) demonstrates the PFC path from                    an end-to-end delay ( ). Therefore, the total time usage is ap-
+SW1.P1 to SW2 and SW3. With no flow contention in SW1.P1, the                        proximately equal to the time of polling one switch, showing high
+congestion is due to host PFC injection.                                             scalability with network scale.
+Initiator-in-loop deadlock. Figure 1(c) shows the PFC deadlock
+caused by the flow contention in the loop. The provenance graph                         We then evaluate the efficiency of the CPU poller. Compared
+in Figure 12(c) identifies the deadlock through a loop of port-level                 to fully dumping the telemetry using packet generation in the
+edges. Since each port node has a port-level out-degree < 2, the                     data plane, the CPU can reduce the telemetry data size reported
+initial congestion point lies inside the loop. Analyzing the port-to-                to the analyzer significantly by excluding the useless telemetry
+flow edges for each port reveals the root cause of flow contention                   data such as zero values. As shown in Figure 14(a), in most cases,
+at SW2.P2.                                                                           the concurrent flow count in one epoch is much smaller than the
+Initiator-out-of-loop deadlock. Figure 1(d) shows the PFC dead-                      maximum flow count in data plane telemetry, thus the telemetry
+lock caused by PFC injection out of the loop. The provenance graph                   size can be reduced by >80%. Besides, due to the limited PHV size
+in Figure 12(d) first identifies the deadlock through the loop. Among                (around 200 bytes), exporting the complete flow telemetry on the
+the port nodes in the loop, SW1.P1 has another outgoing path                         data plane requires a significant number of packets and incurs
+destined to SW2.P1 which has no flow contention, and the PFC                         a heavy communication overhead. However, the CPU can batch
+injection can be identified.                                                         the meaningful subset of the telemetry into a much larger packet
+                                                                                     (e.g., the MTU of 1500 bytes), reducing the number of packets
+4.5 Real Testbed Evaluation                                                          considerably. As shown in Figure 14(b), the telemetry-reporting
+                                                                                     packet count can be reduced by about 95% in most cases.
+We implement Hawkeye at a real testbed, and validate its deploya-
+bility and efficiency accordingly.                                                   5 Discussion
+Switch resource usage. Figure 13(a) shows Hawkeye's hardware
+resource usage, which fits well on Tofino. Furthermore, Hawkeye's                    Operating scenarios of Hawkeye. Network operators can uti-
+memory usage scales well with the epoch count monitored and                          lize Hawkeye in different ways by setting different triggering con-
+the maximum flow count per epoch. As shown in Figure 13(b), the                      ditions. For example, the monitored performance metrics can be
+memory usage of PFC causality structure (Figure 3) and port-level                    extended to various definitions, such as flow throughput, co-flow
+telemetry is small and constant, bounded by the number of switch                     completion time, or even application-level metrics such as job com-
+ports, while the flow-level telemetry increases with  (# ).                          pletion time or algorithmic bandwidth. Besides on-demand diagno-
+CPU poller. We first measure the total time usage of polling the                     sis, when integrated with pingmesh-like probes [41], Hawkeye can
+telemetry from switches using the on-switch CPU. Polling full                        carry out periodic diagnosis for a more complete understanding
+telemetry from one switch, including 2 or 4 epochs, requires ap-                     of the network. Furthermore, in multi-tenant networks, anomaly
+proximately 80 and 120 ms, respectively, with each epoch containing                  diagnosis can be provided as a service to users by sharing client
+                                                                                     performance information with operators.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                  Shicheng Wang et al.
+
+Representativeness of covered anomalies. In this paper, we              The major parameters in Hawkeye, as mentioned in §4.2, is the
+propose a diagnosis method for a range of representative anomalies.     epoch size and detection threshold. A shorter epoch size can cap-
+Although we do not claim that we cover the complete NPA space           ture flow interactions more accurately, helping to identify flow
+in RDMA networks, the anomaly cases addressed in this paper             contention and major contributors. However, too short epoch size
+are sufficiently representative. Specifically, the proposed anomalies   requires much more epochs to be maintained at the switch so that
+cases (shown in Table 2) cover the existence of PFC, the different      the telemetry will not be flushed quickly, causing higher memory
+PFC root causes (flow contention or host PFC injection) and the         usage and telemetry size. For detection threshold, taking latency as
+shape of PFC spreading paths (whether a loop exists). We leave          an example metric, it is important to consider the network's scale
+more comprehensive NPA coverage and a more general diagnosis            and application requirements. Typically, for latency-sensitive appli-
+algorithm as our future work.                                           cations, the detection threshold is usually 2-4 times the maximum
+Extensibility of Hawkeye telemetry. Our main focus in teleme-           RTT (determined by the maximum hop count). A sensitive detec-
+try design is to enable PFC visibility and causality tracing, which     tion threshold can quickly trigger diagnosis, while causes higher
+is orthogonal to flow-level information recording. Therefore, the       diagnosis frequency.
+flow-level telemetry in Hawkeye can be further complemented by
+numerous existing studies [22, 37, 47, 58] to provide more informa-     6 Related Work
+tion such as flow features and queue evolution, enabling a more
+in-depth understanding of flow interactions. However, integrating       Besides the most relevant works we discussed early, our work is
+fine-grained flow telemetry also incurs higher overhead especially      also inspired by the following topics.
+on switch resource usage.                                               Performance anomaly in intra-host networks. Many stud-
+Applicability of Hawkeye. Our Tofino implementation serves              ies observe the intra-host network is becoming an RDMA per-
+as a readily available proof-of-concept. However, Hawkeye is not        formance bottleneck. Collie [35] explores the anomaly space to
+tightly tied to Tofino, and is inexpensive to implement into next-      find performance anomalies in intra-host networks. Husky [34]
+generation switching ASICs. The real time PFC status of each port       presents a test suite to evaluate performance isolation in RNICs.
+is already supported by many RDMA switches. Hawkeye only                Hostping [42]diagnoses the performance bottleneck in intra-host
+requires two additional components. First, the PFC causality data,      networks using loopback traffic. Lumina [71] proposes a test tool to
+including the causality structure (Figure 3) and port-level telemetry,  evaluate the performance of RNIC network stacks. However, there
+requires additional registers with constant size, which is bounded      are relatively fewer studies effectively diagnosing inter-host RDMA
+by the number of switch ports. Second, Hawkeye enhances the             NPAs, as analyzed in §2.3, and we bridges this gap via Hawkeye.
+flow-level telemetry with PFC-aware data, such as PFC impact            Programmable network. Programmable networks, represented
+on each flow. Such modification only requires a new data field in       by programmable switches and SmartNICs, have been widely used
+the telemetry recording system. As current switches are becoming        to accelerate various applications in network monitoring [22, 39,
+more plentiful in resource and embracing greater programmability,       47, 79], traffic analysis [58, 64, 73, 77], queue measurement [10, 37],
+especially considering the trend of white-box customized switches,      traffic control [3, 25, 38, 75], and security [33, 43, 74]. Inspired
+we believe that Hawkeye is fully implementable to next-generation       by them, Hawkeye leverages programmable switches to support
+commodity switches.                                                     PFC-aware telemetry logging, PFC causality tracing and telemetry
+Partial Deployment of Hawkeye. Hawkeye contains two core                collection.
+components: 1) the PFC causality analysis mechanism to trace            Provenance-based diagnosis. There is a body of studies that
+the PFC spreading path; 2) the PFC-aware flow telemetry to an-          leverage provenance to trace event causality relationship [8] and
+alyze queue contention between flows and PFC impact on each             diagnose security threats or performance issues. ForenGuard [61]
+flow, both of which are crucial to locate the root causes. If only a    monitors the provenance of runtime activities in SDN. Unicorn [23]
+part of switches deploy Hawkeye, such as ToR switches, the PFC          leverages the provenance of system executions to detect APT (Ad-
+tracing will be interrupted at a non-Hawkeye switch, making it          vanced Persistent Threat). SpiderMon [66] and PrintQueue [37]
+difficult to correlate victim flows with root causes even though        construct flow-level and packet-level provenance, respectively, to
+a certain switch's telemetry may have recorded them. We give a          identify queue contention contributors. DTaP [78] and Zeno [68]
+feasible partial deployment option. Assume that all switches sup-       construct time-aware event provenance and diagnose performance
+port PFC causality analysis, but we only deploy flow telemetry          issues in distributed systems. Hawkeye takes PFC causality into
+on some hot-spot switches, e.g., ToR switches, where a lot of flow      provenance consideration to diagnose RDMA NPAs.
+contention such as incast frequently occurs. In this case, the PFC
+spreading causality can be completely traced, and a significant         7 Conclusion
+percentage of the root causes located in ToR switches can also be
+covered. However, diagnosis effectiveness is still inevitably com-      RDMA network performance anomalies present new complexities
+promised. For instance, some root causes like ECMP imbalance [66]       due to the cascading congestion of PFC and make existing solutions
+or routing problems [27, 67] occurring on leaf/spine switches, are      less effective. We propose Hawkeye to bridge the gap. It provides
+consequently uncovered.                                                 fine-grained PFC visibility through a multi-granularity PFC-aware
+Parameter setting on different network environment. Hawk-               telemetry system, a fast in-network PFC causality tracing mecha-
+eye empirically adjusts the parameters for different network work-      nism to efficiently collect causal telemetry, and a precise diagnosis
+loads, to achieve a good trade-off between accuracy and overhead.       algorithm based on the heterogeneous provenance graph. Our eval-
+                                                                        uations demonstrate Hawkeye can accurately detect and diagnose
+Hawkeye                                                                                                                 SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+RDMA network performance anomalies with low overhead. We                                [12] Yanzhe Chen, Xingda Wei, Jiaxin Shi, Rong Chen, and Haibo Chen. 2016. Fast
+hope Hawkeye can inspire new paradigms for anomaly diagnosis                                  and general distributed transactions using RDMA and HTM. In Proceedings of
+in RDMA networks.                                                                             the Eleventh European Conference on Computer Systems (EuroSys '16). Association
+                                                                                              for Computing Machinery, New York, NY, USA, Article 26, 17 pages. https:
+Acknowledgment                                                                                //doi.org/10.1145/2901318.2901349
+
+We thank our shepherd, Costin Raiciu, and the anonymous SIG-                            [13] Wenxue Cheng, Kun Qian, Wanchun Jiang, Tong Zhang, and Fengyuan Ren. 2020.
+COMM reviewers for their valuable comments. This work is sup-                                 Re-architecting Congestion Management in Lossless Ethernet. In 17th USENIX
+ported in part by the National Natural Science Foundation of China                            Symposium on Networked Systems Design and Implementation (NSDI 20). USENIX
+(No. 62402025 and No.62221003), the Fundamental Research Funds                                Association, Santa Clara, CA, 19­36. https://www.usenix.org/conference/nsdi20
+for the Central Universities and gifts from Huawei-BUAA Joint                                 /presentation/cheng
+Lab. Menghao Zhang and Zhiliang Wang are the corresponding
+authors.                                                                                [14] Charles Clos. 1953. A study of non-blocking switching networks. The Bell
+                                                                                              System Technical Journal 32, 2 (1953), 406­424. https://doi.org/10.1002/j.1538-
+References                                                                                    7305.1953.tb01433.x
+
+ [1] Alibaba. 2024. Alibaba builds high-speed RDMA network for AI and scientific        [15] Aleksandar Dragojevi, Dushyanth Narayanan, Miguel Castro, and Orion Hodson.
+      computing. https://www.alibabacloud.com/blog/alibaba-builds-high-speed-rd               2014. FaRM: Fast Remote Memory. In 11th USENIX Symposium on Networked
+      ma-network-for-ai-and-scientific-computing_594895. (2024).                              Systems Design and Implementation (NSDI 14). USENIX Association, Seattle, WA,
+                                                                                              401­414. https://www.usenix.org/conference/nsdi14/technical-sessions/dragoje
+ [2] Alibaba-edu. 2019. HPCC simulation. https://github.com/alibaba-edu/High-                 vi
+      Precision-Congestion-Control. (2019).
+                                                                                        [16] Adithya Gangidi, Rui Miao, Shengbao Zheng, Sai Jayesh Bondu, Guilherme Goes,
+ [3] Serhat Arslan, Yuliang Li, Gautam Kumar, and Nandita Dukkipati. 2023. Bolt:              Hany Morsy, Rohit Puri, Mohammad Riftadi, Ashmitha Jeevaraj Shetty, Jingyi
+      Sub-RTT Congestion Control for Ultra-Low Latency. In 20th USENIX Symposium              Yang, Shuqiang Zhang, Mikel Jimenez Fernandez, Shashidhar Gandham, and
+      on Networked Systems Design and Implementation (NSDI 23). USENIX Association,           Hongyi Zeng. 2024. RDMA over Ethernet for Distributed Training at Meta
+      Boston, MA, 219­236. https://www.usenix.org/conference/nsdi23/presentation/             Scale. In Proceedings of the ACM SIGCOMM 2024 Conference (ACM SIGCOMM
+      arslan                                                                                  '24). Association for Computing Machinery, New York, NY, USA, 57­70. https:
+                                                                                              //doi.org/10.1145/3651890.3672233
+ [4] Behnaz Arzani, Selim Ciraci, Luiz Chamon, Yibo Zhu, Hongqiang (Harry) Liu, Jitu
+      Padhye, Boon Thau Loo, and Geoff Outhred. 2018. 007: Democratically Finding       [17] Yixiao Gao, Qiang Li, Lingbo Tang, Yongqing Xi, Pengcheng Zhang, Wenwen
+      the Cause of Packet Drops. In 15th USENIX Symposium on Networked Systems                Peng, Bo Li, Yaohui Wu, Shaozong Liu, Lei Yan, Fei Feng, Yan Zhuang, Fan
+      Design and Implementation (NSDI 18). USENIX Association, Renton, WA, 419­435.           Liu, Pan Liu, Xingkui Liu, Zhongjie Wu, Junping Wu, Zheng Cao, Chen Tian,
+      https://www.usenix.org/conference/nsdi18/presentation/arzani                            Jinbo Wu, Jiaji Zhu, Haiyong Wang, Dennis Cai, and Jiesheng Wu. 2021. When
+                                                                                              Cloud Storage Meets RDMA. In 18th USENIX Symposium on Networked Systems
+ [5] Azure. 2023. High performance computing VM sizes. https://learn.microsoft.co             Design and Implementation (NSDI 21). USENIX Association, 519­533. https:
+      m/en-us/azure/virtual-machines/sizes-hpc/. (2023).                                      //www.usenix.org/conference/nsdi21/presentation/gao
+
+ [6] Wei Bai, Shanim Sainul Abdeen, Ankit Agrawal, Krishan Kumar Attre, Paramvir        [18] Yixiao Gao, Yuchen Yang, Tian Chen, Jiaqi Zheng, Bing Mao, and Guihai Chen.
+      Bahl, Ameya Bhagat, Gowri Bhaskara, Tanya Brokhman, Lei Cao, Ahmad Cheema,              2018. DCQCN+: Taming Large-Scale Incast Congestion in RDMA over Ethernet
+      Rebecca Chow, Jeff Cohen, Mahmoud Elhaddad, Vivek Ette, Igal Figlin, Daniel             Networks. In 2018 IEEE 26th International Conference on Network Protocols (ICNP).
+      Firestone, Mathew George, Ilya German, Lakhmeet Ghai, Eric Green, Albert                IEEE, Cambridge, United Kingdom, 110­120. https://doi.org/10.1109/ICNP.2018.
+      Greenberg, Manish Gupta, Randy Haagens, Matthew Hendel, Ridwan Howlader,                00021
+      Neetha John, Julia Johnstone, Tom Jolly, Greg Kramer, David Kruse, Ankit
+      Kumar, Erica Lan, Ivan Lee, Avi Levy, Marina Lipshteyn, Xin Liu, Chen Liu,        [19] Mojgan Ghasemi, Theophilus Benson, and Jennifer Rexford. 2017. Dapper: Data
+      Guohan Lu, Yuemin Lu, Xiakun Lu, Vadim Makhervaks, Ulad Malashanka,                     Plane Performance Diagnosis of TCP. In Proceedings of the Symposium on SDN
+      David A. Maltz, Ilias Marinos, Rohan Mehta, Sharda Murthi, Anup Namdhari,               Research (SOSR '17). Association for Computing Machinery, New York, NY, USA,
+      Aaron Ogus, Jitendra Padhye, Madhav Pandya, Douglas Phillips, Adrian Power,             61­74. https://doi.org/10.1145/3050220.3050228
+      Suraj Puri, Shachar Raindel, Jordan Rhee, Anthony Russo, Maneesh Sah, Ali
+      Sheriff, Chris Sparacino, Ashutosh Srivastava, Weixiang Sun, Nick Swanson,        [20] Chuanxiong Guo, Haitao Wu, Zhong Deng, Gaurav Soni, Jianxi Ye, Jitu Padhye,
+      Fuhou Tian, Lukasz Tomczyk, Vamsi Vadlamuri, Alec Wolman, Ying Xie, Joyce               and Marina Lipshteyn. 2016. RDMA over Commodity Ethernet at Scale. In
+      Yom, Lihua Yuan, Yanzhao Zhang, and Brian Zill. 2023. Empowering Azure                  Proceedings of the 2016 ACM SIGCOMM Conference (SIGCOMM '16). Association
+      Storage with RDMA. In 20th USENIX Symposium on Networked Systems De-                    for Computing Machinery, New York, NY, USA, 202­215. https://doi.org/10.114
+      sign and Implementation (NSDI 23). USENIX Association, Boston, MA, 49­67.               5/2934872.2934908
+      https://www.usenix.org/conference/nsdi23/presentation/bai
+                                                                                        [21] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave
+ [7] Ryan Beckett, Aarti Gupta, Ratul Mahajan, and David Walker. 2017. A Gen-                 Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, Hua Chen, Zhi-Wei Lin, and Varugis
+      eral Approach to Network Configuration Verification. In Proceedings of the              Kurien. 2015. Pingmesh: A Large-Scale System for Data Center Network Latency
+      Conference of the ACM Special Interest Group on Data Communication (SIG-                Measurement and Analysis. In Proceedings of the 2015 ACM Conference on Special
+      COMM '17). Association for Computing Machinery, New York, NY, USA, 155­168.             Interest Group on Data Communication (SIGCOMM '15). Association for Comput-
+      https://doi.org/10.1145/3098822.3098834                                                 ing Machinery, New York, NY, USA, 139­152. https://doi.org/10.1145/2785956.27
+                                                                                              87496
+ [8] Peter Buneman, Sanjeev Khanna, and Tan Wang-Chiew. 2001. Why and Where:
+      A Characterization of Data Provenance. In Database Theory -- ICDT 2001, Jan       [22] Arpit Gupta, Rob Harrison, Marco Canini, Nick Feamster, Jennifer Rexford, and
+      Van den Bussche and Victor Vianu (Eds.). Springer Berlin Heidelberg, Berlin,            Walter Willinger. 2018. Sonata: query-driven streaming network telemetry. In
+      Heidelberg, 316­330.                                                                    Proceedings of the 2018 Conference of the ACM Special Interest Group on Data
+                                                                                              Communication (SIGCOMM '18). Association for Computing Machinery, New
+ [9] Jiamin Cao, Yu Guan, Kun Qian, Jiaqi Gao, Wencong Xiao, Jianbo Dong, Binzhang            York, NY, USA, 357­371. https://doi.org/10.1145/3230543.3230555
+      Fu, Dennis Cai, and Ennan Zhai. 2024. Crux: GPU-Efficient Communication
+      Scheduling for Deep Learning Training. In Proceedings of the ACM SIGCOMM          [23] Xueyuan Han, Thomas Pasquier, Adam Bates, James Mickens, and Margo Seltzer.
+      2024 Conference (ACM SIGCOMM '24). Association for Computing Machinery,                 2020. Unicorn: Runtime Provenance-Based Detector for Advanced Persistent
+      New York, NY, USA, 1­15. https://doi.org/10.1145/3651890.3672239                        Threats. In Network and Distributed Systems Security (NDSS) Symposium 2020.
+
+[10] Xiaoqi Chen, Shir Landau Feibish, Yaron Koral, Jennifer Rexford, Ori Rot-          [24] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David Mazières, and
+      tenstreich, Steven A Monetti, and Tzuu-Yi Wang. 2019. Fine-grained queue                Nick McKeown. 2014. I Know What Your Packet Did Last Hop: Using Packet
+      measurement in the data plane. In Proceedings of the 15th International Con-            Histories to Troubleshoot Networks. In 11th USENIX Symposium on Networked
+      ference on Emerging Networking Experiments And Technologies (CoNEXT '19).               Systems Design and Implementation (NSDI 14). USENIX Association, Seattle, WA,
+      Association for Computing Machinery, New York, NY, USA, 15­29. https:                   71­85.
+      //doi.org/10.1145/3359989.3365408
+                                                                                        [25] Jinbin Hu, Chaoliang Zeng, Zilong Wang, Junxue Zhang, Kun Guo, Hong Xu,
+[11] Youmin Chen, Youyou Lu, and Jiwu Shu. 2019. Scalable RDMA RPC on Reliable                Jiawei Huang, and Kai Chen. 2023. Enabling Load Balancing for Lossless Data-
+      Connection with Efficient Resource Sharing. In Proceedings of the Fourteenth            centers. In 2023 IEEE 31st International Conference on Network Protocols (ICNP).
+      EuroSys Conference 2019 (EuroSys '19). Association for Computing Machinery,             1­11. https://doi.org/10.1109/ICNP59255.2023.10355615
+      New York, NY, USA, Article 19, 14 pages. https://doi.org/10.1145/3302424.3303968
+                                                                                        [26] Shuihai Hu, Yibo Zhu, Peng Cheng, Chuanxiong Guo, Kun Tan, Jitendra Padhye,
+                                                                                              and Kai Chen. 2016. Deadlocks in Datacenter Networks: Why Do They Form,
+                                                                                              and How to Avoid Them. In Proceedings of the 15th ACM Workshop on Hot Topics
+                                                                                              in Networks (HotNets '16). Association for Computing Machinery, New York, NY,
+                                                                                              USA, 92­98. https://doi.org/10.1145/3005745.3005760
+
+                                                                                        [27] Shuihai Hu, Yibo Zhu, Peng Cheng, Chuanxiong Guo, Kun Tan, Jitendra Padhye,
+                                                                                              and Kai Chen. 2019. Tagger: Practical PFC Deadlock Prevention in Data Center
+                                                                                              Networks. IEEE/ACM Transactions on Networking 27, 2 (2019), 889.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                      Shicheng Wang et al.
+
+[28] IEEE. 2011. IEEE 802.1 Qbb - Priority-based Flow Control. https://1.ieee802.org/     [43] Zaoxing Liu, Hun Namkung, Georgios Nikolaidis, Jeongkeun Lee, Changhoon
+      dcb/802-1qbb/. (2011).                                                                    Kim, Xin Jin, Vladimir Braverman, Minlan Yu, and Vyas Sekar. 2021. Jaqen:
+                                                                                                A High-Performance Switch-Native Approach for Detecting and Mitigating
+[29] InfiniBand Trade Association. 2020. InfiniBand Architecture Specification Release          Volumetric DDoS Attacks with Programmable Switches. In 30th USENIX Se-
+      1.4 Annex A17: RoCEv2. (2020).                                                            curity Symposium (USENIX Security 21). USENIX Association, 3829­3846. https:
+                                                                                                //www.usenix.org/conference/usenixsecurity21/presentation/liu- zaoxing
+[30] Yimin Jiang, Yibo Zhu, Chang Lan, Bairen Yi, Yong Cui, and Chuanxiong Guo.
+      2020. A Unified Architecture for Accelerating Distributed DNN Training in           [44] Youyou Lu, Jiwu Shu, Youmin Chen, and Tao Li. 2017. Octopus: an RDMA-enabled
+      Heterogeneous GPU/CPU Clusters. In 14th USENIX Symposium on Operating                     Distributed Persistent Memory File System. In 2017 USENIX Annual Technical
+      Systems Design and Implementation (OSDI 20). USENIX Association, 463­479.                 Conference (USENIX ATC 17). USENIX Association, Santa Clara, CA, 773­785.
+      https://www.usenix.org/conference/osdi20/presentation/jiang                               https://www.usenix.org/conference/atc17/technical- sessions/presentation/lu
+
+[31] Ziheng Jiang, Haibin Lin, Yinmin Zhong, Qi Huang, Yangrui Chen, Zhi Zhang,           [45] Radhika Mittal, Vinh The Lam, Nandita Dukkipati, Emily Blem, Hassan Wassel,
+      Yanghua Peng, Xiang Li, Cong Xie, Shibiao Nong, Yulu Jia, Sun He, Hongmin                 Monia Ghobadi, Amin Vahdat, Yaogong Wang, David Wetherall, and David Zats.
+      Chen, Zhihao Bai, Qi Hou, Shipeng Yan, Ding Zhou, Yiyao Sheng, Zhuo Jiang,                2015. TIMELY: RTT-based congestion control for the datacenter. ACM SIGCOMM
+      Haohan Xu, Haoran Wei, Zhang Zhang, Pengfei Nie, Leqi Zou, Sida Zhao, Liang               Computer Communication Review 45, 4 (2015), 537­550.
+      Xiang, Zherui Liu, Zhe Li, Xiaoying Jia, Jianxi Ye, Xin Jin, and Xin Liu. 2024.
+      MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs.          [46] Masoud Moshref, Minlan Yu, Ramesh Govindan, and Amin Vahdat. 2016. Trumpet:
+      In 21st USENIX Symposium on Networked Systems Design and Implementation                   Timely and Precise Triggers in Data Centers. In Proceedings of the 2016 ACM
+      (NSDI 24). USENIX Association, Santa Clara, CA, 745­760. https://www.usenix.o             SIGCOMM Conference (SIGCOMM '16). Association for Computing Machinery,
+      rg/conference/nsdi24/presentation/jiang- ziheng                                           New York, NY, USA, 129­143. https://doi.org/10.1145/2934872.2934879
+
+[32] Anuj Kalia, Michael Kaminsky, and David G. Andersen. 2016. FaSST: Fast, Scalable     [47] Srinivas Narayana, Anirudh Sivaraman, Vikram Nathan, Prateesh Goyal, Venkat
+      and Simple Distributed Transactions with Two-Sided (RDMA) Datagram RPCs.                  Arun, Mohammad Alizadeh, Vimalkumar Jeyakumar, and Changhoon Kim. 2017.
+      In 12th USENIX Symposium on Operating Systems Design and Implementation                   Language-Directed Hardware Design for Network Performance Monitoring. In
+      (OSDI 16). USENIX Association, Savannah, GA, 185­201. https://www.usenix.o                Proceedings of the Conference of the ACM Special Interest Group on Data Commu-
+      rg/conference/osdi16/technical- sessions/presentation/kalia                               nication (SIGCOMM '17). Association for Computing Machinery, New York, NY,
+                                                                                                USA, 85­98. https://doi.org/10.1145/3098822.3098829
+[33] Qiao Kang, Lei Xue, Adam Morrison, Yuxin Tang, Ang Chen, and Xiapu Luo. 2020.
+      Programmable In-Network Security for Context-aware BYOD Policies. In 29th           [48] NVIDIA. 2024. NVIDIA DOCA PCC Application Guide. https://docs.nvidia.com/
+      USENIX Security Symposium (USENIX Security 20). USENIX Association, 595­612.              doca/sdk/nvidia+doca+pcc+application+guide/index.html. (2024).
+      https://www.usenix.org/conference/usenixsecurity20/presentation/kang
+                                                                                          [49] NVIDIA. 2025. NVIDIA Spectrum-X Networking Platform. https://www.nvidia.c
+[34] Xinhao Kong, Jingrong Chen, Wei Bai, Yechen Xu, Mahmoud Elhaddad, Shachar                  om/en-us/networking/spectrumx/. (2025).
+      Raindel, Jitendra Padhye, Alvin R. Lebeck, and Danyang Zhuo. 2023. Under-
+      standing RDMA Microarchitecture Resources for Performance Isolation. In 20th        [50] Kun Qian, Wenxue Cheng, Tong Zhang, and Fengyuan Ren. 2019. Gentle flow con-
+      USENIX Symposium on Networked Systems Design and Implementation (NSDI 23).                trol: avoiding deadlock in lossless networks. In Proceedings of the ACM Special In-
+      USENIX Association, Boston, MA, 31­48. https://www.usenix.org/conference/                 terest Group on Data Communication (SIGCOMM '19). Association for Computing
+      nsdi23/presentation/kong                                                                  Machinery, New York, NY, USA, 75­89. https://doi.org/10.1145/3341302.3342065
+
+[35] Xinhao Kong, Yibo Zhu, Huaping Zhou, Zhuo Jiang, Jianxi Ye, Chuanxiong               [51] Kun Qian, Yongqing Xi, Jiamin Cao, Jiaqi Gao, Yichi Xu, Yu Guan, Binzhang
+      Guo, and Danyang Zhuo. 2022. Collie: Finding Performance Anomalies in                     Fu, Xuemei Shi, Fangbo Zhu, Rui Miao, Chao Wang, Peng Wang, Pengcheng
+      RDMA Subsystems. In 19th USENIX Symposium on Networked Systems De-                        Zhang, Xianlong Zeng, Eddie Ruan, Zhiping Yao, Ennan Zhai, and Dennis Cai.
+      sign and Implementation (NSDI 22). USENIX Association, Renton, WA, 287­305.               2024. Alibaba HPN: A Data Center Network for Large Language Model Training.
+      https://www.usenix.org/conference/nsdi22/presentation/kong                                In Proceedings of the ACM SIGCOMM 2024 Conference (ACM SIGCOMM '24).
+                                                                                                Association for Computing Machinery, New York, NY, USA, 691­706. https:
+[36] Gautam Kumar, Nandita Dukkipati, Keon Jang, Hassan M. G. Wassel, Xian                      //doi.org/10.1145/3651890.3672265
+      Wu, Behnam Montazeri, Yaogong Wang, Kevin Springborn, Christopher Alfeld,
+      Michael Ryan, David Wetherall, and Amin Vahdat. 2020. Swift: Delay is Simple        [52] Mubashir Adnan Qureshi, Yuchung Cheng, Qianwen Yin, Qiaobin Fu, Gautam
+      and Effective for Congestion Control in the Datacenter. In Proceedings of the             Kumar, Masoud Moshref, Junhua Yan, Van Jacobson, David Wetherall, and Abdul
+      Annual Conference of the ACM Special Interest Group on Data Communication on              Kabbani. 2022. PLB: congestion signals are simple and effective for network
+      the Applications, Technologies, Architectures, and Protocols for Computer Commu-          load balancing. In Proceedings of the ACM SIGCOMM 2022 Conference (SIGCOMM
+      nication (SIGCOMM '20). Association for Computing Machinery, New York, NY,                '22). Association for Computing Machinery, New York, NY, USA, 207­218. https:
+      USA, 514­528. https://doi.org/10.1145/3387514.3406591                                     //doi.org/10.1145/3544216.3544226
+
+[37] Yiran Lei, Liangcheng Yu, Vincent Liu, and Mingwei Xu. 2022. PrintQueue:             [53] Sudarsanan Rajasekaran, Manya Ghobadi, and Aditya Akella. 2024. CASSINI:
+      performance diagnosis via queue measurement in the data plane. In Proceedings of          Network-Aware Job Scheduling in Machine Learning Clusters. In 21st USENIX
+      the ACM SIGCOMM 2022 Conference (SIGCOMM '22). Association for Computing                  Symposium on Networked Systems Design and Implementation (NSDI 24). USENIX
+      Machinery, New York, NY, USA, 516­529. https://doi.org/10.1145/3544216.3544               Association, Santa Clara, CA, 1403­1420. https://www.usenix.org/conference/ns
+      257                                                                                       di24/presentation/rajasekaran
+
+[38] Wenxue Li, Chaoliang Zeng, Jinbin Hu, and Kai Chen. 2023. Towards Fine-              [54] Arjun Roy, Hongyi Zeng, Jasmeet Bagga, George Porter, and Alex C. Snoeren.
+      Grained and Practical Flow Control for Datacenter Networks. In 2023 IEEE 31st             2015. Inside the Social Network's (Datacenter) Network. In Proceedings of the 2015
+      International Conference on Network Protocols (ICNP). 1­11. https://doi.org/10.110        ACM Conference on Special Interest Group on Data Communication (SIGCOMM
+      9/ICNP59255.2023.10355582                                                                 '15). Association for Computing Machinery, New York, NY, USA, 123­137. https:
+                                                                                                //doi.org/10.1145/2785956.2787472
+[39] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. 2016. FlowRadar: A Better
+      NetFlow for Data Centers. In 13th USENIX Symposium on Networked Systems             [55] Alex Shpiner, Eitan Zahavi, Vladimir Zdornov, Tal Anker, and Matty Kadosh.
+      Design and Implementation (NSDI 16). USENIX Association, Santa Clara, CA,                 2016. Unlocking Credit Loop Deadlocks. In Proceedings of the 15th ACM Workshop
+      311­324. https://www.usenix.org/conference/nsdi16/technical-sessions/present              on Hot Topics in Networks (HotNets '16). Association for Computing Machinery,
+      ation/li- yuliang                                                                         New York, NY, USA, 85­91. https://doi.org/10.1145/3005745.3005768
+
+[40] Yuliang Li, Rui Miao, Hongqiang Harry Liu, Yan Zhuang, Fei Feng, Lingbo Tang,        [56] Arjun Singhvi, Aditya Akella, Dan Gibson, Thomas F. Wenisch, Monica Wong-
+      Zheng Cao, Ming Zhang, Frank Kelly, Mohammad Alizadeh, and Minlan Yu.                     Chan, Sean Clark, Milo M. K. Martin, Moray McLaren, Prashant Chandra, Rob
+      2019. HPCC: high precision congestion control. In Proceedings of the ACM                  Cauble, Hassan M. G. Wassel, Behnam Montazeri, Simon L. Sabato, Joel Scher-
+      Special Interest Group on Data Communication (SIGCOMM '19). Association for               pelz, and Amin Vahdat. 2020. 1RMA: Re-envisioning Remote Memory Ac-
+      Computing Machinery, New York, NY, USA, 44­58. https://doi.org/10.1145/3341               cess for Multi-tenant Datacenters. In Proceedings of the Annual Conference of
+      302.3342085                                                                               the ACM Special Interest Group on Data Communication on the Applications,
+                                                                                                Technologies, Architectures, and Protocols for Computer Communication (SIG-
+[41] Kefei Liu, Zhuo Jiang, Jiao Zhang, Shixian Guo, Xuan Zhang, Yangyang Bai,                  COMM '20). Association for Computing Machinery, New York, NY, USA, 708­721.
+      Yongbin Dong, Feng Luo, Zhang Zhang, Lei Wang, Xiang Shi, Haohan Xu, Yang                 https://doi.org/10.1145/3387514.3405897
+      Bai, Dongyang Song, Haoran Wei, Bo Li, Yongchen Pan, Tian Pan, and Tao
+      Huang. 2024. R-Pingmesh: A Service-Aware RoCE Network Monitoring and                [57] John Snyder, Alvin R Lebeck, and Danyang Zhuo. 2022. RDMA Congestion
+      Diagnostic System. In Proceedings of the ACM SIGCOMM 2024 Conference (ACM                 Control: It Is Only for the Compliant. IEEE Micro 43, 1 (2022), 76­82.
+      SIGCOMM '24). Association for Computing Machinery, New York, NY, USA,
+      554­567. https://doi.org/10.1145/3651890.3672264                                    [58] John Sonchack, Oliver Michel, Adam J. Aviv, Eric Keller, and Jonathan M. Smith.
+                                                                                                2018. Scaling Hardware Accelerated Network Monitoring to Concurrent and
+[42] Kefei Liu, Zhuo Jiang, Jiao Zhang, Haoran Wei, Xiaolong Zhong, Lizhuang Tan,               Dynamic Queries With *Flow. In 2018 USENIX Annual Technical Conference
+      Tian Pan, and Tao Huang. 2023. Hostping: Diagnosing Intra-host Network                    (USENIX ATC 18). USENIX Association, Boston, MA, 823­835. https://www.usen
+      Bottlenecks in RDMA Servers. In 20th USENIX Symposium on Networked Systems                ix.org/conference/atc18/presentation/sonchack
+      Design and Implementation (NSDI 23). USENIX Association, Boston, MA, 15­29.
+      https://www.usenix.org/conference/nsdi23/presentation/liu- kefei                    [59] Cha Hwan Song, Xin Zhe Khooi, Raj Joshi, Inho Choi, Jialin Li, and Mun Choon
+                                                                                                Chan. 2023. Network Load Balancing with In-network Reordering Support for
+                                                                                                RDMA. In Proceedings of the ACM SIGCOMM 2023 Conference (ACM SIGCOMM
+Hawkeye                                                                               SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+      '23). Association for Computing Machinery, New York, NY, USA, 816­831. https:         Carlsbad, CA, 527­543. https://www.usenix.org/conference/osdi18/presentatio
+      //doi.org/10.1145/3603269.3604849                                                     n/zhou
+[60] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2018. Distributed Network     [77] Guangmeng Zhou, Zhuotao Liu, Chuanpu Fu, Qi Li, and Ke Xu. 2023. An Efficient
+      Monitoring and Debugging with SwitchPointer. In 15th USENIX Symposium on              Design of Intelligent Network Data Plane. In 32nd USENIX Security Symposium
+      Networked Systems Design and Implementation (NSDI 18). USENIX Association,            (USENIX Security 23). USENIX Association, Anaheim, CA, 6203­6220. https://
+      Renton, WA, 453­456. https://www.usenix.org/conference/nsdi18/presentation/           www.usenix.org/conference/usenixsecurity23/presentation/zhou- guangmeng
+      tammana                                                                         [78] Wenchao Zhou, Suyog Mapara, Yiqing Ren, Yang Li, Andreas Haeberlen, Zachary
+[61] Haopei Wang, Guangliang Yang, Phakpoom Chinprutthiwong, Lei Xu, Yangyong               Ives, Boon Thau Loo, and Micah Sherr. 2012. Distributed time-aware provenance.
+      Zhang, and Guofei Gu. 2018. Towards Fine-grained Network Security Forensics           VLDB Endowment 6, 2 (2012), 49­60.
+      and Diagnosis in the SDN Era. In Proceedings of the 2018 ACM SIGSAC Conference  [79] Yu Zhou, Chen Sun, Hongqiang Harry Liu, Rui Miao, Shi Bai, Bo Li, Zhi-
+      on Computer and Communications Security (CCS '18). Association for Computing          long Zheng, Lingjun Zhu, Zhen Shen, Yongqing Xi, Pengcheng Zhang, Den-
+      Machinery, New York, NY, USA, 3­16. https://doi.org/10.1145/3243734.3243749           nis Cai, Ming Zhang, and Mingwei Xu. 2020. Flow Event Telemetry on Pro-
+[62] Shicheng Wang. 2025. Hawkeye. https://github.com/wangshicheng1225/Hawk                 grammable Data Plane. In Proceedings of the Annual Conference of the ACM
+      eye. (2025).                                                                          Special Interest Group on Data Communication on the Applications, Technolo-
+[63] Shicheng Wang, Menghao Zhang, Yuying Du, Ziteng Chen, Zhiliang Wang,                   gies, Architectures, and Protocols for Computer Communication (SIGCOMM '20).
+      Mingwei Xu, Renjie Xie, and Jiahai Yang. 2024. LoRDMA: A New Low-Rate DoS             Association for Computing Machinery, New York, NY, USA, 76­89. https:
+      Attack in RDMA Networks. In NDSS 2024. San Diego, CA.                                 //doi.org/10.1145/3387514.3406214
+[64] Shicheng Wang, Menghao Zhang, Guanyu Li, Chang Liu, Ying Liu, Xuya Jia,          [80] Yibo Zhu, Haggai Eran, Daniel Firestone, Chuanxiong Guo, Marina Lipshteyn,
+      and Mingwei Xu. 2021. Making Multi-String Pattern Matching Scalable and               Yehonatan Liron, Jitendra Padhye, Shachar Raindel, Mohamad Haj Yahia, and
+      Cost-Efficient with Programmable Switching ASICs. In IEEE INFOCOM 2021 -              Ming Zhang. 2015. Congestion Control for Large-Scale RDMA Deployments.
+      IEEE Conference on Computer Communications. IEEE Press, Virtual Event, 1­10.          In Proceedings of the 2015 ACM Conference on Special Interest Group on Data
+      https://doi.org/10.1109/INFOCOM42981.2021.9488796                                     Communication (SIGCOMM '15). Association for Computing Machinery, New
+[65] Weiyang Wang, Moein Khazraee, Zhizhen Zhong, Manya Ghobadi, Zhihao Jia,                York, NY, USA, 523­536. https://doi.org/10.1145/2785956.2787484
+      Dheevatsa Mudigere, Ying Zhang, and Anthony Kewitsch. 2023. TopoOpt:
+      Co-optimizing Network Topology and Parallelization Strategy for Distributed
+      Training Jobs. In 20th USENIX Symposium on Networked Systems Design and
+      Implementation (NSDI 23). USENIX Association, Boston, MA, 739­767. https:
+      //www.usenix.org/conference/nsdi23/presentation/wang- weiyang
+[66] Weitao Wang, Xinyu Crystal Wu, Praveen Tammana, Ang Chen, and T. S. Eu-
+      gene Ng. 2022. Closed-loop Network Performance Monitoring and Diagnosis
+      with SpiderMon. In 19th USENIX Symposium on Networked Systems Design and
+      Implementation (NSDI 22). USENIX Association, Renton, WA, 267­285. https:
+      //www.usenix.org/conference/nsdi22/presentation/wang- weitao- spidermon
+[67] Xinyu Crystal Wu and T. S. Eugene Ng. 2022. Detecting and Resolving PFC
+      Deadlocks with ITSY Entirely in the Data Plane. In IEEE INFOCOM 2022 - IEEE
+      Conference on Computer Communications. IEEE Press, Virtual Event, 1928­1937.
+      https://doi.org/10.1109/INFOCOM48880.2022.9796798
+[68] Yang Wu, Ang Chen, and Linh Thi Xuan Phan. 2019. Zeno: Diagnosing Per-
+      formance Problems with Temporal Provenance. In 16th USENIX Symposium on
+      Networked Systems Design and Implementation (NSDI 19). USENIX Association,
+      Boston, MA, 395­420. https://www.usenix.org/conference/nsdi19/presentation/
+      wu
+[69] Jilong Xue, Youshan Miao, Cheng Chen, Ming Wu, Lintao Zhang, and Lidong
+      Zhou. 2019. Fast Distributed Deep Learning over RDMA. In Proceedings of the
+      Fourteenth EuroSys Conference 2019 (EuroSys '19). Association for Computing
+      Machinery, New York, NY, USA, Article 44, 14 pages. https://doi.org/10.1145/33
+      02424.3303975
+[70] Jian Yang, Joseph Izraelevitz, and Steven Swanson. 2019. Orion: A Distributed
+      File System for Non-Volatile Main Memory and RDMA-Capable Networks. In
+      17th USENIX Conference on File and Storage Technologies (FAST 19). USENIX
+      Association, Boston, MA, 221­234. https://www.usenix.org/conference/fast19/p
+      resentation/yang
+[71] Zhuolong Yu, Bowen Su, Wei Bai, Shachar Raindel, Vladimir Braverman, and Xin
+      Jin. 2023. Understanding the Micro-Behaviors of Hardware Offloaded Network
+      Stacks with Lumina. In Proceedings of the ACM SIGCOMM 2023 Conference (ACM
+      SIGCOMM '23). Association for Computing Machinery, New York, NY, USA,
+      1074­1087. https://doi.org/10.1145/3603269.3604837
+[72] David Zats, Tathagata Das, Prashanth Mohan, Dhruba Borthakur, and Randy
+      Katz. 2012. DeTail: reducing the flow completion time tail in datacenter net-
+      works. In Proceedings of the ACM SIGCOMM 2012 Conference on Applications,
+      Technologies, Architectures, and Protocols for Computer Communication (SIG-
+      COMM '12). Association for Computing Machinery, New York, NY, USA, 139­150.
+      https://doi.org/10.1145/2342356.2342390
+[73] Menghao Zhang, Guanyu Li, Cheng Guo, Renyu Yang, Shicheng Wang, Han Bao,
+      Xiao Li, Mingwei Xu, Tianyu Wo, and Chunming Hu. 2025. SuperFE: A Scalable
+      and Flexible Feature Extractor for ML-based Traffic Analysis Applications. In
+      EuroSys 2025. ACM, Rotterdam.
+[74] Menghao Zhang, Guanyu Li, Shicheng Wang, Chang Liu, Ang Chen, Hongxin
+      Hu, Guofei Gu, Qianqian Li, Mingwei Xu, and Jianping Wu. 2020. Poseidon:
+      Mitigating volumetric ddos attacks with programmable switches. In the 27th
+      Network and Distributed System Security Symposium (NDSS 2020).
+[75] Yiran Zhang, Yifan Liu, Qingkai Meng, and Fengyuan Ren. 2021. Congestion
+      detection in lossless networks. In Proceedings of the 2021 ACM SIGCOMM 2021
+      Conference (SIGCOMM '21). Association for Computing Machinery, New York,
+      NY, USA, 370­383. https://doi.org/10.1145/3452296.3472899
+[76] Fang Zhou, Yifan Gan, Sixiang Ma, and Yang Wang. 2018. wPerf: Generic Off-
+      CPU Analysis to Identify Bottleneck Waiting Events. In 13th USENIX Symposium
+      on Operating Systems Design and Implementation (OSDI 18). USENIX Association,
+

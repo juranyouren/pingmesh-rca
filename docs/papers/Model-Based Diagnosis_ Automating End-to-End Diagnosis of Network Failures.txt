@@ -1,0 +1,1214 @@
+                                                                                                                                           1
+
+                                        Model-Based Diagnosis: Automating End-to-End Diagnosis of
+
+                                        Network Failures
+
+                                        Changrong Wu, Yiyao Yu, Myungjin Lee, Jayanth Srinivasa, Ennan Zhai, George Varghese, Yuval Tamir
+
+                                        July 2025
+
+arXiv:2506.23083v2 [cs.NI] 20 Jul 2025     Abstract--Fast diagnosis and repair of enterprise network          tor, improving failure response times from hours to seconds
+                                        failures is critically important since disruptions cause major        (§IX-C2).
+                                        business impacts. Prior works focused on diagnosis primitives
+                                        or procedures limited to a subset of the problem, such as only           Recent work in network verification [13], [28], [39], [27],
+                                        data plane or only control plane faults. This paper proposes a        [43], [57], [53] has exploited the fact that the correct network
+                                        new paradigm, model-based network diagnosis, that provides a          behavior is defined by network protocols, the network topol-
+                                        systematic way to derive automated procedures for identifying the     ogy, and switch configurations. This allows the construction of
+                                        root cause of network failures, based on reports of end-to-end        a simple end-to-end model of packet forwarding and routing,
+                                        user-level symptoms. The diagnosis procedures are systematically      and the use of this model to identify configuration faults.
+                                        derived from a model of packet forwarding and routing, covering
+                                        hardware, firmware, and software faults in both the data plane           In this paper, we apply this insight of the essential simplicity
+                                        and distributed control plane. These automated procedures re-         of networks for a different purpose. We propose model-based
+                                        place and dramatically accelerate diagnosis by an experienced         network diagnosis, in which network failures caused by switch
+                                        human operator. Model-based diagnosis is inspired by, leverages,      or link faults can be diagnosed based on deviations from a for-
+                                        and is complementary to recent work on network verification. We       mal end-to-end model of packet forwarding and routing (§IV).
+                                        have built NetDx, a proof-of-concept implementation of model-         It should be noted that the term "model-based diagnosis" has
+                                        based network diagnosis. We deployed NetDx on a new emulator          been used in other contexts [25], [23], [24] with a different
+                                        of networks consisting of P4 switches with distributed routing        meaning.
+                                        software. We validated the robustness and coverage of NetDx
+                                        with an automated fault injection campaign, in which 100% of             Model-based network diagnosis is different from network
+                                        faults were diagnosed correctly. Furthermore, on a data set of        verification since the goal is to identify faults in an operational
+                                        33 faults from a large cloud provider that are within the domain      network, not errors in configurations. Unlike model-based ver-
+                                        targeted by NetDx, 30 are efficiently diagnosed in seconds instead    ification, that can be done proactively, switch or link failures
+                                        of hours.                                                             happen in real-time and the resulting network failures must be
+                                                                                                              responded to quickly in the field, using cues from the oper-
+                                                                  I. INTRODUCTION                             ational network. A global cloud provider with which we are
+                                                                                                              working reports that, due to configuration verification tools,
+                                           Failures in large operational enterprise networks and clouds       configuration errors have been greatly reduced and 66% of
+                                        are often subtle and can take hours to diagnose. This affects         their current network failures are now due to switch hardware
+                                        their ability to provide four nines availability, which allows        or software faults.
+                                        only 52 minutes of down time in a year [9]. In practice, the
+                                        diagnosis process often requires an expert human operator                Switch or link failures may be caused by hardware faults.
+                                        manually deploying multiple tools, such as traceroute and             Switch failures may also be caused by software or firmware
+                                        Wireshark; a process that is ad hoc, error prone, and can take        faults. We target diagnosis of permanent or high-frequency in-
+                                        multiple hours. In many cases, the complexity of the diagnosis        termittent faults that ultimately result in excessive data packet
+                                        task is due to a semantic (data plane vs. control plane) and          drops or corruption. It should be noted that in the set of real
+                                        physical distance between the observed symptom and the root           world failures that we collected (§IX-A), the overwhelming
+                                        cause of the failure.                                                 majority of hardware or software faults were permanent and
+                                                                                                              resulted in data packet drops or corruption.
+                                           Past relevant research focused on diagnosis primitives either
+                                        for data plane faults (often in the context of SDN) [36], [60],          We use model-based diagnosis to design and implement a
+                                        [35], [37], [49], [50] or for control plane faults [40], [22], [16],  system, called NetDx, that takes as input an end-to-end failure
+                                        [21], [34], without any way to automatically identify the root        report and automatically identifies the root cause failed switch
+                                        cause of the failure, taking into account interactions between        or link. A human user or an application generates the failure
+                                        the data and control planes. In contrast, this paper introduces       report that typically describes a loss of connection between
+                                        a new top-down model-based paradigm that is completely                two hosts or groups of hosts for all packets or some subset of
+                                        different from past work (§XI). Crucially, this paradigm fa-          packets. The goal of the diagnosis is to help network operators
+                                        cilitates handling of complex data/control plane interactions,        quickly resolve network disruptions. Thus, the diagnosis pro-
+                                        automating the procedures of an experienced network opera-            cess only needs to identify the faulty switch or link rather than
+                                                                                                              determine exactly which internal switch component has failed.
+                                           Changrong Wu was with UCLA and is now with Microsoft.
+                                           Yiyao Yu, George Varghese, and Yuval Tamir are with UCLA.             Based on a formal model of the functionality of network
+                                           Myungjin Lee and Jayanth Srinivasa are with Cisco Systems.         switches, we derive a fault model that describes how switch
+                                           Ennan Zhai is with Alibaba Cloud.                                  functionality can be disrupted. These models define the correct
+                                                                                                              and faulty behaviors of the switch at its interfaces to the rest
+                                                                                                                                       2
+
+                                                                                 TABLE I
+UNLIKE PRIOR WORK, MODEL-BASED DIAGNOSIS ALLOWS AUTOMATED DIAGNOSIS OF COMPLEX DATA PLANE/CONTROL PLANE FAULTS.
+
+            Category             Canonical Example(s)    Automated      Overhead  Data Plane/Control Plane   Diagnosis    Performance
+                                                         Diagnosis?               Interactions               Granularity  Faults?
+Monitoring                  NetBouncer[51], Trumpet[45]  Yes               low                              Switch/Link
+New Switch Primitives       FlowRadar[42], NDB[35]                        High                 No           Switch/Link       Yes
+HeaderMods + Primitives     INT[3], PathDump[49]         No               High                 No           Switch/Link       Yes
+Data Plane Log Analysis     Everflow[60]                                  High                 No           Switch/Link       Yes
+Control Plane Log Analysis  BGP-Inspect[16], BGPlay[22]  No               High           No or limited       Switch/ISP       Yes
+                            dShark[58], Marple[46],                                            No                             No
+Higher Level Abstractions   Everflow[60]                 No               High                                 Switch
+                            NetDx [this paper]                                                 No                             Yes
+Model-based Diagnosis                                    No                Low                              Switch/Link
+                                                                                               Yes                            No
+                                                         No but raises
+                                                         abstraction
+                                                         Yes
+
+of the network and are independent of implementation details.      Thus, the data plane is programmable.
+Using these models and the specification of network protocols,        We collected from a large cloud provider 33 real-world
+we systematically derive automated diagnosis procedures by
+tracing the steps of packet forwarding and route propagation.      network failure scenarios (§IX-A) that are within the domain
+At each step, the actions of switches in the operational network   targeted by NetDx (§III) that occurred over several years. Their
+are compared to the correct actions derived from the model         diagnosis was originally done manually and, in most cases,
+and the comparison results guide the diagnosis process. We         took multiple hours (median of 4.5 hours). We used these
+leverage a configuration analysis tool [28] to provide a repre-    scenarios as a sanity check on our fault model and diagnosis
+sentation of the network model that is directly comparable to      procedures (§V) as well as to drive some of our experiments
+what is observable in the operational network.                     with NetDx. The evaluation of NetDx included an automated
+                                                                   random fault injection campaign in which NetDx was able to
+   A key challenge in the implementation of NetDx is efficient     correctly diagnose all injected faults.
+collection of information from the operational network in order    Contributions: 1) Introduction of the novel, implementation-
+to compare it to the model. Many proposed network diagnosis        agnostic paradigm of model-based network diagnosis that en-
+mechanisms rely on packet mirroring and logging to servers         ables automated, end-to-end diagnosis of operational enter-
+(e.g., [60], [58]), potentially requiring significant overhead in  prise networks, taking into account both data plane and con-
+terms of network bandwidth and host resources. Some mech-          trol plane faults. 2) Derivation of a functional fault model
+anisms piggyback diagnostic information on packets, poten-         of network switches that is completely independent of im-
+tially leading to packet fragmentation and resource usage at the   plementation details and can be used by others to evaluate
+hosts for processing the piggybacked information. In contrast,     network diagnosis mechanisms. 3) Design and implementation
+to minimize overhead, NetDx's mechanisms are based on data         of a diagnosis system, NetDx, based on data collection at
+collection primitives implemented in the switches that require     the switches, that is systematically derived from the network
+minimal processing and storage resources on the switches and       model, leverages the representation of the model by a configu-
+essentially no overhead in terms of network bandwidth and          ration analysis tool (Batfish [28]), does not intrude on normal
+host resources (§V-A).                                             network operations, and only requires a small set of primitives
+                                                                   and few resources. 4) Evaluation of NetDx using an automated
+   Table I compares NetDx to prior work. While the detailed        fault injection campaign and a small user study comparing to
+explanation of the Table is left to §XI, the main takeaways are    manual diagnosis.
+as follows. The current model is limited to IP/BGP networks
+and only deals with faults that manifest as packet drops or                          II. PRELIMINARY DISCUSSION
+packet corruption. NetDx does not yet handle performance
+faults or some key features (e.g., overlays networks). How-           To dispel potential confusion, this section clarifies terminol-
+ever, the current NetDx implementation still accomplishes a        ogy and key concepts central to model-based network diagno-
+task that has not been demonstrated previously: automatically      sis (henceforth MBND) and NetDx.
+identifying the root cause of complex failure scenarios that in-   MBND versus NetDx: NetDx (§V, §VI) is a proof-of-concept
+volve the interaction of the data and control planes, improving    implementation of MBND (§III, §IV). However, other imple-
+failure response times from hours to seconds (§IX-C2). We          mentations of MBND are possible. Starting from a report of
+believe that our new model-based paradigm is extensible in a       end-to-end (host-to-host) user-level symptoms, MBND guides
+straightforward manner to, for example, other routing proto-       the derivation of what information needs to be collected and
+cols and overlay networks. In contrast, for many real failure      the order in which the information should be collected to
+scenarios, the primitives introduced by prior work still need to   identify the root cause of the particular network failure. MBND
+be combined manually without a model to guide automation.          does not determine how to collect this information. NetDx
+                                                                   shows one possible efficient implementation of how to collect
+   To evaluate NetDx, we built a network emulator that exe-        the information and use it, following procedures derived using
+cutes real routing software (FRR), injects realistic faults, and   MBND, to reach diagnosis.
+allows us to implement and test a NetDx implementation that        The meaning of root-cause diagnosis: In this paper, root-
+is directly-transferable to a physical network. To enable mod-     cause diagnosis means identifying the switch or link that is
+ification of the data plane, the data plane of each emulated       actually faulty. This is different from the first location where
+switch is an instance of the P4 [17] behavioral simulator [7].
+                                                                  3
+
+a symptom of the fault is detected. For example, packets may      with the handling of every packet. The contents of the data
+be unexpectedly dropped by a fault-free switch, SWA, since        plane tables are derived by the switch from other structures
+another fault-free switch, SWB, forwards the packets in the       on the switch, referred to as control plane table. Examples of
+wrong direction due to an incorrect route advertisement sent by   data plane tables are structures that permit or deny reception of
+a faulty switch, SWC. Root-cause diagnosis identifies the prob-   packets (e.g., ACL tables) and guide the forwarding of packets
+lem to be SWC, not SWA or SWB. Once the actual faulty switch      (e.g., FIBs). Examples of control plane tables are structures
+is identified, it can be quickly replaced or configured out for   that contains routing information (e.g., RIBs) as well as the
+separate offline detailed diagnosis by the switch manufacturer.   configuration of packet permit/deny criteria.
+Diagnosis versus detection: Network failure detection mech-
+anisms simply determine whether there is a fault somewhere           Table II presents the high-level functional model of switches
+in the network. On the other hand, the goal of a diagnosis        as well as the switch fault model derived from the functional
+mechanism (MBND and its implementation, such as NetDx) is         model. The data plane portion is similar to functional mod-
+to identify the faulty switch or link.                            els used in data plane verification, like Anteater [44] and
+Interactions between the data plane and control plane             HSA [39], while the combination of data and control plane
+must be accounted for: As stated earlier, the complexity of       models is most similar to Minesweeper [14] and ERA [27].
+the diagnosis task is due to a semantic and physical distance     However, the work in network verification does not consider
+between the observed symptom and the root cause of the fail-      negations of the functional model to create a fault model.
+ure. Consider the example described above. In such a scenario,
+existing techniques, such as ATPG [59], can identify the switch      The model consists of seven functionality categories. For
+where packets are dropped (SWA), but not the actual faulty        each category there are four rows, where the top two rows
+switch (SWC) that generates the incorrect route advertisement.    contain informal and formal definitions of the functionality of
+A high-overhead mechanism that examines every FIB in the          a fault-free switch. The bottom two rows for each category
+network may be able to identify SWB, but not SWC.                 contain the informal and formal definitions of the functionality
+The meaning of end-to-end diagnosis: A network failure is         of a faulty switch. The definition of the functionality of a faulty
+manifested as a problem in the communication among hosts.         switch is derived by negating the functionality of a fault-free
+End-to-end diagnosis is triggered by such a failure report and    switch. The list of faulty functionalities forms the switch fault
+identifies the root-cause of the failure. Based on MBND, such     model. Table III is a key to the notation.
+diagnosis can be done automatically.
+The meaning of automated diagnosis: MBND enables and                 As an example, the top category in Table II defines the
+guides systematic development of diagnosis procedures by          packet forwarding function of a switch. Specifically, a fault-
+human experts. These procedures are developed once and can        free switch forwards a packet to one of a subset of the switch's
+then be used numerous times in multiple locations, without ex-    interfaces. This forwarding is performed only if the packet
+perts, to quickly and autonomously diagnose network failures.     header characteristics meet configured criteria (  ) as
+                                                                  long as it does not encounter a full packet buffer due to conges-
+            III. A MODEL OF NETWORK SWITCHES                      tion (the buffer state is ). The packet is correctly
+                                                                  dropped if the header characteristics are in   , i.e.,
+   This section presents a functional model of network            they do not meet the configured forwarding criteria   .
+switches which is then used to derive a switch fault model.       Furthermore, the model covers the possibility that, in a fault-
+These are the first and second steps in model-based diagnosis.    free switch, a packet may be correctly dropped if it encounters
+The next section explains the third and fourth steps in which     a full packet buffer (). A faulty switch may drop a
+these two models are used to derive diagnosis primitives and      packet that meets the header characteristics criteria (  )
+automated diagnosis procedures.                                   despite the fact that the buffers are not full (). A
+                                                                  faulty switch may also forward a packet to an incorrect egress
+   Since the required resolution of diagnosis is a switch or      interface or forward a packet that should be dropped.
+link, diagnosis is only concerned with the functionality of
+these components at their interfaces to the rest of the network.     The last category in Table II deals with the interactions of
+While network switches are complex, their behavior at their       the switch with routing peers as well as with accesses from
+interfaces is defined by their configurations and standard net-   a remote host to a management port of the switch. A faulty
+work protocols. This behavior forms the functional model of       switch may, for example, fail to establish a TCP connection
+the switches that is independent of low-level implementation      with a BGP peer or fail to accept or respond to management
+details. A fault in a switch is manifested as a deviation from    messages from a remote host.
+the functionality defined by the switch model.
+                                                                     The high-level model presented in Table II must be
+   Model-based diagnosis can potentially deal with a wide va-     instantiated for a particular network type. For NetDx, the
+riety of faults, including those that cause performance anoma-    model is instantiated for IPv4/BGP networks (Appendix D).
+lies. However, since this work only deals with network failures   For example, the forwarding characteristics and the header
+that manifest as end-to-end (host-to-host) packet drops, the      transformation function are, respectively:
+relevant switch model only needs to capture forwarding and
+routing. Thus, our model assumes that every switch includes          forward = FIB(Header.IPv4.DstAddr) =  
+structures, referred to as data plane tables, that are involved           Header.IPv4.TTL  0  AccessControl(Header)  Deny 
+                                                                          CheckSum(Header.IPv4) = 0
+
+                                                                     Fhdrt(Pkt(C)) = Pkt(C), with SrcMacAddr - EgressPortMac 
+                                                                          DstMacAddr - NextHopMac       - 1 
+                                                                          Checksum  ChecksumCompute(NewHeader.IPv4)
+                                                                                                                                                                                                                                                             4
+
+                                                                                                                                                                                           TABLE II
+                                                                                                                                                         A FUNCTIONAL MODEL OF FAULT-FREE AND FAULTY SWITCHES.
+
+                                                                                                                 FAULTY FUNCTIONALITY (THE FAULT MODEL) IS SYSTEMATICALLY DERIVED BY NEGATING THE FAULT-FREE FUNCTIONALITY.
+
+Packet Forwarding                                                                                                The switch forwards packets with characteristics    to a port in  when the state of S meets condition 
+                                                                                                                 The switch drops packets with characteristics    when the state of S meets condition 
+
+                                                                                                                 The switch drops packets with characteristics    regardless of the state
+                                                                                                                     (    ,  ) = ,   ,   
+
+                                                                                                                     (    ,  ) = Null                                        (   , ) = Null
+
+                                                                                                                 Switch S drops packets with characteristics    when the state of the switch meets condition  or                                     FAULTY
+                                                                                                                 Switch S forwards packets with characteristics    to a port ,    or
+
+                                                                                                                 Switch S forwards packets with characteristics    to a port in the switch's port set 
+
+                                                                                                                     (    ,  ) =  
+
+                                                                                                                     (   , ) = ,                                             (   , ) = ,   
+
+                                                                                                                 The switch transforms the header of packet Pkt(C) with characteristics  by function Fhdrt
+
+Packet                                                                                                           The switch should not change the payload of the packet
+  Transformation
+                                                                                                                    =  (  ( ) )
+
+                                                                                                                   .  =  ( ). 
+
+                                                                                                                 The switch transforms the header of packet Pkt(C) with characteristics  by function ,                                               FAULTY
+                                                                                                                 The switch changes the payload of packet Pkt(C)
+                                                                                                                    =  (  ( ) )   (  ( ) )
+                                                                                                                   .    ( ). 
+
+Data Plane                                                                                                       The switch generates data plane tables according to their corresponding control plane tables
+  Table
+     Generation                                                                                                        ,       ..      
+                                                                                                                      ,        ..     
+
+                                                                                                                 One of switch S's data plane tables is inconsistent with the corresponding control plane table                                      FAULTY
+                                                                                                                       ,      ,     
+Interaction Route Ad- Route Ad- Route                                           Generation Reception Generation       ,       ,    
+
+                                                                                                                 The switch computes Route Table using specified routing algorithms based on configuration and received routing information
+                                                                                                                   =   (   ,    )
+
+                                     with External vertisement vertisement Table                                 The switch's Route Table is inconsistent with the result computed from the configuration and received routing information           FLTY
+                                                                                                                      (   ,    )
+
+                                                                                                                 The switch computes received routing information based on configuration and inbound route advertisements
+                                                                                                                     =   (   ,  )
+
+                                                                                                                 Switch's received routing information is inconsistent with the result computed from configuration and inbound route advertisements  FLTY
+                                                                                                                        (   ,  )
+
+                                                                                                                 The switch generates outbound route advertisements based on configuration and Route Table
+                                                                                                                    =   (   ,  )
+
+                                                                                                                 The switch's outbound route advertisements are inconsistent with the result computed from configuration and Route Table             FLTY
+                                                                                                                       (   ,  )
+
+                                                                                                                 The switch responds to messages from external entities following protocols and configurations
+                                                                                                                   ( ,    ) =   
+
+                                                                                Entities                         The switch responds to messages from external entities with Incorrect messages or it has no response to messages                    FAULTY
+                                                                                                                   ( ,    )     
+
+                                                                                                                   ( ,    ) =  
+
+                                                                                                                                TABLE III                                corruption of data packets by the network. Such reports are ex-
+                                                                                                                 THE NOTATION USED IN TABLE II.                          pected to contain information regarding the identity of source
+                                                                                                                                                                         and destination hosts and possibly other packet characteristics,
+        Symbol                                                                                                                      Semantics                            such as destination port number.
+
+                                                                                                                 A state of the switch's packet buffer                      The diagnosis process must ultimately identify the switch
+                                                                                                                 The set of all the switch's interfaces                  or link whose behavior diverges from the expected correct
+                                                                                                                 A set of switch interfaces,                             behavior (§III) and is thus the root cause of the network
+                                                                                                                 A set of packet characteristics                         failure. The following two requirements must be met in order
+                                                                                                                 Packet header transformation function                   to enable the detection of such divergences:
+                                                                                                                 Forwarding & filtering data plane tables
+Fhdrt                                                                                                            Routing & filtering control plane tables                R1) Primitives (mechanisms) to collect from the operational
+DataPlaneTable                                                                                                                                                           network information that distinguishes faulty functionality
+ControlPlaneTable                                                                                                                                                        from fault-free functionality, as defined in Table II.
+
+               IV. PRIMITIVES AND PROCEDURES                                                                                                                             R2) A way to derive from the network model information that
+                                                                                                                                                                         is comparable to the information collected from the network
+   This section describes, at a high level, the derivation of di-                                                                                                        and can thus be used to identify which parts of the collected
+agnosis primitives and procedures for model-based diagnosis.                                                                                                             information is incorrect.
+The next section presents the instantiation of these primitives
+and procedures in NetDx, our proof-of-concept implementation                                                                                                                R1 can be met by inspecting Table II. The first category in
+of a model-based network diagnosis tool.                                                                                                                                 the table requires primitives for collection of information that
+                                                                                                                                                                         indicates whether packets are dropped by a switch and what
+   Diagnosis is triggered by an end-to-end (host-to-host) fail-                                                                                                          are the header characteristics of those packets. The second cat-
+ure report. A report is generated as a result of unexpected
+application behavior due to excessive rates of dropping or
+                                                                                                                  5
+
+egory requires primitives to retrieve packet headers at ingress    Faulty Packet      DP Packet        Traced
+and egress switch interfaces. Categories 3-6 require primitives     Forwarding            Trace        Packet
+to retrieve data from the switch's data and control plane tables.                                     Counters
+Category 7 requires primitives to capture packets exchanged        Faulty Packet     Packet Drops
+between the switch and other entities.                             Transformation        Record        Packet
+                                                                                           FIB      Header Log
+   The description of the required capabilities of the primi-         Faulty DP            RIB
+tives is a starting point for the design and implementation of           Table             ACL         Packet
+primitives for a diagnosis system. Implementation complexity,                                        Checksum
+resource requirements, and impact on the normal operation of         Generation      RecvRouting
+the network are key considerations for the choice of primitives.    Faulty Route           Info        Digest
+The next section describes the primitives used by NetDx.                                                Drop
+                                                                         Table        CP Packet       Counters
+   Requirement R2 can be met using configuration analysis            Generation           Trace       FIB/RIB/
+tools, such as Batfish [28]. Based on switch configurations,        Faulty Route                     RIBin/ACL
+network protocols, and network topology, such tools can an-        Advertisement                      Retrieval
+swer queries regarding the correct network state as well as the       Reception                    Control Plane
+possible ways in which packets are forwarded and routes are         Faulty Route                       Packet
+propagated.                                                        Advertisement                     Capturing
+                                                                     Generation
+   The failure reports that trigger diagnosis contain informa-
+tion (packet characteristics) that is used to identify the loca-         Faulty
+tion of data packet drops. However, the "path" from the root       Interaction with
+cause fault to this location may involve a multi-step chain of
+symptoms, where each symptom is a divergence from fault-               External
+free behavior. These divergences are not necessarily packet             Agents
+drops. For example, a symptom may be a switch that sends
+an incorrect route advertisement despite having a correct RIB      Fig. 1. Derivation of NetDx's diagnosis primitives. DP: data plane. CP: control
+and correct configuration. To locate the root cause fault, the     plane.
+diagnosis procedures must identify the packet drops and then
+trace back through the chain of symptoms.                                      V. NetDx's PRIMITIVES & PROCEDURES
+
+   Packets that, according to the network model, should not be        NetDx is a proof-of-concept implementation of model-based
+dropped, may be dropped by a fault-free switch, . This may         diagnosis instantiated for IPv4/BGP networks. This section
+occur if these packets are actually not supposed to reach , or     describes the instantiation of efficient diagnosis primitives and
+due to the failure of the rest of the network to provide to        procedures for this network type. Implementation details are
+routes required to handle the packets.                             provided in §VI.
+
+   To cover the scenarios above, where a fault-free switch         A. NetDx's Diagnosis Primitives
+proactively drops packets, the diagnosis procedures must be
+able to obtain from a switch information indicating why pack-         Since packet forwarding and the processing of routing infor-
+ets are dropped. Thus, the system must include primitives for      mation is done by the switches, the data that indicates what is
+retrieving this information. Since the switch may, in fact, be     happening in the network is either stored on the switches (e.g.,
+faulty, this information cannot be trusted. Thus, every diagno-    tables) or passes through the switches (e.g., data packets and
+sis step that uses information from one switch to transfer atten-  route advertisements). Thus, overhead is minimized by basing
+tion to another, must collect information from both switches       diagnosis on data normally maintained by switches (FIB, RIB,
+and validate both using the network model.                         ACL) as well as data collected by specialized mechanisms
+                                                                   regarding packets that pass through the switch. As described
+   If only a single switch in the network may be faulty at any     below, this is the basis for the primitives used by NetDx.
+time, potential diagnosis ambiguities can be resolved. Since
+the type of faults we consider (hardware faults and firmware          Figure 1 shows the derivation of the diagnosis primitives.
+or software Heisenbugs [31]) are rare, simultaneous multiple       The left column entries are the seven fault categories in Ta-
+faults are highly unlikely. Furthermore, §IX shows that the        ble II. The middle column entries are the sources of infor-
+diagnosis procedures are robust and are highly likely to cor-      mation needed to diagnose particular faults. The right column
+rectly handle two simultaneous faults.                             entries are the NetDx primitives used to collect the different
+                                                                   categories of diagnosis information.
+   In summary, the diagnosis procedure is a recursive process
+that begins by locating a switch or link where packets with           The first step of the diagnosis process is to identify the
+the characteristics identified in the failure report are dropped.  switch or link where packets are dropped. This can be done
+Next, the procedure determines whether the drops were the          by comparing counts of outgoing and incoming packets. Since
+correct local action. If not, the switch is identified as faulty.  a low rate of packet loss is generally acceptable, simply iden-
+Otherwise, the focus shifts to the switch that forwarded the       tifying some packet loss is not sufficient. The failure report
+packets to the current switch, or to a switch that provided an     typically specifies some specific flow characteristics (header 5-
+incorrect route or failed to provide a required route.             tuple) and those flows may account for only a small fraction of
+                                                                   the total network traffic. Thus, the task is to identify the switch
+                                                                   or link where the rate of packet loss from the flows of interest
+                                                                   (FoIs) exceeds a given threshold. Hence, there is a need to
+                                                                   collect incoming and outgoing counts of packets from the FoIs.
+
+                                                                      NetDx requires that switches include counters at ingress
+                                                                   and egress interfaces that count only FoIs packets. Hence,
+                                                                   edge switches must be configurable to set a trace bit (similar
+                                                                       6
+
+                                TABLE IV                                  configure network entry points to mark packets of interest
+                  NetDx'S DIAGNOSIS PRIMITIVES.
+                                                                          identify location of packet drops
+Mark packets of interest at network edge as traced packets
+                                                                          if (CAT(packets not supposed to be forwarded through location))
+Traced    Drops: no forwarding,ACL,IP header corruption,                    recurse -- change focus to sending neighbor switch
+Packet    0-TTL,congestion
+Counters  Link silent drop detector                                       switch(classification packet drops cause)
+                                                                            case (ACL deny): diag  current switch is faulty
+          Switch silent drop detector                                       case (IP checksum error): diag  link or its end points
+                                                                            case (zero TTL):
+Log of recent traced packet headers                                            back trace packet path from drop location
+                                                                               if (loop caused by incorrect forwarding)
+Log of recent dropped traced packet headers                                      recurse -- change focus to mis-forwarding switch
+                                                                               else
+Table lookup/retrieval: ACL, FIB, RIB, RIB-in, RIB-out                           diag  switch incorrectly decrementing TTL
+                                                                            case (silent drops):
+Packet injection                                                               diag  dropping switch OR link or its end points
+                                                                            case (no forwarding):
+Capture of control plane packets                                               if (there is a forwarding entry for packet)
+                                                                                 diag  current switch is faulty
+Alerts for high-frequency switch state changes: FIB, RIB, connections          if (there is a routing entry for packet)
+                                                                                 diag  current switch is faulty
+Alerts for resource exhaustion: ACL/FIB/RIB entries, CPU load                  if (routing entry for packet received (filtered RIB-in))
+                                                                                 diag  current switch is faulty
+to Everflow's debug bit [60]) in packet headers matching a                     diagnose(CAT(for providers of relevant routes)) AND
+given pattern. The counters in every network switch count                        routes to/from them and current switch
+only packets, henceforth traced packets, where the trace bit is
+set. For meaningful count comparisons, the ingress and egress          Fig. 2. NetDx's diagnosis procedure. CAT: Configuration Analysis Tool.
+counts of every switch or link must be from a consistent
+snapshot [18], [56]. However, consistency is needed only for           guide how diagnosis proceeds. For example, ACL deny drops
+one switch or one link, not the entire network (see §VI-A).            in switch S1 of packets forwarded by switch S2 cause the
+                                                                       diagnosis manager to query Batfish whether the traced packets
+   Since packets may be dropped by a fault-free switch (§IV),          should ever be forwarded by S2 to S1. A positive answer
+once a drop location is identified, additional information is          indicates that the problem (fault or configuration error) is on
+needed to determine whether the fault is local. This is done           S1. A negative answer shifts the diagnosis focus to switch S2,
+based on the fact that a fault-free switch may drop packets            to determine why packets were forwarded incorrectly. Thus,
+for several reasons: (1) ACL deny, (2) no matching forward-            once the location of packet drops is identified, at every point in
+ing entry, (3) the packet's TTL is 0, (4) incorrect IP header          the diagnosis process a particular switch is the current switch
+checksum, and (5) congestion. In all of these cases, there is          under test (SUT). The identity of the SUT shifts to different
+an explicit decision by a fault-free switch to drop a packet.          switches as diagnosis proceeds.
+Hence, NetDx requires the switch to maintain drop counters
+that count the traced packets dropped for each of these reasons.          The most complex diagnosis tasks involve both the data
+                                                                       plane and control plane. In these cases, the switch where the
+   Table IV presents NetDx's diagnosis primitives. In addition         packets are dropped has a high value of the no matching
+to the facilities described above, they include primitives to          forwarding entry drop counter. This triggers a sequence of
+retrieve FIB, RIB, and ACL information. Diagnosis of some              steps that include a query of whether the switch is supposed
+faults, such as incorrect TTL modification, require examina-           to handle the FoIs, followed by examination of the FIB, RIB,
+tion of packet headers. Hence, switches maintain locally and           and RIB-in. These steps may indicate routing information that
+provide access to short logs of headers of recently-forwarded          had been received by the switch was not processed correctly,
+and recently-dropped traced packets. Arbitrary incorrect mod-          pointing to a fault in the switch. However, these steps may also
+ifications of packets performed by a link are detectable by            indicate that the expected routing information has not been
+the Layer 2 CRC code. To facilitate diagnosis of arbitrary             received. In this case, this triggers steps that involve routing
+incorrect payload modifications by switches, switches compute          peers (neighbors) that are supposed to provide the expected
+and provide access to payload checksums of specially-marked            routing information.
+packets. To facilitate diagnosis of incorrect route advertise-
+ments, switches can capture and provide access to routing                 The high-level flow of the diagnosis procedure of NetDx is
+packets sent to or from the control plane. There are additional        shown in pseudocode in Figure 2.
+details regarding the use of these facilities in §VI-B.
+                                                                          A key feature of NetDx is that the diagnosis process is au-
+B. NetDx's Diagnosis Procedures                                        tomated. This is enabled by scripts executed by the diagnosis
+                                                                       manager. The scripts are triggered based on failure reports
+   NetDx's diagnosis procedures are derived systematically,            from users, such as excessive packet drops for a particular flow.
+tracing the steps of network operation in reverse order. The           The scripts then use the primitives iteratively to localize the
+multi-step incremental diagnosis procedure begins with con-            root cause to a switch or a link. The scripts require informa-
+figuring switches at the network edge or the source of the FoIs        tion regarding the topology and configuration of the network.
+specified in the failure report to set the trace bit for the FoIs. It  This information is obtained for the scripts on demand by the
+proceeds with identifying the location of FoIs packet drops and
+ends with the location of the root cause failed switch or link.
+
+   The diagnosis process is controlled by a diagnosis manager
+running on a host in the network. It is able to retrieve the
+collected information from any switch. The drop counters
+                                                                            7
+
+                                Diagnosis Shell                             features can be implemented in hardware. Our prototype is
+                                          Diagnosis Library                 designed for programmable switches and the required func-
+                                                                            tionality is implemented using the P4[17], [8] programming
+      Configuration  Diagnosis                    Fault Report  Checksum    language. Our implementation consists of 1432 lines of P4. It
+      Analysis Tool    Driver                      Collection               should be noted that, if the required data plane functionality
+                                                                Collection  is implemented in some other way, switch programmability is
+Diagnosis Host                                       Server       Server    not necessary for NetDx.
+                                                                            Packet Drop Counters: Switches are designed to deliberately
+Switch                          Diagnosis Kernel                            drop packets when specific conditions related to the packet and
+                                                                            the switch state are met. The switches can record such events.
+                     Diagnosis Manager                                      Specifically, NetDx requires every switch to maintain, at each
+                                                                            ingress port, four counters that count the traced packets that
+                                   Switch Agent                             are dropped due to the following four reasons: no matching
+                                                                            forwarding (FIB) entry, ACL deny, zero TTL, and incorrect
+                     CMD Delegate                   Fault       Checksum    IP header checksum. A sliding window mechanism is used to
+                                                  Reporter       Reporter   restrict the counts to recent packet drops.
+                                                                            Fault Report Triggers: The first step of the diagnosis pro-
+                      Routing Software Data plane Support for NetDx         cess is to identify the location where affected data packets
+                                                                            (henceforth, ADPs) are dropped. To minimize the latency of
+Fig. 3. NetDx architecture.                                                 this step, when traced packets are deliberately dropped by a
+                                                                            switch, as described above, the switch sends a fault report
+diagnosis manager from the configuration analysis tool.                     (§VI-B) to the diagnosis manager. This operation is triggered
+   The diagnosis scripts are written manually, requiring an                 by the data plane. To avoid frequent false positives, this trig-
+                                                                            ger is generated only if, during a time window, the ratio of
+understanding of switch functionality, network protocols, and               dropped traced packets to all arriving traced packets exceeds
+NetDx's diagnosis primitives, Hence, the development of                     a given threshold. An additional condition for the trigger is
+scripts involves significant human effort. However, this is a               that the number of traced packets received by the ingress port
+one-time cost; once the scripts are written, diagnosis of net-              during the time window must exceed another threshold. The
+work failures is automated. For example, Appendix A shows                   latter condition avoids the situation where, for example, a fault
+the workflow of the diagnosis procedure for the case, men-                  report is triggered as a result of a time window during which
+tioned above, where packets are dropped due to no matching                  only one traced packets is received and it is dropped.
+forwarding entry. This entire diagnosis procedure is performed
+automatically by NetDx, starting with only a failure report                    After a deliberate packet drop, if the conditions for a fault
+indicating that there are dropped packet on some FoIs.                      report are met, the switch control plane is notified (triggered).
+                                                                            This is done by forwarding a modified version of the packet
+                 VI. IMPLEMENTATION OF NetDx                                to the switch CPU. The CPU (§VI-B) sends the fault report
+                                                                            to the diagnosis manager.
+   The diagnosis procedure described in §V-B requires a sys-                Traced Packet Counters: Counters of traced packets are
+tem that collects data on the switches and then processes it in a           maintained at every switch ingress and egress port. A sliding
+coordinated manner. This section describes an implementation                window mechanism is used to restrict the counts to only re-
+of such a system. The architecture of the system is shown in                cent packets. These counters are used for silent packet drop
+Figure 3. It includes data plane primitives implemented on the              detection as well as for tracing the routes of FoIs.
+switches, described in §VI-A; a NetDx switch agent and related              Silent Drop Detection: Packets may be silently dropped by a
+software executed by the CPU on each switch, described in                   switch or link. The use of the traced packet counters to detect
+§VI-B; and a diagnosis manager executed on a host in the                    silent drops is complicated by the fact that packets are buffered
+network, described in §VI-C. There is a special challenge                   within a switch. Thus, even if there are no packet drops, the
+with NetDx to handle a failure of the diagnosis manager to                  sum of ingress counter values is likely to be larger than the
+communicate with a switch during diagnosis; §VI-D presents                  sum of egress counter values. Furthermore, it is not possible
+our solution to this problem.                                               to read the values of multiple counters on a switch or the
+                                                                            counters on two adjacent switches at exactly the same time.
+   Based on real world network faults (§IX-A), we concluded
+that, within the framework of NetDx, there is a need for                       For drop detection within switches, the problem of inconsis-
+specialized detectors of anomalous switch behavior that is                  tent counters is solved by relying on the ability of the switch
+otherwise difficult to detect. These detectors operate locally on           to attach to packets meta data that is maintained only within
+the switches, generating fault reports to the diagnosis manager             the switch. Specifically, at each ingress port, the current switch
+as needed. As described in Appendix B, they include detectors               time stamp is attached to each packet. When the packet exits
+for high rate route oscillations and for resource exhaustion.               the switch, this time stamp is used to update the virtual clock
+They are part of our implementation, but we have so far not                 at the egress port through which the packet is transmitted.
+implemented diagnosis scripts that use their results.                       Traced packet counts during two time windows are maintained
+                                                                            at each port. These time windows are based on the switch
+A. Data Plane Support for Diagnosis
+
+   NetDx requires special features of the switch data plane
+that facilitate the collection of diagnosis information. These
+                                                                  8
+
+clock at the ingress ports and the virtual clocks at the egress   to another switch. As discussed in §VI-D, this is used for han-
+ports, This allows sums of consistent counts to be computed       dling situations where network failure prevents the diagnosis
+and used to detect silent drops within switches.                  manager from connecting to some switches.
+
+   Detection of silent drops on a link is based on special           The fault reporter receives packet drop notifications from the
+marker packets that are sent by the switch agent and processed    data plane (§VI-A) and relays them to the diagnosis manager.
+by the data planes of adjacent switches. Specifically, the di-    To avoid fault report storms, after sending a fault report, the
+agnosis manager initiates the process by sending a command        fault reporter sets a flag in the data plane that disables further
+to the switch agent of one of the switches. That switch agent     drop notifications. The diagnosis manager eventually unsets
+sends the marker packet to the adjacent switch. At the egress     this flag via the command delegate.
+port of the first switch, the current traced packet count is
+recorded in the marker packet. The adjacent switch ingress           The checksum reporter is used for diagnosing corruption
+port intercepts the marker packet, records its traced packet      of packet payloads. This diagnosis involves injecting packets
+count on the packet, and sends it back to the switch agent of     with the DSCP field set to 014, which are then mirrored
+the first switch. Packet drops on the link are detected based     at every switch to the control plane (§VI-A). The checksum
+on the two counts on the marker packet.                           reporter receives these packets and sends a limited number of
+Local Packet Header Logs: Each switch maintains short logs        checksums to the diagnosis manager. The diagnosis manager
+of packet headers at its ports. At each ingress port there is a   uses these checksums to identify the corruption location.
+header log of the most recent traced packets received at that
+port. There is also a header log of the most recent dropped          Once a failure report is received, diagnosis requires packets
+traced packets received and deliberately dropped at that port.    matching the FoIs' characteristics (5-tuple) to be continuously
+For each egress port, there is a header log of the most recent    transmitted. However, the packets' source may be remote and
+traced packets transmitted from that port. Each log entry con-    under different administrative control. Hence, there is need
+tains, in addition to the packet header, meta data such as the    to be able to inject at a data center edge switch packets that
+header length and the reason for the packet drop.                 match the ADPs. This injection is performed by the switch
+Local Packet Mirroring to the Control Plane: To allow             agent, triggered by a command from the diagnosis manager.
+switch control plane software to process select packets for-
+warded by the switch, the data plane mirrors to the control       C. The Diagnosis Manager
+plane packets in which the DSCP field of the IP header is set
+to 014. As described in §VI-B, this enables fast diagnosis of        The diagnosis manager is executed on a diagnosis host,
+packet corruption.                                                where it coordinates the diagnosis process and interacts with
+                                                                  the human network operator. The diagnosis manager also in-
+   It should be noted that the local logging of packet headers    teracts with the Batfish [28] configuration analysis tool, from
+and the very limited mirroring of packets described above are     which it obtains responses to queries about what the switches
+local to the switch. The packet header logs are small (on the     should be doing. The diagnosis manager is implemented in
+order of ten) and are only used in rare cases during diagnosis    1688 lines of Python code, while the diagnosis scripts (see
+(diagnose drops due to TTL=0). Local packet mirroring is used     below) consist of 1036 lines of Python code.
+only for very few packets (less than ten) injected only during
+rare diagnosis procedures (currently only used for diagnosing        The diagnosis manager provides an API that allows sending
+packet corruption).                                               commands to switch agents, receiving information retrieved
+                                                                  by switch agents, and interaction with Batfish. Diagnosis is
+B. The Switch Agent                                               generally performed by scripts that use this API. A command
+                                                                  line interface (CLI) allows direct invocations of primitives
+   The switch agent is executed by the switch CPU and pro-        and scripts as well as the instantiation and invocation of new
+vides the interface between the diagnosis manager and the         scripts. Multiple scripts can be stored as a script library.
+switch. It interacts with both the switch data plane and control  Scripts can invoke other scripts. All the diagnoses reported
+plane. As shown in Figure 3, it consists of three modules:        in this paper were performed by such a diagnosis library.
+the command delegate, the fault reporter, and the checksum        This library includes a top-level script that is invoked with a
+reporter. The switch agent is implemented in 978 lines of         description of the failure report and returns a diagnosis.
+Python code.
+                                                                     The fault injection campaign (§IX-C) showed that, in a
+   The actions of the command delegate are initiated by com-      few outlier cases, NetDx failed to produce a diagnosis if the
+mands from the diagnosis manager. It performs the following       network routing state was in the process of changing. With the
+functions: retrieve data plane counter values, FIB entries, and   NetDx scripting mechanism this was easy to fix. Specifically,
+ACL entries; retrieve control plane RIB, RIBin, and RIBout        we modified the top level script to run each diagnosis at least
+entries; capture routing packets sent to and from the control     twice with a short delay between runs. The diagnosis process
+plane; send information it retrieves to the diagnosis manager;    completes only when two consecutive runs yield the same
+command the data plane to perform functions such as marking       result. Since a diagnosis run typically completes in seconds,
+packets as traced packets as well as performing a test for        the additional latency is not significant. After this modification,
+silent packet drops on a switch or link (§VI-A). The command      all the outlier cases resulted in correct diagnosis results.
+delegate can also relay commands from the diagnosis manager
+                                                                  D. Handling Disconnected Switches
+
+                                                                     During diagnosis, the diagnosis manager (DM) typically
+                                                                  connects to the switch agents on multiple switches. However,
+                                                                                                                                  9
+
+network failure may prevent the connection to some of the                                 H3 H4
+switches, thus potentially blocking the diagnosis from proceed-                           S13 S14
+ing normally. To avoid such blocking, the original diagnosis is                           S11 S12 AS 3
+transformed to a diagnosis of the connection failure between
+the diagnosis host (DH) and the disconnected switch (DS).                             S8  S9  S10                           AS 5
+This failure may indicate that DS is faulty but may also be a                                                       S17 S19 H7
+result of faults on other switches. Thus, as described below,       H0                    S2                        S16 S18 H6
+NetDx includes a special procedure to handle this scenario.                                                  S15
+                                                                                  S0                        AS 4 H5
+   DH is assigned two IP addresses: the primary (PIP), that
+is used normally, and the secondary (SIP), that is used as         Diagnosis
+described below. Throughout the network, the configuration
+of routing to these two IP addresses is normally identical.          Host AS 1
+The procedure is based on forming a statically-routed path
+(henceforth, SRP), composed of a sequence of static routes,                           S1                S3
+between DH and DS. This is done using DH's SIP and SIPs
+assigned to the switches as needed by DM.                                                        S4 S5
+                                                                                      AS 2
+   Upon failure of DM to connect to a switch, it initiates
+diagnosis of this failure. This is done hop-by-hop, starting                                     S6 S7
+from the switch closest to DH, along a path acquired by
+querying Batfish, using PIPs. At each hop, static routes are                                  H1 H2
+added between DH's SIP and the SIP that is to be assigned
+to DS. This phase of the procedure identifies the disconnected     Fig. 4. Topology of the network used in §VIII and §IX.
+switch closest to DH along this route. If this switch is not
+the original DS, the procedure is recursively invoked with the     This led to the development of Podnet, an emulator of a net-
+switch closer to DH now being the focus. We denote by N            work of switches with data planes that are programmable using
+the physical neighbor switch of DS, which is closer to DH on       P4 [17] and a control plane based on FRR [2]. Since both P4
+the route from DH to DS.                                           and FRR are used in real networks and NetDx is operational
+                                                                   on Podnet, it is expected that our NetDx implementation can
+   Since DS and N are physical neighbors, they can commu-          be ported to a real network with limited effort. Appendix C
+nicate regardless of routing, unless one of them or the link       presents additional details regarding Podnet.
+between them is faulty. Based on the procedure described
+above, DM can connect to N using their PIPs. The command                          VIII. NetDx DIAGNOSIS EXAMPLE
+delegate on N is used to relay commands from DM to DS. If
+N is unable to connect to DS, this locates the fault to DS, N,        To further explain the operation of NetDx, this section de-
+or the link between them. Otherwise, using this mechanism,         scribes the diagnosis by NetDx of an example fault. We use
+DM attempts to cause DS to install a static route from itself      a network whose topology is shown in Figure 4, emulated on
+to DH's SIP via N. This ensures that packets from DS to DH         Podnet (§VII).
+are not routed on a path that may include a faulty switch. As
+a result, DH, using its SIP, is able to communicate with DS.          The fault is that the IGP and BGP routing daemons of switch
+                                                                   S10 (AS-3) crash (fault class 7 in Table V). As a result, switch
+   After the steps above, DM initiates the diagnosis of a con-     S17 (AS-5) withdraws the routes to AS-3 and AS-4 from the
+nection failure from DH to DS's PIP and then from DS to            switches in AS-5. AS-3 and AS-4 switches still have routes
+DH's PIP. For this diagnosis, DM uses DH's SIP to commu-           to AS-5 through AS-2. However, due to policy configurations,
+nicate with the switch agent on DS.                                S0 (AS-1) and S3 (AS-2) do not advertise to AS-5 routes to
+                                                                   ASes other than themselves. Hence, AS-5 switches do not have
+           VII. THE Podnet EMULATION PLATFORM                      any routes to AS-3 and AS-4. Thus, communication between
+                                                                   hosts H7/H6 (AS-5) and hosts H3/H4/H5 is disrupted.
+   The implementation of NetDx required a network with data
+and control planes that are as close as possible to those of          We injected the fault above by killing the routing daemons
+a real network. It also required the ability to easily modify      on switch S10. As a result, a user-level failure report indicated
+the data and control planes as well as to later be able to         that host H7 cannot reach host H3. In response, NetDx's top-
+test the operation of NetDx under a variety of faults. These       level diagnosis script was invoked, specifying the source and
+requirements mandated the use of a simulated or emulated           destination hosts. The diagnosis script configured switch S19
+network. To facilitate data plane modifications, switches with     (AS-5) to set the trace bit of packets from H7 to H3. On switch
+programmable data planes [17] were the obvious choice. For a       S19, the no forwarding entry drop counter value exceeded the
+realistic control plane, it was desirable to use routing software  threshold and the switch sent a fault report to the diagnosis
+that is also used in real networks. As in real networks, an        manager (DM). As a result, the script on DM invoked the
+independent instance of this software must run on each switch.     diagnose no forwarding drop script, targeting switch S19.
+                                                                   The script retrieved routing information from switch S19 and
+   Based on the above considerations, available existing           determined that the required route was missing. The script
+tools [41], [6], [26], [12] were not suitable for our purpose.     then queried Batfish for the switches that were supposed to
+                                                                                                                                 10
+
+propagate the route to S19 and the response pointed to switch                                              TABLE V
+S17 (AS-3).                                                          A FAULT SET COLLECTED FROM A MAJOR CLOUD SERVICE PROVIDER.
+
+   Based on the above, the script invoked the diagnose bgp           Fault   # of                                Description
+route adv missing script, targeting switch S17. This script          Class  Faults
+retrieved routing information from S17 and found that S17                           A switch failed and dropped packets.
+did not have the route. By querying Batfish, the script found            1    18    A link failed and droped packets.
+that S10 (AS-3) should provide the route to S17. The script              2     2    A switch or a link corrupted packets.
+retrieved status information regarding S10 from S17 and found            3     6    Software fault caused installation of ACL rules to fail.
+that the BGP connection between S17 and S10 was down. This               4     1    Routing software crash caused routes missing.
+caused the invocation of the diagnose bgp routing neighbor               5     1    BGP route table was inconsistent because of software fault.
+down script targeting S17 and S10. The script attempted to               6     1    FIB entry corrupted by data race of software.
+establish a TCP connection with S10. Since the routing dae-              7     1    Route oscillation caused intermittent route missing.
+mon on S10 had crashed, the rest of the network lost routes              8     3    Faults that require primitives for diagnosing congestion.
+to S10 and this attempt failed.                                          9     6    Faults that need emulation for overlay network.
+                                                                       10      3    A hardware fault that caused extremely high delay on a
+   Due to the failure to connect to S10, the diagnosis script                       switch rather than packet drops.
+invoked diagnose connectivity loss of switch script (§VI-D),           11      1    The effect of the fault was transient.
+with S10 as the "disconnected switch" (DS). As described                            Route filter configuration errors caused routes missing.
+in §VI-D, this ended up with the invocation of the script to           12      1    An incorrect configuration change caused BGP
+diagnose packet drops between the diagnosis host (DH) and              13      3    connections down.
+S10. This involved configuring S0 (AS-1) to set the trace bit                       Packets were denied by ACL due to ACL configuration
+packets destined to S10. After a short delay, DM received from         14      1    errors.
+S0 a no forwarding entry packet drop fault report. This led to
+a new invocation of the diagnose no forwarding drop script,            15      4
+targeting S0. This script ultimately determined that S10 should
+provide a route for itself to its neighbors while it does not.       faults in classes 10, 11, 12, which, respectively, involve overlay
+This led to the script attempting and failing to retrieve routing    networks, cause packet delays rather than packet drops, or are
+information from S10, identifying S10 as the root cause.             transient faults. In addition, the six faults in class 9 are also
+                                                                     not within the current scope of NetDx, since NetDx does not
+                          IX. EVALUATION                             have the mechanisms for diagnosing the root causes of con-
+                                                                     gestion. The eight faults in class 13, 14, 15 were configuration
+   This section presents preliminary evaluation and validation       errors, which are handled by network verification tools [13],
+of NetDx. It involved injection of faults using Podnet and the       [28], [39], [27], [43], [57], [53] and are thus not targets for
+execution of the diagnosis script by NetDx. The experiments          a tool focused on diagnosing hardware and software faults in
+used an emulated network, whose topology is shown in Fig-            operational networks.
+ure 4, consisting of five autonomous systems, twenty switches,
+and nine hosts. We collected a set of faults that were detected         There are 33 faults that are potentially within NetDx's do-
+in a production network of a major cloud service provider.           main in equivalence classes 1-8. For each class, we injected
+The fault set and the a summary of the diagnosis coverage of         a fault in our emulated network that reproduces the effect of
+NetDx is presented in §IX-A. The fault used as an example in         the fault on the switches and links. In each case, the input
+§VIII is based on one of the faults in this fault set. In practice,  to NetDx corresponded to the failure report that a user would
+network diagnosis is often done manually by network opera-           provide to the network operators. Specifically, this input iden-
+tors, using tools such as ping and traceroute. A comparison          tifies the affected flows by providing source, destination, and
+of the diagnosis of the fault in §VIII with NetDx vs. manual         possibly other packet characteristics. In all eight cases, the
+diagnosis is presented in §IX-B. An automated fault injection        diagnosis script executed by NetDx identified the fault that was
+campaign and its results are presented in §IX-C.                     root cause of the failure. However, three out of the 33 faults
+                                                                     were intermittent and there were no records regarding their
+A. Collected Fault Set                                               frequency. Hence, we could not determine whether they could
+                                                                     be diagnosed by NetDx. To be conservative in our reporting,
+   Table V presents a set of 52 faults that were detected and        we count them (3 out of 33) as diagnosis failures.
+diagnosed in the enterprise network of a major cloud service
+provider over multiple years. These faults are grouped into          B. Comparison with Manual Diagnosis
+15 equivalence classes. The collected data included 16 faults,
+excluded from Table V, that were automatically detected and             We used the example described in §VIII to compare NetDx
+corrected by built-in mechanisms on the switches and thus did        with manual diagnosis. We asked three Computer Science
+not require external diagnosis. The faults in classes 1, 2, 3, and   Ph.D. students whose research focuses on computer networks
+11 involved only the data plane. The diagnosis of the faults         and are unaffiliated with our group to act as three independent
+in classes 4-10 and 13-15 also involved the control plane.           operators to perform the manual diagnosis. We informed them
+                                                                     of the end-to-end failure report above. They were allowed
+   Out of the 52 faults in Table V, 19 faults are currently not      to use ping and traceroute on any host or switch to probe
+within the scope of NetDx, as defined in §I. These include           any destination and they also had access to all switches. We
+                                                                     also ran NetDx's diagnosis script that produced the diagnosis
+                                                                     automatically.
+
+                                                                        For comparison, we measured the time to reach diagnosis
+                                                                     and the number of commands invoked: Person 1: 33:48 min-
+                                                                                                                         11
+
+utes, 38 commands; Person 2: 26:32 minutes, 32 commands;                               TABLE VI
+Person 3: 14:44 minutes, 18 commands; NetDx: 1:38 minutes,           FAULT INJECTION CAMPAIGN RESULTS.
+77 commands (primitives).
+                                                                     Fault Type                    #primitives  #fault
+   As expected, manual diagnosis was much longer. Moreover,                                                     reports
+this experimental setup artificially increases NetDx's diagnosis
+time since Podnet, where every switch is a complex simulator,        SilentDropInSwitch            27           0
+is extremely slow. In a real enterprise network, where packet
+latency is, at most, a few milliseconds, NetDx's diagnosis time      SilentDropOnLink              22.3         0
+would certainly be less than five seconds. There are also many
+factors that impact the manual side of the experiment. For           CorruptionOnLink IP           142.0        10
+example, while our testers are knowledgeable regarding net-
+works, they are not experienced network operators. However, it       IncorrectDecrementTTL         27.6         10
+should be noted that the fault used in this experiment is based
+on a real fault that happened in the global WAN of a major           PacketPayloadCorruptionInSwitch 22.3       0
+cloud service provider. It took them more than 30 minutes to
+identify the faulty switch.                                          IncorrectForwardingDrop       33.2         10
+
+C. Fault Injection Campaign                                          FIBDiscrepancy                24.1         8
+
+   To test the coverage and robustness of NetDx, we developed        IngressBgpUpdateModification  90.5         10
+an automated fault injection campaign as described below. In
+the first part of the campign, only a single fault at a time was     BgpNeighborMissing            131.5        8
+injected. While it may appear that nothing can be gained by
+injecting faults from the fault model used to derive the diagno-     EgressBgpUpdateModification   108.1        10
+sis procedures, this was invaluable for enhancing some of the
+diagnosis procedures (§VI-C), identifying and correcting bugs        is reset. If two faults were injected, a new diagnosis run is
+in our implementation, and estimating the latency of diagnosis       initiated to diagnose the second fault. Otherwise, a new injec-
+(§IX-C2). In the second part of the campign two simultaneous         tion run is started.
+faults were injected. Since NetDx was developed to handle
+only a single fault at a time, the goal was to check its ability        2) Fault Injection Campaign Results: Table VI shows ten
+to handle more complex scenarios.                                    fault types that cover all the categories in the fault model.
+                                                                     In the single fault injection campaign, faults from each fault
+   1) Experimental Setup: We built a test harness on Podnet          type were injected in a random location until there were ten
+(§VII) that injects faults in a network and evaluates the NetDx      injections that resulted in failure reports from pingmesh. In the
+diagnosis outcomes for these faults. The harness is based on a       double fault injection campaign, there are 100 injection runs,
+setup similar to Pingmesh[32] consisting of processes execut-        with two faults injected per run. The types and locations of
+ing on all the hosts, sending ICMP probes to all other hosts.        the two faults are picked at random. In both campaigns all the
+If one of these processes detects multiple consecutive dropped       faults were correctly diagnosed by NetDx.
+probes, it sends a failure report to an injection campaign con-      Single fault campaign. Table VI shows the results from the
+troller running on the diagnosis host. Each pingmesh process         single fault injection campaign. The table shows, for each
+is limited to sending at most one failure report until it is reset.  fault type, the average number of primitives that the diagnosis
+The communication between the pingmesh processes and the             manager invoked in switch agents to diagnose the fault, as well
+campaign controller is out of band, so that it is not affected       as the number of diagnoses in which the switch where ADPs
+by the fault injection. The campaign controller can cause the        were dropped was identified by a fault report from that switch.
+injection of ten different fault types on any of the switches.
+                                                                        The results show that in most cases the switch where ADPs
+   It is important to note that Pingmesh and the injection           were dropped was identified by a fault report from that switch.
+campaign controller are not part of the diagnosis process            This shows the value of the proactive fault reporting mech-
+and are not part of NetDx. In this setup Pingmesh is used            anism that eliminates the need for the diagnosis manager to
+to represent a user who reports an end-to-end (host-to-host)         retrieve information from many switches just to find the switch
+network failure.                                                     dropping the ADPs. Out of the 100 diagnoses, 6 involved
+                                                                     dealing with a disconnected switch (§VI-D), demonstrating the
+   An injection run begins with the campaign controller using        need for this mechanism. The "#primitives" column provides
+the facilities of Podnet to inject one or two faults in switches.    information regarding the expected diagnosis latency on a real
+The controller then waits a specified amount of time to receive      network. Specifically, each primitive translates to a latency of
+failure reports from the pingmesh processes. If multiple failure     a network round trip plus the processing time for the primitive
+reports are received, one of them is selected at random to           on the switch. Thus, diagnosis latency with a real network will
+invoke the top-level NetDx diagnosis script. When a diagnosis        be on the order of, at most, seconds.
+result is produced by NetDx, it is compared to the known             Double fault campaign. In the double fault injection cam-
+fault injection locations to determine whether the diagnosis is      paign, the diagnosis of each fault pair involved two invocations
+correct. The fault is then reversed (undone) and the pingmesh        of NetDx. The first invocation identifies one of the faulty
+                                                                     switches, that switch is then "repaired," and a second invo-
+                                                                     cation identifies the second faulty switch. A key point is that
+                                                                     in first invocation the existence of two faults did not prevent
+                                                                     a correct diagnosis result. However, the average number of
+                                                                     primitives required for the first invocation was 98.01, while it
+                                                                     was only 36.26 for the second. This indicates that the diagnosis
+                                                                     of the first fault was a more complex process than that of the
+                                                                     second. For example, 11% of the first fault diagnoses required
+                                                                     dealing with a disconnected switch, but this was required for
+                                                                     only 1.8% of the second fault diagnoses. The proactive fault
+                                                                                                                     12
+
+report mechanism was utilized in 71 out of the 100 double ments. A key advantage of MBND and NetDx is that they
+
+fault injection runs.                                              enable automated diagnosis without such experts.
+
+                           X. DISCUSSION                                                   XI. RELATED WORK
+
+   This section summarizes some of the key results and limi-       New Data-plane Diagnostic Primitives: Some prior
+tations of this work.                                              works [42], [46], [33] propose data plane primitives imple-
+Scalability of NetDx: Scalability is a key requirement for a       mented on the switches that enable new queries that allow
+network diagnosis mechanism. MBND enables scalability by           network operators to inspect subtle network behaviors. Com-
+guiding targeted collection of relevant data, avoiding the need    pared to NetDx, they can collect finer-grained information at
+to collect information from the entire network. Two key mech-      the cost of higher overhead on the switches. They are usually
+anisms of NetDx further enhance scalability. (I) The trace bit     used to analyze network performance issues rather than net-
+mechanism (§V-A, based on Everflow's debug bit [60]) elimi-        work failures. Other mechanisms [3], [15], [4], [37], [49], [50]
+nates the need to configure every switch to target the flows of    piggyback diagnostic information on packets and require the
+interest. (II) The fault reporting mechanisms in the switches      destination hosts to send the information to collection servers.
+(§VI-A, §VI-B) allow switches with relevant information to         This involves overhead on the hosts and collection servers, in-
+proactively send it to the diagnosis manager, eliminating the      creased network bandwidth use, and potentially require packet
+need for the diagnosis manager to collect information from         fragmentation. None of these mechanism can diagnose con-
+every switch that potentially has relevant information.            trol plane faults and the interaction between data and control
+Overhead of NetDx: A key to the low overhead of NetDx is           planes.
+that it avoids packet mirroring and logging to servers as well as  Data Plane Log Analysis and Monitoring: Similarly to
+piggybacking diagnostic information on normal packets. Only        Cisco's NetFlow [1], these mechanisms log data plane infor-
+a small amount of data is collected locally on each switch. Dur-   mation from switches to collection servers for later diagnosis.
+ing diagnosis, only minimal interactions are required between      In some cases, switches send packet-level information to the
+the diagnosis manager and switch agents, involving negligible      collection servers [60], [36], [35], [29]. Spidermon[55] opti-
+network throughput.                                                mizes the collection of logs using wait-for relations for specific
+The cost of developing diagnosis scripts: A limitation of this     performance faults. dShark [58] proposes a data processing
+work is that human experts are required to develop diagnosis       engine that facilitates the log analysis. In general, these mech-
+scripts. However, as explained earlier (§II), MBND enables and     anisms incur high overhead on the switches, networks, and
+guides this development, thus greatly reducing the required        collection servers. Monitoring systems, such as Pingmesh[32]
+human effort. Furthermore, these scripts are developed once        and NetBouncer [51], use servers to send probes across the
+and can then be used numerous times in multiple locations,         network to triangulate the location of data plane faults. Dap-
+without experts. Importantly, the diagnosis procedures depend      per [30] and Trumpet [45] also use host-based monitoring
+only on network protocols, network topology, and switch con-       but leverage inference algorithms to reconstruct the network
+figurations. They do not depend on the detailed switch imple-      state. They are helpful for detecting the symptoms of faults
+mentation. Thus, human experts are required only to support        but do not provide root cause diagnosis. Most log analysis and
+additional protocols, not for every new switch implementation.     monitoring systems do not focus on control plane faults or the
+Switch hardware requirements: A limitation of NetDx is             interaction between the data and control planes.
+that it requires switches capable of operations (§V-A, §VI-A)      Route Log Analysis: Some works propose tools that analyze
+that are not all available on many current switches. However,      routing dynamics in the internet by processing and visualizing
+as explained earlier, while NetDx is an efficient low overhead     logs of BGP updates [40], [22], [16]. These are particularly
+implementation of MBND, MBND can be implemented using              useful for diagnosing the global WAN, where no single entity
+different mechanisms for data collection. Furthermore, the data    can access all parts of the network. They incur high overhead
+collection requirements of MBND can guide future switch            and do not cover data plane faults or the interaction between
+developments, suggesting primitives that should be added to        data and control plane faults.
+ASICs used to implement these switches. Finally, as demon-         LLM-based Diagnosis: Some recent works propose the use
+strated by our prototype, the ability to support a new gener-      of Large Language Models to automate diagnosis for cloud
+ation of network diagnosis mechanisms may be a motivation          systems. NetAssistant[54] uses LLM to automate the interac-
+to consider programmable switches.                                 tion between users and the diagnosis system. Since the ac-
+Evaluation: A limitation of this work is that we were not          tual diagnosis is done by proprietary in-house workflows, we
+able to deploy and validate NetDx on a real network. How-          cannot compare it with NetDx. RCAcopilot[20] only shows
+ever, our prototype implementation does show that an efficient     the compound F-1 score for diagnosing multi-class distributed
+implementation of MBND is feasible on existing hardware            systems. It is unclear how effective it is in diagnosing com-
+(P4 switches). The extensive fault injection campaign (§IX-C)      puter networks.
+demonstrates the robustness of the implementation. While the       Summary: NetDx is advantageous over prior work in pro-
+comparison with manual diagnosis (§IX-B) did not match up          viding automation, low overhead, and coverage of data plane
+NetDx with highly-experienced network operator, such opera-        and distributed control plane interactions. Further, NetDx rep-
+tors are often not immediately available in real-world deploy-     resents a new top-down model-based paradigm that is com-
+                                                                                   13
+
+pletely different from past work which mostly consists of bot- the two routing neighbors. This is a recursive invocation of
+
+tom up debugging primitives that must be combined manually the same procedure that is initially triggered by the original
+
+by experts to do end to end root cause diagnosis.                 failure report.
+
+                         XII. CONCLUSION                                                       APPENDIX B
+                                                                                SPECIALIZED ANOMALY DETECTORS
+   This paper introduces model-based network diagnosis, a
+foundation for tools that automatically identify the root cause      As mentioned in §VI, there is a need to implement spe-
+of disruptions in operational networks due to switch hardware     cialized detectors of anomalous switch behavior that is other-
+and software faults. Diagnosis is based on identifying devi-      wise difficult to detect. These detectors operate locally on the
+ations from a formal end-to-end model of packet forwarding        switches, generating fault reports to the diagnosis manager as
+and routing. This model is based on network protocols, net-       needed. Adding such specialized anomaly detectors fits within
+work topology, and switch configurations. The model is used       the framework of NetDx and demonstrates the extensibility
+to derive a functional fault model for switches that describes    of the approach. They are part of our implementation (§VI).
+how switch functionality can be disrupted. This approach is       However, we have so far not implemented diagnosis scripts
+enabled by leveraging configuration analysis tools (e.g., Bat-    that use the results of these detectors.
+fish) that provide a representation of the network model that is
+directly comparable to what is observable on the operational         Some faults result in a high rate of route oscillations or
+network.                                                          oscillations of the connections between routing daemons on
+                                                                  the switches. It is relatively simple to modify routing software
+   As an example of model-based network diagnosis, we im-         to count the number of changes of the RIB within a given
+plemented NetDx, a system that takes a high-level symptom of      time window. When the count exceeds a threshold, a potential
+a network failure as input and automatically pinpoints the root   fault report is sent to the diagnosis manager. Excluding periods
+cause failed switch or link. NetDx's diagnosis primitives and     when significant network changes are initiated, such reports
+procedures are derived systematically from the network model.     can help with diagnosis. Similarly, it is useful to identify a
+The novel basis of NetDx allows it to diagnose networks with      high rate of connections and disconnections of, for example,
+distributed control planes, tracing through interactions between  BGP peers.
+the data and control planes, to identify the root cause of
+network failures. NetDx's choice of mechanisms show a way            The second group of detectors monitor resource usage on
+to instantiate model-based network diagnosis with essentially     the switches and report resource exhaustion. We have im-
+no performance overhead.                                          plemented such detectors of CPU utilization (load average),
+                                                                  memory use, and use of FIB entries.
+   Unlike earlier approaches that use ideas from streaming
+databases [58] or probabilistic inference [51], NetDx uses ideas                               APPENDIX C
+from the dependability community, such as explicit fault mod-                                Podnet DETAILS
+els, minimizing intrusion, and fault injection campaigns [19],
+[52], [47], [38], [11]. Unlike classical work in the dependabil-     The Podnet emulation platform is briefly introduced in §VII.
+ity community, however, NetDx uses the fact that networks are     This appendix presents additional details regarding its imple-
+simple enough computing artifacts to derive what their correct    mentation and fault injection capabilities.
+behavior should be.
+                                                                  A. Network Emulation
+   The evaluation of NetDx on a real world fault dataset shows
+that it is able to diagnose most network failures. An automated      To implement the functionality of a P4 switch, we use an
+fault injection campaign was invaluable in the development        existing P4 behavioral simulator [7]. Each Podnet emulated
+of NetDx and demonstrates the robustness and coverage of          switch consists of a P4 simulator instance and an FRR in-
+NetDx. It also shows that, on a real network, diagnosis can       stance. All the processes that make up an emulated switch
+be performed in seconds instead of hours. Future work on          run in a Linux container (managed by Podman [10]). Parts of
+NetDx includes extending the model-based paradigm to over-        Podnet are based on Containernet [48], which, in turn, is based
+lay networks, other IP features, and other networks.              on Mininet [41]. However, neither of these two emulators
+                                                                  isolates each switch in a container. The architecture of the
+                             APPENDIX A                           emulated switch is shown in Figure 6.
+            NO FORWARDING DIAGNOSIS EXAMPLE
+                                                                     The implementation of the emulated data plane requires
+   Figure 5 shows the workflow of the diagnosis procedure for     packets arriving on a virtual network interface of the container
+the no forwarding case. NetDx's general diagnosis procedure       to be directed to the P4 simulator. To this end, the P4 simulator
+is applicable to all routing protocols. However, diagnosis of     captures packets at the interface using libpcap, while those
+the control plane involves capturing and decoding routing mes-    packets are blocked from entering the Linux network stack
+sages. The procedure shown in Figure 5 is specialized to BGP.     using iptables. After packets are processed by the P4 simulator,
+In one outcome of the procedure in Figure 5, the conclusion is    they are forwarded to either the local control plane (data-plane
+that there is a broken connection with a routing neighbor. This   egress interface in Figure 6) or the interface to the next hop.
+is not the end of the diagnosis procedure. Rather, this triggers  Packets from the switch control plane are redirected to the
+an invocation of a procedure to diagnose connectivity between     P4 simulator (control-plane egress interface in Figure 6) using
+                                                                                                                                                                 14
+
+                       Identify the                Query: should  Yes           Is there a    No   Is there a routing Yes             SUT fault:
+                          switch                                            forwarding entry         table entry for              forwarding table
+                                                     there be a             for FoIs in SUT?         FoIs in SUT?                 inconsistent with
+                         dropping                  route of FoIs
+                      packets from                                                                                                  routing table.
+                       FoI as SUT                     to SUT?
+                                                                                                                                  SUT fault: failure
+                         Use data                            No                 Yes                         No                    to accept correct
+                      plane tracing                                             SUT fault:         Is there a relevant Yes
+                      to identify the               Identify the            hardware fail to       route for FoIs in the                routes.
+                                                    switch that               conform with
+                         spot and                  forwards FoI             forwarding table         RIB-In of SUT?
+                        reason of                   to SUT as                                                        No
+                      packet drops
+                                                   PNSUT                                           Query: Which routing
+                      Identify the
+                      flows being                  Diagnose                                        neighbor should provide
+                      impacted as                  incorrect                                           a relevant route?
+
+                           FoI                     forwarding
+
+                        User-level                 args: PNSUT,                                      Identify the
+                        Symptom
+                                                   SUT, FoI                                          neighbor as
+
+                                                                                                     RNSUT
+
+                                                                            Diagnose BGP      Yes  Are the connection
+                                                                            route missing
+                                                                                                   with the RNSUT up?
+                                                                            args: SUT,
+
+                                                                            RNSUT, FoI
+                                                                                                                              No
+
+                                                                                                   Diagnose BGP routing
+                                                                                                        neighbor down
+
+                                                                                                   args: SUT, RNSUT, FoI
+
+Fig. 5. Diagnosis of packet drops due to no matching forwarding entry. SUT: Switch Under Test; FoI: Flow of Interest; PNSUT: Physical Neighbor of the
+SUT; RNSUT: Routing Neighbor of the SUT.
+
+                      Switch Agent                              Fault                   · No-forwarding drop caused by inconsistency between FIB
+                                                               Injector                   and RIB: activate a special feature of the routing table me-
+                        CMD                Fault                                          diator that removes an entry in the FIB.
+   Other Apps         Delegate           Reporter  FRR                       Linux
+ssh, iperf, ping...                                                         Routing     · ACL deny drop caused by incorrect ACL rule: add an ACL
+                                                                  Netlink                 rule that denies the particular packets.
+                                                                             Table
+                                                                                        · BGP neighbor missing caused by a software bug: use ipta-
+                                                             Routing Table                bles to block BGP packets.
+                                                                Mediator
+                                                                                        · Incorrect BGP advertisement caused by a software bug: con-
+Control-plane         Control-plane                                         Control       figure iptables to direct packets to an nf-queue monitored by
+Ingress Interface     Egress Interface                                      Plane         a code that uses libnetfilter queue. This code captures and
+                                                                            Data          modifies BGP advertisements that contain specified routes.
+Data-plane            Data-plane                                            Plane
+Egress Interface      Ingress Interface
+
+Normal       Fault    P4 Pipeline                Thrift RPC                                                          APPENDIX D
+Interfaces  Injector                               Server                                           MODEL INSTANTIATION FOR IPV4/BGP
+
+ eth0        Fault                              P4 Program                                 A high-level functional model of fault-free and faulty
+            Injector                     Behavioral Model                               switches is presented in §III. Table VII is an instantiation
+ eth1                                                                                   of this model for IPv4/BGP networks. As in Table II, the
+   ...                                                                                  instantiation consists of seven functionality categories. For
+                                                                                        each category there are three rows, where the top row con-
+Fig. 6. The architecture of an emulated switch.                                         tains the instantiation of the abstract objects, characteristics,
+                                                                                        or functions for IPv4/BGP. The middle row is a definition
+iptables. Thus, these packets are forwarded by the P4 simulator                         of the functionality of a fault-free switch. The bottom row
+to the next hop.                                                                        is a definition of the functionality of a faulty switch. The
+                                                                                        definition of the functionality of a faulty switch is derived by
+   The FRR routing software running on the switch container                             negating the functionality of a fault-free switch. The list of
+installs routes into the routing table of the Linux kernel. FRR                         faulty functionalities forms the switch fault model.
+does this by sending a Netlink [5] route change message to
+the Linux kernel. Podnet includes a routing table mediator                                                                        REFERENCES
+that monitors route changes in the Linux routing table via a
+Netlink socket and installs the changes to the forwarding table                               [1] Cisco ios-netflow.              https://www.cisco.com/c/en/us/products/
+of the P4 simulator via an RPC interface (Figure 6).
+                                                                                              ios-nx-os-software/ios-netflow/index.html, Sept. 2022. Accessed: 2022-
+B. Fault Injection
+                                                                                              9-21.
+   To test and evaluate NetDx, Podnet includes a fault injector
+that is able to inject the faults in our functional fault model.                              [2] Frrouting project. https://frrouting.org/, Sept. 2022. Accessed: 2022-9-
+Below are examples of how specific faults are injected:
+· Silent drop in a switch: activate a special P4 stage that drops                             21.
+
+  packets.                                                                                    [3] In-band network telemetry. https://p4.org/p4-spec/docs/INT v2 1.pdf,
+· Silent drop on a link: activate a modification of the packet
+                                                                                              Sept. 2022. Accessed: 2022-9-21.
+  capturing module in the P4 simulator so that it drops packets.
+                                                                                              [4] Intel® deep insight network analytics software.     https:
+
+                                                                                              //www.intel.com/content/www/us/en/products/network-io/
+
+                                                                                              programmable-ethernet-switch/network-analytics/deep-insight.html,
+
+                                                                                              Sept. 2022. Accessed: 2022-9-21.
+                                                                                                                                               15
+
+Packet Forwarding                                                                                              TABLE VII
+                                      AN INSTANTIATED FUNCTIONAL MODEL OF FAULT-FREE AND FAULTY SWITCHES IMPLEMENTING IPV4 AND BGP PROTOCOLS.
+Packet Transformation
+                                              =   ( . 4.  ) =    . 4.   0 
+Data Plane                                          ( )  Deny  ( . 4) = 0
+  Table
+     Generation                               =   ( . 4.  ) =     . 4.  = 0 
+                                                    ( ) = Deny  ( . 4)  0
+Route
+  Table                                        (    ,  ) = ,   ,   
+     Generation                                (    ,  ) = Null
+                                               (   , ) = Null
+Route Ad-                                      (    ,  ) =  
+  vertisement                                  (   , ) = ,   
+     Reception                                 (   , ) = ,   
+                                            = 
+Route Ad-    with External vertisement      (  ( ) ) =  ( ), with     -          -      Generation
+
+Interaction                                           - 1        (   . 4)Entities
+                                            (  ( ) ) =  ( ) , with     -        -   
+
+                                                            (   . 4)
+                                           where        ,        ,      - 1.5,   
+                                            
+
+                                              =  (  ( ) ) 
+                                             .  =  ( ). 
+                                              =  (  ( ) )   (  ( ) ) 
+                                             .    ( ). 
+
+                                                 4 &    
+                                                  4 &  
+                                                 ,       ..      
+                                                ,        ..     
+                                                 ,      ,     
+                                                ,       ,    
+
+                                             =  
+                                               =  
+                                             =   
+                                             =   (   ,    )
+                                                (   ,    )
+
+                                               =  
+                                              =   
+                                             =   
+                                               =   (   ,  )
+                                                  (   ,  )
+
+                                             =  
+                                              =   
+                                              =    
+                                              =   (   ,  )
+                                                 (   ,  )
+
+                                                /  
+                                                   -     /     /    
+                                             ( ,    ) =   
+                                             ( ,    )     
+                                             ( ,    ) =  
+
+ [5] Manual of netlink. https://man7.org/linux/man-pages/man7/netlink.7.             General Approach to Network Configuration Verification. In SIGCOMM
+      html, Sept. 2022. Accessed: 2022-9-21.                                         '17, SIGCOMM '17, pages 155­168, August 2017.
+                                                                               [15] Ran Ben Basat, Sivaramakrishnan Ramanathan, Yuliang Li, Gianni An-
+ [6] Network simulator ns-3. https://www.nsnam.org/, Sept. 2022. Accessed:           tichi, Minian Yu, and Michael Mitzenmacher. PINT: Probabilistic in-
+      2022-9-21.                                                                     band network telemetry. In SIGCOMM '20, pages 662­680, August
+                                                                                     2020.
+ [7] P4 behavioral model. https://github.com/p4lang/behavioral-model, Sept.    [16] Dionysus Blazakis, Manish Karir, and John S Baras. BGP-Inspect -
+      2022. Accessed: 2022-9-21.                                                     Extracting Information from Raw BGP Data. In IEEE/IFIP NOMS 2006,
+                                                                                     pages 174­185, April 2006.
+ [8] P4 programming language. https://p4.org/, Sept. 2022. Accessed: 2022-     [17] Pat Bosshart, Dan Daly, Glen Gibb, Martin Izzard, Nick McKeown,
+      9-21.                                                                          Jennifer Rexford, Cole Schlesinger, Dan Talayco, Amin Vahdat, George
+                                                                                     Varghese, and David Walker. P4: Programming Protocol-Independent
+ [9] Availability in aws. https://docs.aws.amazon.com/wellarchitected/latest/        Packet Processors. Computer Communication Review, 44(3):88­95, July
+      reliability-pillar/availability.html/, 2023. Accessed: 2023-2-2.               2014.
+                                                                               [18] K. Mani Chandy and Leslie Lamport. Distributed Snapshots: Deter-
+[10] The pod manager tool. https://podman.io/, 2023. Accessed: 2023-2-2.             mining Global States of Distributed Systems. ACM Transactions on
+                                                                                     Computer Systems, 3(1):63­75, February 1985.
+[11] Jean Arlat, Yves Crouzet, Johan Karlsson, Peter Folkesson, Emmerich       [19] Herbert Y. Chang, Eric Manning, and Gernot Metze. Fault Diagnosis
+      Fuchs, and Gunther H. Leber. Comparison of physical and software-              of Digital Systems. Wiley-Interscience, New York, 1970.
+      implemented fault injection techniques. IEEE Transactions on Comput-     [20] Yinfang Chen, Huaibing Xie, Minghua Ma, Yu Kang, Xin Gao, Liu
+      ers, 52(9):1115­1133, September 2003.                                          Shi, Yunjie Cao, Xuedong Gao, Hao Fan, Ming Wen, et al. Automatic
+                                                                                     root cause analysis via large language models for cloud incidents. arXiv
+[12] Jiasong Bai, Jun Bi, Peng Kuang, Chengze Fan, Yu Zhou, and Cheng                preprint arXiv:2305.15778 [cs.SE], 2024.
+      Zhang. Ns4: Enabling programmable data plane simulation. In SOSR
+      '18, pages 1­7, August 2018.
+
+[13] Ryan Beckett, Aarti Gupta, Ratul Mahajan, and David Walker. A general
+      approach to network configuration verification. In SIGCOMM '17, pages
+      155­168, August 2017.
+
+[14] Ryan Beckett, Aarti Gupta, Ratul Mahajan, and David Walker. A
+                                                                               16
+
+[21] Luca Cittadini, Tiziana Refice, Alessio Campisano, Giuseppe Di Battista,        USENIX Symposium on Networked Systems Design and Implementation,
+      and Claudio Sasso. Measuring and visualizing interdomain routing               pages 499­512, Oakland, CA, May 2015.
+      dynamics with BGPATH. In 2008 IEEE Symposium on Computers and            [44] Haohui Mai, Ahmed Khurshid, Rachit Agarwal, Matthew Caesar,
+      Communications, pages 780­787, July 2008.                                      P. Brighten Godfrey, and Samuel Talmadge King. Debugging the Data
+                                                                                     Plane with Anteater. In SIGCOMM '11, pages 290­301, August 2011.
+[22] Lorenzo Colitti, Giuseppe Di Battista, Federico Mariani, Maurizio Pa-     [45] Masoud Moshref, Minlan Yu, Ramesh Govindan, and Amin Vahdat.
+      trignani, and Maurizio Pizzonia. Visualizing Interdomain Routing with          Trumpet: Timely and precise triggers in data centers. In SIGCOMM
+      BGPlay. Journal on Graph Algorithms and Applications, 9(1):117­148,            '16, pages 129­143, August 2016.
+      2005.                                                                    [46] Srinivas Narayana, Anirudh Sivaraman, Vikram Nathan, Prateesh Goyal,
+                                                                                     Venkat Arun, Mohammad Alizadeh, Vimalkumar Jeyakumar, and
+[23] Adnan Darwiche. Model-based diagnosis under real-world constraints.             Changhoon Kim. Language-directed hardware design for network per-
+      AI magazine, 21(2):57­57, 2000.                                                formance monitoring. In SIGCOMM '17, pages 85­98, August 2017.
+                                                                               [47] Wee T. Ng and Peter M. Chen. The systematic improvement of fault
+[24] Leliane Nunes de Barros, Marilza Lemos, Volnys Bernal, and Jacques              tolerance in the rio file cache. In 29th Fault-Tolerant Computing Sym-
+      Wainer. Model based diagnosis for network communication faults. In             posium, pages 76­83, Madison, WI, June 1999.
+      Proceedings of International Workshop on Artificial Intelligence for     [48] Manuel Peuster, Holger Karl, and Steven Van Rossem. Medicine: Rapid
+      Distributed Information Networking (AIDIN'99), 1999.                           prototyping of production-ready network services in multi-pop environ-
+                                                                                     ments. In 2016 IEEE NFV-SDN, pages 148­153, Nov 2016.
+[25] Johan De Kleer and James Kurien. Fundamentals of model-based diag-        [49] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. Simplifying
+      nosis. IFAC Proceedings Volumes, 36(5):25­36, 2003.                            Datacenter Network Debugging with PathDump. In OSDI '16, pages
+                                                                                     233­248, November 2016.
+[26] Chengze Fan, Jun Bi, Yu Zhou, Cheng Zhang, and Haisu Yu. Ns4: A           [50] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. Distributed
+      p4-driven network simulator. In SIGCOMM Posters and Demos '17,                 Network Monitoring and Debugging with SwitchPointer. In NSDI '18,
+      pages 105­107. August 2017.                                                    pages 453­456, April 2018.
+                                                                               [51] Cheng Tan, Ze Jin, Chuanxiong Guo, Tianrong Zhang, Haitao Wu, Karl
+[27] Seyed K. Fayaz, Tushar Sharma, Ari Fogel, Ratul Mahajan, Todd Mill-             Deng, Dongming Bi, and Dong Xiang. NetBouncer: Active Device and
+      stein, Vyas Sekar, and George Varghese. Efficient Network Reachabil-           Link Failure Localization in Data Center Networks. In 16th USENIX
+      ity Analysis using a Succinct Control Plane Representation. In 12th            Symposium on Networked Systems Design and Implementation, pages
+      USENIX Symposium on Operating Systems Design and Implementation,               599­614, February 2019.
+      pages 423­436, Savannah, GA, November 2016.                              [52] Satish M. Thatte and Jacob A. Abraham. A methodology for functional
+                                                                                     level testing of microprocessors. In 8th Fault-Tolerant Computing Sym-
+[28] Ari Fogel, Stanley Fung, Luis Pedrosa, Meg Walraed-Sullivan, Ramesh             posium, pages 90­95, Toulouse, France, June 1978.
+      Govindan, Ratul Mahajan, and Todd Millstein. A General Approach to       [53] Bingchuan Tian, Xinyi Zhang, Ennan Zhai, Hongqiang Harry Liu,
+      Network Configuration Analysis. In NSDI '15, pages 469­483, May                Qiaobo Ye, Chunsheng Wang, Xin Wu, Zhiming Ji, Yihong Sang, Ming
+      2015.                                                                          Zhang, Da Yu, Chen Tian, Haitao Zheng, and Ben Y. Zhao. Safely
+                                                                                     and Automatically Updating In-Network ACL Configurations with Intent
+[29] Rodrigo Fonseca, George Porter, Randy H Katz, and Scott Shenker. X-             Language. In SIGCOMM '19, pages 214­226, August 2019.
+      Trace: A Pervasive Network Tracing Framework. In NSDI '07, April         [54] Haopei Wang, Anubhavnidhi Abhashkumar, Changyu Lin, Tianrong
+      2007.                                                                          Zhang, Xiaoming Gu, Ning Ma, Chang Wu, Songlin Liu, Wei Zhou,
+                                                                                     Yongbin Dong, Weirong Jiang, and Yi Wang. NetAssistant: Dialogue
+[30] Mojgan Ghasemi, Theophilus Benson, and Jennifer Rexford. Dapper:                based network diagnosis in data center networks. In 21st USENIX Sym-
+      Data plane performance diagnosis of TCP. In SOSR '17, pages 61­74,             posium on Networked Systems Design and Implementation (NSDI 24),
+      April 2017.                                                                    pages 2011­2024, Santa Clara, CA, April 2024. USENIX Association.
+                                                                               [55] Weitao Wang, Xinyu Crystal Wu, Praveen Tammana, Ang Chen, and
+[31] Jim Gray. Why Do Computers Stop and What Can Be Done About It.                  TS Eugene Ng. Closed-loop Network Performance Monitoring and
+      In 5th Symposium on Reliability in Distributed Software and Database           Diagnosis with SpiderMon. In NSDI '22, pages 267­285, April 2022.
+      Systems, pages 3­12, Los Angeles, CA, January 1986.                      [56] Nofel Yaseen, John Sonchack, and Vincent Liu. Synchronized Network
+                                                                                     Snapshots. SIGCOMM '18, pages 402­416, August 2018.
+[32] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray                [57] Fangdan Ye, Da Yu, Ennan Zhai, Hongqiang Harry Liu, Bingchuan
+      Huang, Dave Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, Hua Chen, Zhi-              Tian, Qiaobo Ye, Chunsheng Wang, Xin Wu, Tianchen Guo, Cheng Jin,
+      Wei Lin, and Varugis Kurien. Pingmesh: A Large-Scale System for Data           Duncheng She, Qing Ma, Biao Cheng, Hui Xu, Ming Zhang, Zhiliang
+      Center Network Latency Measurement and Analysis. In SIGCOMM '15,               Wang, and Rodrigo Fonseca. Accuracy, Scalability, Coverage: A Practi-
+      pages 139­152, August 2015.                                                    cal Configuration Verifier on a Global WAN. In SIGCOMM '20, pages
+                                                                                     599­614, August 2020.
+[33] Arpit Gupta, Rob Harrison, Marco Canini, Nick Feamster, Jennifer          [58] Da Yu, Yibo Zhu, Behnaz Arzani, Rodrigo Fonseca, Tianrong Zhang,
+      Rexford, and Walter Willinger. Sonata: Query-driven streaming network          Karl Deng, and Lihua Yuan. dShark: A General, Easy to Program and
+      telemetry. In SIGCOMM '18, pages 357­371, August 2018.                         Scalable Framework for Analyzing In-network Packet Traces. In 16th
+                                                                                     USENIX Symposium on Networked Systems Design and Implementation,
+[34] Andreas Haeberlen, Ioannis Avramopoulos, Jennifer Rexford, and Peter            pages 207­220, February 2019.
+      Druschel. NetReview: Detecting when interdomain routing goes wrong.      [59] Hongyi Zeng, Peyman Kazemian, George Varghese, and Nick McKe-
+      In NSDI '09, pages 437­452, April 2009.                                        own. Automatic Test Packet Generation. In 8th International Conference
+                                                                                     on Emerging Networking Experiments and Technologies, pages 241­
+[35] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David                    252, Nice, France, December 2012.
+      Mazie´res, and Nick McKeown. Where is the debugger for my software-      [60] Yibo Zhu, Nanxi Kang, Jiaxin Cao, Albert Greenberg, Guohan Lu, Ratul
+      defined network? In HotSDN '12, pages 55­60, August 2012.                      Mahajan, Dave Maltz, Lihua Yuan, Ming Zhang, Ben Y Zhao, et al.
+                                                                                     Packet-level telemetry in large datacenter networks. In SIGCOMM '15,
+[36] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David                    pages 479­491, August 2015.
+      Mazie`res, and Nick McKeown. I know what your packet did last hop:
+      Using packet histories to troubleshoot networks. In NSDI '14, pages
+      71­85, April 2014.
+
+[37] Vimalkumar Jeyakumar, Mohammad Alizadeh, Yilong Geng,
+      Changhoon Kim, and David Mazie`res. Millions of little minions:
+      Using packets for low latency network programming and visibility. In
+      SIGCOMM '14, pages 3­14, August 2014.
+
+[38] Barry W. Johnson. Design and Analysis of Fault-Tolerant Digital Sys-
+      tems. Addison-Wesley, 1989.
+
+[39] Peyman Kazemian, George Varghese, and Nick McKeown. Header
+      Space Analysis: Static Checking For Networks. In 9th USENIX Sym-
+      posium on Networked Systems Design and Implementation, pages 113­
+      126, San Jose, CA, April 2012.
+
+[40] M. Lad, Lixia Zhang, and D. Massey. Link-rank: A graphical tool for
+      capturing bgp routing dynamics. In IEEE/IFIP NOMS 2004, volume 1,
+      pages 627­640, April 2004.
+
+[41] Bob Lantz, Brandon Heller, and Nick McKeown. A Network in a
+      Laptop: Rapid Prototyping for Software-Defined Networks. In 9th ACM
+      SIGCOMM Workshop on Hot Topics in Networks, pages 1­6, Monterey,
+      CA, October 2010.
+
+[42] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. FlowRadar: A
+      Better NetFlow for Data Centers. In NSDI '16, pages 311­324, March
+      2016.
+
+[43] Nuno P. Lopes, Nikolaj Bjørner, Patrice Godefroid, Karthick Jayaraman,
+      and George Varghese. Checking Beliefs in Dynamic Networks. In 12th
+

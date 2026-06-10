@@ -1,0 +1,1248 @@
+              Towards LLM-Based Failure Localization
+
+                     in Production-Scale Networks
+
+   Chenxu Wang1,2, Xumiao Zhang2, Runwei Lu2,3, Xianshang Lin2, Xuan Zeng2, Xinlei Zhang2,
+Zhe An2, Gongwei Wu2, Jiaqi Gao2, Chen Tian1, Guihai Chen1, Guyue Liu4, Yuhong Liao2, Tao Lin2,
+
+                                            Dennis Cai2, Ennan Zhai2
+
+               1Nanjing University 2Alibaba Cloud 3New York University Shanghai 4Peking University
+
+Abstract                                                                                       (WAN) and tens of interconnected data centers. Network incidents
+                                                                                               are, nevertheless, inevitable given the scale of our operations and
+Root causing and failure localization are critical to maintain relia-                          can significantly impact reliability, potentially leading to revenue
+bility in cloud network operations. When an incident is reported,                              loss. To ensure efficient and effective network incident manage-
+network operators must review massive volumes of monitoring                                    ment, we have developed a comprehensive monitoring system,
+data and identify the root cause (i.e., error device) as fast as possible,                     benefiting from recent advances in network telemetry and moni-
+making it extremely challenging even for experienced operators.                                toring [7, 22, 41, 62, 90]. The system initially attempts to self-heal
+Large language models (LLMs) have shown great potential in text                                using predefined rules and automated solutions based on operators'
+understanding and reasoning. In this paper, we present BiAn, an                                years of experience. However, not all incidents are straightforward
+LLM-based framework designed to assist operators in efficient inci-                            enough to be directly addressed--complex cases still require manual
+dent investigation. BiAn processes monitoring data and generates                               investigation, in particular for identifying root causes and locating
+error device rankings with detailed explanations. To date, BiAn has                            failures. Mitigation actions are taken afterward. Incident investiga-
+been deployed in our network infrastructure for 10 months and                                  tion is the most time-consuming and cognitively demanding in the
+it has successfully assisted operators in identifying error devices                            workflow.
+more quickly, reducing time to root causing by 20.5% (55.2% for
+high-risk incidents). Extensive performance evaluations based on                                  When an incident occurs, operators carefully review massive
+17 months of real cases further demonstrate that BiAn achieves                                 logs from diverse monitoring tools, understand interdependencies
+accurate and fast failure localization. It improves accuracy by 9.2%                           between anomalous events as well as affected devices, analyze the
+compared to the baseline approach.                                                             root cause, and finally identify the faulty device (see Figure 3 for
+                                                                                               a detailed case). Due to time constraints, oftentimes they need to
+CCS Concepts                                                                                   finish the investigation before thoroughly reviewing all available
+                                                                                               logs. The urgency of an incident increases as time goes by. Con-
+· Networks  Data center networks; Network management;                                          sequently, the efficiency and accuracy are often bottlenecked by
+Network monitoring; Network reliability.                                                       operators' limited capacity to process large amounts of informa-
+                                                                                               tion. In addition, as our network infrastructure evolves, it becomes
+Keywords                                                                                       increasingly challenging for operators to perform fast and accurate
+                                                                                               failure localization. Therefore, we aim to design a tool to assist in
+Data Center Networks, Network Troubleshooting, Incident Man-                                   the reasoning process of incident investigation.
+agement, Root Cause Analysis, Large Language Model, AIOps
+                                                                                                  Large language models (LLMs) have demonstrated superior ca-
+ACM Reference Format:                                                                          pabilities in efficiently reading and reasoning over large-scale data,
+Chenxu Wang1,2, Xumiao Zhang2, Runwei Lu2,3, Xianshang Lin2, Xuan                              particularly in handling complex tasks. Leveraging LLMs to under-
+Zeng2, Xinlei Zhang2,, Zhe An2, Gongwei Wu2, Jiaqi Gao2, Chen Tian1,                           stand textual data from monitoring tools and assist operators in
+Guihai Chen1, Guyue Liu4, Yuhong Liao2, Tao Lin2, Dennis Cai2, Ennan                           failure localization presents a promising direction. LLMs surpass
+Zhai2. 2025. Towards LLM-Based Failure Localization in Production-Scale                        traditional automated methods in logical reasoning and generaliz-
+Networks. In ACM SIGCOMM 2025 Conference (SIGCOMM '25), September                              ability for unseen incidents. Previous research on applying LLMs
+8­11, 2025, Coimbra, Portugal. ACM, New York, NY, USA, 16 pages. https:                        in network operations [5, 16, 33, 65, 81] either is limited to coarse-
+//doi.org/10.1145/3718958.3750505                                                              grained analysis, still requiring operators to identify root causes; or
+                                                                                               utilizes only partial information (e.g., incident summaries), which
+1 Introduction                                                                                 oversimplifies failure localization (§2.3).
+
+As one of the largest public cloud providers, Alibaba Cloud serves                                We present BiAn1, a practical and comprehensive system for
+millions of customers all over the world 24×7. We build and operate                            accurate and fast root causing and failure localization in Alibaba
+a global network infrastructure consisting of a wide area network                              Cloud's network infrastructure. BiAn employs LLM agents powered
+                                                                                               by carefully crafted prompts to understand network monitoring
+Permission to make digital or hard copies of all or part of this work for personal or          logs, extract key information, reason through incidents, and assist
+classroom use is granted without fee provided that copies are not made or distributed          operators by providing error device rankings with explanations.
+for profit or commercial advantage and that copies bear this notice and the full citation      BiAn achieves its goal through the following design aspects:
+on the first page. Copyrights for components of this work owned by others than the
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or         1In ancient Chinese mythology, Bi An is a divine beast known for its strong sense of
+republish, to post on servers or to redistribute to lists, requires prior specific permission   justice and ability to distinguish right from wrong. We named our system BiAn to
+and/or a fee. Request permissions from permissions@acm.org.                                     reflect its role in intelligently analyzing root causes and identifying error devices in
+SIGCOMM '25, Coimbra, Portugal                                                                  complex network environments.
+© 2025 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-1524-2/2025/09
+https://doi.org/10.1145/3718958.3750505
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                              Chenxu Wang, Xumiao Zhang et al.
+
+Hierarchical reasoning for large data scale (§4.1). Facing the              Network    Anomaly        Self-healing
+logs generated by various monitors for different affected devices,         Monitoring  Detection
+not only is it impractical for human operators to analyze based on                                ~90%
+all the data, but also LLMs struggle to capture the most relevant                                                     Incident
+information at once. To tackle this, BiAn approaches the local-                                   ~10%               Mitigation
+ization task through three separate steps: (1) It first summarizes
+monitor alerts into simplified alert reports. (2) Then, it groups these                                  Manual
+reports by device and conducts device-level anomaly analysis fol-                                     Investigation
+lowing standard operating procedures (SOPs) compiled from years
+of incident handling experience by operators. (3) Finally, BiAn com-            Figure 1: Network incident management workflow.
+bines all single-device analysis results to derive failure scores for
+candidate devices based on their suspicion levels.                         Europe, Asia, and Oceania. A private WAN serves as the backbone,
+                                                                           interconnecting all these data center networks. Our network oper-
+Multi-pipeline integration to tackle complexity (§4.2). In large-          ations center (NOC) acts as the guardian for all network traffic. As
+scale networks with countless devices interconnected, an incident          incidents in the physical network can significantly impact overall
+caused by one device can spread across a number of logically nearby        reliability, which is our top priority, network incident management
+devices, all of which may present anomalous behaviors at different         (IM) is a key focus for the team.
+times. To address the spatial and temporal complexity, we include
+two additional dimensions of data, network topology and event              2.1 Incident Management Workflow
+timeline, into the original processing pipeline. By integrating these
+three pipelines, BiAn performs more comprehensive reasoning on             Figure 1 illustrates our operators' IM workflow, consisting of sev-
+incidents and generates scores with more informed explanations.            eral steps: network monitoring, anomaly detection, self-healing,
+                                                                           incident investigation, and incident mitigation. Over the years,
+Continuous updating to cope with network evolution (§4.3).                 we have developed a sophisticated network monitoring system
+                                                                           equipped with a variety of tools, including foundational diagnostic
+As our network components and configurations rapidly evolve,               utilities like ping and traceroute, statistical traffic analysis tech-
+operators need to learn from historical incident handling and keep         niques, and more advanced solutions adapted from state-of-the-art
+their operating procedures and knowledge up-to-date. The same              efforts [7, 22, 41, 62, 90]. They process raw monitoring data and gen-
+applies to BiAn. We propose to continuously "train" the prompts            erate alerts for anomalous behaviors. When anomalies are detected,
+for reasoning tasks. Specifically, we use LLMs' capabilities of gen-       the system first mitigates them via predefined rules and automated
+eration, reflection, and summarization to extract useful knowledge         solutions, which is called self-healing. However, in a large-scale
+from historical incidents. We then enrich the task prompts with            network, there are always issues that are too complex to be directly
+this knowledge digest to enhance BiAn's reasoning performance.             addressed by the system or that are previously unseen. The system
+                                                                           reports them as "incidents" and on-call operators get involved. In
+Optimizations for practical consideration (§4.4). To make BiAn             a typical week, 2377 anomalies can be self-healed while 202 are
+practically useful in assisting operators with failure localization, it    handled by our operators (i.e., incidents).
+needs to be fast (real-time) and resource-efficient. We utilize smaller
+LLMs to conduct simpler tasks, such as monitor alert summary and           2.2 Failure Localization and Limitations
+single-device analysis, and apply fine-tuning to incorporate domain-
+specific knowledge. In this way, we can achieve both improved              When complex incidents bypass self-healed, operators step in to
+localization accuracy and reduced reasoning latency. We also devise        further investigate. For effective mitigation, they need to find the
+an early stop mechanism to prevent redundant processing when               root cause of the incident and locate the failure (i.e., error device).
+BiAn has already obtained high confidence after the initial stage of       In this case, the system is more like providing preliminary "clues"
+processing. Additionally, we enable parallel execution for the same        or "recommendations", rather than definitive localization results.
+level of agents to run simultaneously.                                     Operators continue with outputs from the upstream monitoring
+                                                                           and diagnosis systems.
+   BiAn has been deployed in our global network infrastructure
+for almost a year (10 months) and has proven its ability to assist         Why failure localization is hard for the operators? The man-
+operators in network incident investigation. We present A/B tests,         ual investigation is an iterative reasoning process. Operators first
+feedback from operators, and representative real cases, to demon-          review the incident description generated by the system. Then, they
+strate its effectiveness (§5). Besides, with real incident data collected  pick a few monitoring data types and retrieve the corresponding
+over the past 17 months, we conduct extensive offline experiments          alerts. Initial analyses rarely yield clear conclusions. Thus, they
+to comprehensively evaluate the performance of BiAn across var-            continue to obtain and analyze additional types of data until they
+ious aspects (§6). We discuss several lessons learned through the          have sufficient confidence in identifying the root cause and error
+design, deployment, and evaluation of BiAn (§7).                           device. Based on our experience, this process is challenging for our
+                                                                           operators due to the following reasons:
+Ethics. This work does not raise any ethical issues.                        1 Excessive alerts: An incident can trigger anomalies of varying
+                                                                           degrees across several to hundreds of devices in the network, each
+2 Background and Motivation                                                potentially generating hundreds of alerts. The total size of relevant
+                                                                           monitor alerts for an incident can exceed 1 GB (8k log entries), with
+Alibaba Cloud operates a global network infrastructure that sup-           an average of 26.4 MB, as shown in Figure 2.
+ports a wide range of cloud services, including computing, storage,         2 Complex root causing: Under time pressure, it is impractical
+and AI training/inference. By January 2025, this infrastructure spans      for operators to analyze based on all available information. The
+87 data centers across 29 geographical regions in North America,
+Towards LLM-Based Failure Localization in Production-Scale Networks                                 SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+       101         102            103                                     104      A1          A2              A Incident Response Log
+       1                                                             103                                                L Time Message
+     0.8
+     0.6     Entry Count                                                                                       1 01:08:08 [First event] Large packet loss in DC XXX.
+     0.4     Data Size (MB)
+     0.2                                                                                                       2 01:10:06 Incident reported: B2-A1 Flapping. On-call notified.
+
+CDF    10-2                                                                         Flapping         Flapping           3 01:11:55 Incident reported (auto merged): B3-A1 Flapping.
+
+                                                                               B1      B2                B3             4 01:11:59 [Batch] Multiple device Ping drop.
+
+                                                                                                                        5 01:12:14 [Log] Affected BUs notified.
+
+                                                                                                               B 6 01:12:26 Incident reported (auto merged): No Ping from B2.
+
+                                                                                                                        7 01:13:38 On-call sync: flapping, ping alerts persist.
+
+                                                                                        Can't Ping                       8 01:14:01 Incident reported (auto merged): ICMP level B.
+
+                                                                                                                9 01:14:44 [Log] Packet loss stable.
+                                                                                                                        10 01:15:30 On-call sync: DC confirmed, multiple device alerts.
+
+                                                                                                     ICMP Alert (B) 11 01:15:30 Backup OC engineers involved.
+                                                                                                               C 12 01:15:50 [Log] OC XXX: Suspect service update-related.
+             10-1  100       101       102                                             C1                             13 01:17:29 [Log] Impact scope synced with affected BUs.
+
+             Per-Incident Monitor Alert Statistics                                                             14 01:18:11 [Log] OC XXX: service update OK.
+
+                                                                                                               15 01:19:09 [Log] OC YYY: level B traffic drop.
+
+                                                                                                               16 01:23:00 More OC engineers involved.
+
+                                                                                                               17 01:26:47 Initial root cause identified, B2.
+
+             Figure 2: Large volume of monitoring data.                                D1                      D 18 01:26:50 [Log] Start tracing on B2.
+                                                                                                                      19 01:28:15 Tracing data confirmed B2.
+
+                                                                                                               20 01:30:28 Mitigation done.
+
+root causes of many failures are complex, and there is no fixed rule                 Figure 3: A motivating example (partial topology).
+for the investigation. It often takes more than 10 minutes to identify
+a root cause, exceeding our service-level agreements (SLAs). The                  One might ask: why not rely solely on traditional automated meth-
+longest cases may take over half an hour.                                      ods (e.g., heuristic-based, statistical)? While such methods are valu-
+ 3 High incident load: As mentioned, operators need to handle a                able and already help mitigate countless anomalies, they are often
+large number of incidents (e.g., 202 incidents in a week). As a result,        based on specific metrics or historical patterns, limiting their ability
+the efficiency and accuracy of failure localization become heavily             to generalize to previously unseen cases. Extending those tools
+dependent on the expertise and experience of operators.                        to handle new cases is expensive, and achieving 100% coverage is
+                                                                               unrealistic. By contrast, similar to human operators, LLMs excel at
+   Taking the incident in Figure 3 as an example. The monitoring               logical reasoning and possess greater generalization capabilities.
+system detected an alert of significant packet loss in a data center,          Thus, LLMs can serve as a bridge, complementing existing tools
+which resulted in multiple incidents being reported within 4 min-              by assisting operators in incidents that require a holistic analysis
+utes, though merged later. These include flapping between core                 of available information to identify root causes confidently. We
+routers 2 - 1 and 3 - 1 (L2, L3 in the Response Log), an un-                   present a detailed comparison between LLM-based and traditional
+reachable router 2 (L6), and an ICMP-related incident (L8). Tens               methods later in §6.1.
+of high-risk alerts appeared over time. Operators first suspected
+service updates (L12), which were ruled out after checking update                 We are not the first to explore the use of LLMs in network-
+histories (L14). Next, they shifted focus to traffic drops. After in-          ing [5, 16, 33, 56, 65, 69, 72, 81, 84, 86]. However, prior works on
+vestigation, the root cause was identified as 2 (L17). To confirm              physical network operations are limited in several ways. Some
+2 was not affected by neighboring devices like 3, active probing               focus on monitoring or only provide coarse-grained root cause
+was conducted (L18). 22 minutes after the first alert, they finished           analysis: MonitorAssistant [81] generates guidance-oriented anom-
+the mitigation, by isolating 2 (L20). Despite immediate attention,             aly reports. Oasis [33] assesses the impact scope of outages and
+operators had to review alerts of affected devices, engage in ex-              produces summaries. RCACopilot [16] outputs the root cause cat-
+tensive discussions, and go through trial and error. Faced with the            egory with explanations after triggering active probing. For the
+complication of massive alerts, it is challenging for them to pinpoint         incident in Figure 3, these tools can only return a summary list-
+the root cause methodically.                                                   ing the range of affected devices with suspect information rather
+                                                                               than directly pointing out the specific culprit, 2. The operators
+   A major difficulty in this process is the conflict between the              still have much work to do. NetAssistant [65] recognizes diagnosis
+massive amount of information generated by the monitoring system               intent and follow predefined workflows to process queries, leav-
+and the limited capacity of operators to consume it. As the network            ing the investigation task to network users/operators. Ahmed et
+scales up, the challenges ahead only grow.                                     al. [5] study GPT's capabilities in producing root causes and mit-
+                                                                               igation steps from incident titles and digests. Compared to using
+Our goal. We aim to develop a system that facilitates fast, accurate           detailed logs, the lack of deep visibility into incidents cannot lead
+root causing and failure localization for our large-scale network              to fully informed decisions. In Figure 3, this type of solution cannot
+infrastructure (including WAN and data center networks). Note                  pinpoint 2 based on auto-generated, low-quality incident digests.
+that we are not replacing any existing monitors or data analytic               We thus decide to build an LLM-powered root causing and failure
+algorithms. Instead, we intend this system as an assistant to our              localization system to meet our goal.
+operators during incident investigation. The IM workflow shown
+in Figure 1 remains the same.                                                  2.4 Challenges
+
+2.3 Opportunities with LLMs                                                    Building such a system poses the following challenges:
+
+Recently, large language models (LLMs) such as GPT [3], Claude [2],            Large volume and diversity of data. As mentioned in §2.2, an
+Llama [64], Gemini [63], and Qwen [10], trained with large text                incident can affect many network devices, and the monitoring sys-
+corpora, have demonstrated superior capabilities in text reading and           tem generates logs of dozens of types. Hence, the system must
+reasoning. The outputs of upstream monitors and data processing                efficiently extract relevant information necessary for accurate lo-
+tools are mainly textual, and are designed for human operators to              calization from this sea of data.
+interpret. Besides, unlike humans, LLMs are not prone to mental
+stress and can operate continuously and efficiently. These present             Complex device and event relationships. Affected devices may
+a promising direction to assist in the reasoning process.                      span different parts of the network and trigger events at different
+                                                                               times. The spatial (i.e., topological) and temporal interdependencies
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                           Chenxu Wang, Xumiao Zhang et al.
+
+among devices and events complicate the process of tracing the                      operators to carefully read vast amounts of data, logically reason
+original error device.                                                              step by step to identify the error device, and make the final decision.
+                                                                                    With BiAn, the search space is greatly reduced, and the entire pro-
+Need for fast investigation. In production environments, it is                      cess is transformed to reviewing BiAn's output (i.e., device ranks
+crucial to detect and fix incidents as quickly as possible. Unsuc-                  and explanations), validating the results by selectively checking
+cessful incident investigation, whether due to slow responses or                    relevant data sources, and making more informed decisions, faster
+incorrect diagnoses, can lead to significant revenue loss and harm                  (see Figure 8a for detailed comparisons).
+the provider's reputation. For example, major cloud service outages
+can cost companies $1 million per hour as reported [1].                             4 Design
+
+Rapid evolution of network infrastructures. Modern network                          This section introduces the key components of BiAn and describes
+infrastructures are highly dynamic, with frequent updates to com-                   how it addresses each challenge outlined in §2.4.
+ponents and topologies. This changing environment makes it chal-
+lenging to maintain consistent performance over time and calls                      4.1 Hierarchical Reasoning
+for an adaptable solution that continuously learns from changes in
+network configurations as well as past incident investigations to                   The current incident investigation (§2.2) is primarily driven by hu-
+stay effective.                                                                     man operators. During an incident, the monitoring system generate
+                                                                                    thousands of alerts, making it impossible for operators to review
+Result explainability and consistency. The main purpose of                          everything in time. While LLMs are more capable of reading effi-
+building this automated system is to "assist" operators rather than                 ciently, they too face limitations: LLMs have token limits as they
+to fully replace them. Therefore, its outputs need to come with                     cannot absorb too much information at a time; and they can be
+explanations so that operators can easily understand and trust.                     distracted by irrelevant information. Our approach is to process
+Besides, the inherent randomness of LLMs should be minimized to                     different types of alerts for different devices separately and breaks
+prevent unpredictable changes in outputs that can disrupt operators'                down the investigation process into structured steps: monitor alert
+decision-making process.                                                            summary, single-device anomaly analysis, and joint scoring.
+
+3 Overview                                                                          Monitor alert summary. We first utilize LLMs to process incident-
+                                                                                    related alert data produced by 11 upstream monitoring tools, as
+We propose BiAn, a practical LLM-powered root causing and fail-                     listed in Figure 5 (left). These tools are developed for various pur-
+ure localization system for cloud network operations. Acting as                     poses and have been refined over the years of operation, to compre-
+an assistant in incident investigation, BiAn uses LLMs to under-                    hensively monitor network health and performance. When certain
+stand monitor alerts, reason about root causes, and identify error                  thresholds for indicators such as climbs, slumps, spikes, or dips in
+devices. This approach mirrors the thinking and handling processes                  time series data are met, the corresponding monitor generates a
+of network operators during the investigation. Figure 4 shows the                   log item. For instance, the "Device Ping Log" tool tracks dropped
+architecture of BiAn.                                                               Ping packets between devices and records details such as device
+                                                                                    name, dropped Ping count, timestamps, and device role.
+   When an incident is reported, BiAn takes as input monitor alerts
+for candidate devices and predicts the probabilities of each device                    In BiAn, each type of alert is processed by a dedicated LLM
+being the actual error device, utilizing its internal knowledge about               agent which is carefully prompted to extract key information and
+network incidents and reasoning capability. The candidates are                      summarize anomalous behaviors. For each device, BiAn generates
+the most suspicious devices, selected by the upstream automated                     11 highly condensed summaries and forwards them for subsequent
+monitoring system.2 Since the alert data may contain redundancy                     analysis. This approach allows us to easily extend BiAn for other
+and noise due to the logging formatting, we first preprocess it to                  monitoring tools by adding new LLM agents. The prompt tem-
+remove empty items (e.g., keys with no values) and unused fields.                   plate consists of five parts: role definition, input field description,
+Then, LLM agents that we build following the standard operating                     summary guidelines, alert example, and expected summary, and
+procedures (SOPs) established by operators, analyze and reason                      response format. Additional details, including the prompt templates
+about the incident. The output of BiAn is a ranked list of candidate                and an input example of monitor alert summary agents, are pro-
+devices with explanations for operators to review. Compared to a                    vided in Appendices A and B.
+single answer, this ranked list adds fault tolerance: operators can
+investigate secondary devices when the top-ranked is incorrect (see                 Single-device anomaly analysis. Given the summarized alerts,
+§6.1 for more discussion). We reiterate that BiAn is not designed to                we should answer an important question: what anomaly can we
+replace human operators, but to significantly reduce distractions                   derive from the data?
+from irrelevant information. Operators make the final decisions for
+incident mitigation.                                                                  Key Experience. Our operators have defined 7 scenarios of
+                                                                                      anomalies (Figure 5 right), based on their 10-year operational
+   Originally, operators would have to quickly go through system-                     experience. These scenarios can cover all anomalies that an error
+generated incident summaries and extensive monitoring data. Al-                       device may present. Each anomaly analysis relies on a specific
+though the monitoring system provides key information for local-                      combination of alert types (left).
+ization, it hides in the flood of alerts. Due to limited information                   More importantly, operators' experience also shows that such a
+processing capacity, operators usually spend considerable time                      small number of scenarios can cover 100% of incidents observable
+filtering out irrelevant alerts. The traditional workflow requires                  through alerts, which significantly simplifies our design. These sce-
+                                                                                    narios represent low-level symptoms commonly found on devices
+2The system has a default sorting mechanism that considers the volume and severity  in large-scale networks and are not tied to specific architectures or
+ of alerts. The number of candidates is empirically set (e.g., 6).
+Towards LLM-Based Failure Localization in Production-Scale Networks                                      SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+Reasoning Stage 1: Pipeline 1 only
+
+Monitor Alert Summary (Step 1)                                       Device Anomaly Analysis (Step 2)                                Joint Scoring (Step 3)
+
+A     Tool 1                 B    Tool 1                             A         Device Down            B                                 Device Score
+
+        Tool 2                      Tool 2                                     Congestion                                            A              0.40
+
+              Tool N                      Tool N
+
+                                                                               Flapping                  Flapping                    B              0.23
+
+C     Tool 1                 D    Tool 1                             C                                D
+      Tool 2                      Tool 2 
+                                                                               Device Down                             Traffic Drop  C              0.28
+
+              Tool N                      Tool N
+
+                                                                               Flapping                                              D              0.09
+
+Reasoning Stage 2: Pipelines 1,2,3                (When early stopped, the scores will not change)                                   Y  Early
+
+                                                                               Integrated Root Causing                                  Stop
+
+Device Ranking & Explanations                                        Pipe. 2: Topology Pipe. 3: Timeline                                         N
+
+       Device Score Reason                                              A                Device Down                                     Device  Analyses
+                                                                                                                                     A
+   A                   0.84                                                              Congestion                                                Device Down
+                                                                                                                                                   Congestion
+                                                                                            Flapping                                               Flapping
+
+                                                                        D
+
+   B                   0.06                                                                                                          B              Flapping
+
+                                                                     B                     C
+
+   C                   0.10                                          Flapping  Device Down                                           C              Device Down
+                                                                               Flapping                                                             Flapping
+
+Figure 4: System architecture of BiAn: The two-stage reasoning process first assigns initial scores to all candidates based on
+anomaly analysis. In Stage 2, which incorporates more comprehensive data for a narrowed list of devices, the error device
+stands out with more pronounced score differences.
+
+  Data Source Type                Device Anomaly Scenario                      and more numerous behaviors compared to others, which may also
+   Dashboard Alarms                        Device Down                         have anomalies found, but only less severe or partial.
+                                            Congestion
+       Link States                          Traffic Drop                       4.2 Three-pipeline Integration
+   Link Traffic Usage                         Flapping
+  Traffic Drop Device                                                          Given the complex spatial and temporal relationships between de-
+                                        Network Changes                        vices and anomaly events (§2.2), sometimes the system cannot confi-
+       Packet Error                        Syslog Surge                        dently identify the error device using the above SOP-based pipeline
+    High-risk Syslog                        Alarm Count                        (Pipeline 1), which mainly focuses on single-device anomalies and
+    Device Ping Log                                                            their severity levels. Besides, the process demands accurate results.
+   Port Down Events                                                            To address such challenges, BiAn incorporates additional infor-
+   Command History                                                             mation through two more pipelines, network topology and event
+Device Change History                                                          timeline, to create a two-stage reasoning framework.
+     Syslog Volume
+                                                                               Pipeline 2: Network topology. As network devices are intercon-
+Figure 5: Mapping of data source types and device anomaly                      nected, anomalies can propagate: anomalies on one device may
+                                                                               cause anomalous behaviors on its neighbors. For example, if Device
+scenarios. An example of analysis is provided.                                  is a parent node of Devices  and , and anomalies are detected
+                                                                               on all three devices,  is likely the source of the incident. To account
+device vendors. Some issues such as silent packet drops may not                for this, BiAn extracts topology-related information from logs. It
+generate alerts and are thus out of scope.                                     identifies a smaller sub-topology that includes all suspect devices.
+                                                                               This approach allows BiAn to focus on the most relevant topologi-
+   Driven by the above insights, we employ 7 LLM agents (see                   cal information during analysis. We create an agent that processes
+prompt template in Appendix A), each responsible for analyzing                 JSON-formatted topology data using the following algorithm:
+single devices for one of the anomaly scenarios according to the
+mapping in Figure 5. For example, the Flapping analysis uses "Dash-              1 Find the shortest paths between every two devices.
+board Alarms" and "Port Down Events" summaries to determine                      2 For any pair of suspect devices, for instance, A and B, remove
+whether a device has a flapping anomaly. An anomaly is not the                   the shortest paths between A and B if a suspect device C exists
+root cause of the incident, and one device can exhibit multiple                  on their shortest path. The A-B relationship can be represented
+anomalous behaviors.                                                            via A-C and B-C instead.
+                                                                                 3 Construct a topology using the shortest paths left.
+Joint scoring. In the last step, BiAn consolidates the anomaly anal-             4 Simplify the topology by aggregating non-suspect network
+ysis reports from all suspect devices to reason about the root cause             devices in the same device group into a single node.
+of the incident and locate the error device. For the joint reasoning,
+operators set severity levels for different anomaly scenarios. An              Pipeline 3: Event timeline. Different anomalies on different de-
+LLM agent is tasked to evaluate the compiled reports and generate              vices occur at different times. The underlying insight is that devices
+failure scores for all suspect devices, reflecting the likelihood that         with anomalies reported earlier have higher suspicion. BiAn takes
+each device is the error device. The scores add up to 1. The highest-          into account the timeline data when performing the final reasoning.
+scoring device is marked as the error device. This step is based on
+another key insight: The error device typically exhibits more severe
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                           Chenxu Wang, Xumiao Zhang et al.
+
+                 Reasoning Stage 2 - Integrated Root Causing                                                Exploration        (trial count is configurable)  Reflection
+
+    You are an experienced network operations engineer specializing in investigating                                             Reasoning Trials
+    complex incidents in large-scale networks. Your task is to analyze reports of suspect
+    devices, identify the most possible error device, and provide explanations.             Incident Logs  High Temperature T                                          Compare
+    Anomaly Analysis Reports:                                                                                                                                   Incorrect & Correct
+                                                                                            Refined Prompt
+       <Device A>: {Analysis 1}: {Analysis content}, {Analysis 2}: {Analysis content}, ...                                                                    Knowledge
+       ...
+    Network Topology:                                                                                          Prompt                                          Knowledge
+       [<Device A>, <Device B>], [<Device A>, <Device D>, <Device C>], ...                                 Augmentation                                       Consolidation
+       ...
+    Global Timeline:                                                                             Figure 7: Continuous prompt updating mechanism.
+       {Timestamp 1}: {Event 1}, {Timestamp 2}: {Event 2}, {Timestamp 3}: {Event 3}, ...
+       ...                                                                                  anomaly scenarios (or removal of stale ones). For the scoring step
+    Principles for Investigation (SOPs):                                                    (Step 3), a more sophisticated mechanism is needed to enable LLM
+     1. Anomaly analysis                                                                    agents to update continuously. Manually reviewing and revising
+     2. Differences between devices                                                         task prompts is straightforward but labor-intensive, which calls for
+     3. Alarm count comparison                                                              automated training. However, challenges arise in constructing a
+     4. Timeline and Topology                                                               training dataset. Data augmentation cannot be used here as we aim
+                                                                                            for explainable outputs; while operators can label error devices in
+   Figure 6: Prompt template for integrated root causing.                                   post-incident reviews, scoring and explanations are subjective and
+                                                                                            require detailed reasoning. Thus, fine-tuning or retrieval augmented
+Specifically, the timeline is a list of events from all devices in the                      generation (RAG) [39] with historical data is impractical.
+order of start times.
+                                                                                               To address this, we propose to train LLM's prompts instead of
+Integrated root causing. BiAn does not execute all three pipelines                          its parameters. This involves two phases: (1) extracting knowl-
+at the beginning. After running Pipeline 1 on all devices and ob-                           edge from past incidents using LLM's generation, reflection, and
+taining initial scores, BiAn filters out devices with low suspicion                         summarization capabilities, and (2) integrating the knowledge into
+and starts the second reasoning stage on the remaining devices.                             prompts to enhance reasoning. The algorithm in Figure 7 runs as
+Specifically, borrowing from LLMs, we define a Top-p concept to                             an iterative loop with four parts: exploration, reflection, knowledge
+retain the devices whose cumulative scores, after applying softmax                          consolidation, and prompt augmentation. This requires designing
+and ranking in descending order, reach a threshold (). This en-                             and building additional LLM agents.
+sures the remaining device data is kept relevant and focuses on the
+most suspicious devices. Then, with an enhanced final reasoning                             Exploration. Initially, the scoring agent performs 5 reasoning at-
+LLM agent, BiAn performs integrated root causing and generates                              tempts for each incident with the current task prompt. We evaluate
+failure scores with data from all three pipelines: device anomaly                           the accuracy and filter out cases with perfect accuracy (i.e., 100%).
+reports, topological relationships, and temporal event data. The                            For the remaining cases, reasoning is repeated with a higher tem-
+prompt for this agent, as presented in Figure 6, specifies the task                         perature  to encourage diversity, thus increasing the likelihood of
+objective, combines information from three pipelines, and lists prin-                       obtaining both correct and incorrect results. We then prompt the
+ciples for root cause analysis. By incorporating data from multiple                         LLM using zero-shot chain-of-thought (CoT) to generate interme-
+aspects, this approach addresses the limitations of reasoning on                            diate reasoning steps along with the final scores.
+a single pipeline, improving the overall localization performance.
+Also, when Pipelines 2 and 3 provide stronger evidence for alternate                        Reflection. We build an LLM agent (Agent R) to analyze those di-
+causes, BiAn can adjust its predictions from Pipeline 1 accordingly.                        verse reasoning trials and extract useful knowledge for root causing.
+                                                                                            By contrasting correct and incorrect trials, R identifies key factors
+   Furthermore, to tackle the randomness of LLMs (for creativity                            influencing the results and proposes actionable knowledge that can
+by design), we consider averaging results from repeated executions.                         effectively triggers (or avoid) such factors leading to correct (or
+Specifically, we introduce Rank of Ranks: (1) We run the integrated                         incorrect) trials.
+reasoning step  times; (2) For each run, we rank the devices by
+failure scores; (3) We calculate the average rank of each device                            Knowledge consolidation. To ensure coherence, the knowledge
+across  trials. Then, the highest-ranked device by average ranks is                         extracted from all incidents is summarized by a different LLM agent
+considered the error device. This approach smooths out the random                           (Agent C). C counts the frequency of similar knowledge, and ranks
+results output by the LLM while mitigating inaccuracy in absolute                           them accordingly. We retain the six most frequently occurring
+scoring. For example, in three trials, the failure scores for two de-                       pieces of knowledge, as these are more likely to have broad appli-
+vices are {0.6, 0.3}, {0.5, 0.4}, and {0.2, 0.7}, respectively. The outlier in              cability across various incidents.
+the third output may result from LLM's randomness. We can easily
+tell that the first device is more suspicious. However, if we simply                        Prompt augmentation. Lastly, we integrate the consolidated
+average their failure scores, the worse-performing one will be the                          knowledge into the task prompt to improve reasoning performance.
+second device, while the results of Rank of Ranks will stay with our                        A buffer array stores knowledge from previous iterations. Newly ex-
+intuition.  is configured empirically, and we set it to 3. We show                          tracted knowledge is added and merged with prior knowledge, with
+in §6.4 that increasing  beyond 3 yields diminishing performance                            similar pieces combined and their frequencies updated. Another
+improvements. Unless the model fundamentally misinterprets a
+case, repeated reasoning converges eventually.
+
+4.3 Continuous Prompt Updating
+
+As our networks and investigation procedures evolve rapidly, BiAn
+is designed to adapt. For alert summary and anomaly analysis, our
+modular design allows for flexible addition of new monitors or
+Towards LLM-Based Failure Localization in Production-Scale Networks                                 SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+LLM uses the old prompt and the knowledge buffer to generate a                          Time(s)500Human                                                 2
+"refined prompt". This ensures controlled adjustments and produces                                                                  Satisfaction score
+logically consistent prompts. The new prompt resembles the origi-                       400  RCA                                                        1.5
+nal prompt structure, appended with newly learned knowledge.
+                                                                                        300  BIAN
+   We perform prompt updates every few months, aligned with
+major hardware and software upgrades, to ensure that the reasoning                                                                                      1
+strategies evolve accordingly.
+                                                                                        200
+4.4 System Optimizations
+                                                                                                                                          0.5
+We introduce some optimizations for practical consideration.                            100
+
+Fine-tuning. Typically, smaller, more specialized models run faster.                    0                                                               0
+We fine-tune smaller models with domain-specific information for
+simpler tasks, including monitor alert summary and single-device                             Low Medium High                                            Apr Jun Aug Oct Dec
+anomaly analysis in Pipeline 1, rather than relying on large, general-
+purpose models. For the alert summary step, we randomly generate                        (a) TTR of solo and assisted in- (b) Operators' satisfaction with
+alerts based on the value (numerical or categorical) distributions
+of our real-world data.3 Since manually labeling synthetic data                         cident investigations.  BiAn's explanations.
+is prohibitively labor-intensive, we use GPT-4 to produce ground
+truth, as it was the most powerful general-purpose model available                      Figure 8: Comparison of time and satisfaction scores.
+at the time. For the anomaly analysis step, we randomly combine
+synthetic alert summaries as inputs, and again, obtain outputs with                     and align incident practices. In addition to day-to-day incident
+GPT-4. We develop rule-based algorithms to verify the correctness                       response, the team is also actively involved in designing, developing,
+of the ground truth. A subset of data is further verified through                       and continuously improving the incident management workflow.
+small-scale fidelity tests with operators. Then, the validated data are
+used to train smaller models for each reasoning task. We provide                        5.1 Tests during Deployment
+more fine-tuning insights in Appendix C.
+                                                                                        We continuously examine the effectiveness of BiAn and collect
+Early stop. There are cases where the error device is relatively                        feedback from our operators during deployment.
+obvious, so BiAn only proceeds with further reasoning when it has
+insufficient confidence. We calculate entropy of the failure scores                     A/B tests. To demonstrate the operational value provided by BiAn,
+from the first stage to determine the confidence. If the entropy is                     we compare incident investigations performed by operators with
+below a threshold, BiAn stops earlier and directly outputs the de-                      BiAn versus those done fully manually. We also add a comparison
+vice rank. Otherwise, higher entropy indicates greater uncertainty,                     with a variant of RCACopilot [16] which only outputs coarser-
+which triggers the second stage involving more information. This                        grained root cause categories of incidents (see discussion in §2.3).
+strategy not only saves compute resources for easy cases, but also                      Over the past ten months, while there are on-call operators ready
+reduces average response time.                                                          for any escalated incidents, we have specially asked them to set
+                                                                                        up two shadow operator roles to perform the root causing and
+Parallel execution. BiAn executes all agents within the same step                       failure localization tasks with BiAn and RCACopilot, respectively.
+concurrently to maximize efficiency, as there are no interdepen-                        Since it is impractical for a single operator to perform the task with
+dencies among them. For instance, the alert summary agents and                          and without assistance simultaneously on the same incident, we
+anomaly analysis agents in Pipeline 1 run in parallel. In the second                    assigned operators of comparable expertise to each approach at best
+stage, the multiple runs required for calculating Rank of Ranks are                     effort to ensure fairness.4 We record the time-to-root-causing (TTR),
+also performed simultaneously once data from all three pipelines                        defined by our operators as the duration between investigation
+are ready.                                                                              initiation and the identification of the root cause and error device.
+                                                                                        TTR complements the renowned metric, time-to-mitigation (TTM),
+5 Real-World Deployment                                                                 by isolating the investigation phase. Typically, once the root cause
+                                                                                        is pinpointed, it takes them a relatively fixed duration (around
+BiAn has been deployed in Alibaba Cloud's global network infras-                        2 minutes) to proceed to mitigation tools and act. We categorize
+tructure for ten months. It has successfully helped operators find                      the incidents into high-, medium-, and low-risk, based on factors
+root causes and corresponding error devices more efficiently. This                      such as incident scale (i.e., number of devices affected), recovery
+section evaluates BiAn's effectiveness through A/B testing and                          difficulty, and impact on SLAs. Figure 8a plots the TTR results across
+explainability analysis (§5.1), presents three real cases to show in                    risk levels. BiAn reduces TTR by 20.5% on average, with a notable
+detail how BiAn assists our on-call operators in identifying error                      55.2% reduction for high-risk incidents since LLM inference time
+devices (§5.2), and shares broader operational insights gained from                     does not inflate with the risk level. While RCACopilot provides
+deploying BiAn (§5.3).                                                                  root cause categories, the operators still need to revisit monitoring
+                                                                                        data to validate predictions and pinpoint error devices as the output
+   Our NOC team consists of tens of engineers with varying levels                       does not explain the reasoning (e.g., which device is the root cause,
+of expertise. They become on-call operators at a rolling basis and                      how it becomes the root cause). This process becomes increasingly
+hold regular post-incident review meetings to share experiences                         challenging with greater incident complexity, resulting in larger
+                                                                                        TTR differences at higher risk levels.
+3Unlike §4.3, data augmentation is feasible here because these tasks are simpler, cap-
+ turing key information for logs and determining the existence of anomalies, rather     Explainability. As an assistant to operators, BiAn must provide
+ than providing detailed explanations for device faults.                                clear and useful explanations for its outputs to gain their trust and
+                                                                                        provide insights into its reasoning. We asked the operators to review
+                                                                                        the explanations provided for the incidents during post-incident
+                                                                                        reviews. We set a scoring scale of 0 (not helpful), 1 (somewhat
+
+                                                                                        4All operators are qualified for on-call duty and take turns working with both systems.
+                                                                                         However, we acknowledge that absolute fairness is hard to achieve and individual
+                                                                                         variability may still introduce minor noise.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                Chenxu Wang, Xumiao Zhang et al.
+
+helpful), and 2 (very helpful). To minimize bias, we have requested      determined 1 as the error device, due to disconnection. Upon re-
+them to provide feedback strictly and independently, and assured         viewing BiAn's output and checking monitoring data, the operators
+that negative ratings were equally valuable. The average scores          ruled out the other devices. The TTR was 1.5 minutes.
+for high-risk incidents, calculated every 15 days, are shown in
+Figure 8b. Encouragingly, the feedback predominantly rated the           5.3 Operational Experience
+explanations as 1 or 2, with only a few as 0. While it may seem
+surprising that unhelpful explanations are rare, this reflects the goal  Selection of candidate devices. In our design (§3), a fixed number
+of BiAn: to assist human-led investigations. Even in cases where         of six candidate devices are selected by the upstream monitoring
+the top-1 device is incorrect, the explanations often highlight useful   system based on the number of associated alerts, which are then
+context or intermediate reasoning, which supports the operator's         fed into BiAn. We have experimented with different numbers and
+thinking process. As a result, operators may benefit from BiAn's         the choice of "6" strikes an effective balance between processing
+output more or less and tend not to rate it as completely unhelpful.     overhead and coverage. It already makes sure the error device is
+The fluctuation of scores can be attributed to operators raising their   included over 98% of the time, but not always. We have been actively
+expectations as we iteratively improve BiAn over time.                   refining our pre-selection technique: We are developing a dynamic
+                                                                         selection mechanism that considers the top suspicious device(s) in
+5.2 Case Study                                                           various monitoring tools and narrows down the selection to around
+                                                                         six devices. Since different individual tools often focus on specific
+We discuss three representative incidents to showcase how our            aspects of network behavior, their top outputs--though not always
+approach effectively addresses difficult incidents in practice, partic-  directly relevant--can offer valuable complementary perspectives.
+ularly how topology and timeline information helps. For confiden-        We have since seen measurable improvements in coverage (to 99%!).
+tiality, we use letters - to represent network devices at different
+levels, with  being the upper stream. Devices 1 and 2 are on             Iterative design process. BiAn did not take its current form
+the same level.                                                          overnight. It has gone through many rounds of iteration and opti-
+                                                                         mization, driven by continuous testing and feedback from operators,
+Incident 1. We revisit the example introduced in §2.2. It occurred       before and during deployment. This process, however, comes with
+before the deployment of BiAn, so we replay the incident and             challenges. For example, our company imposes retention periods
+walk through how BiAn resolves it. Initially, five different alerts      for operational data unless explicitly extracted. The three-pipeline
+were triggered on 2 and four on its peer 3. Other neighbors              design (§4.2) was not featured in early versions of BiAn. When we
+(e.g.,  and ) were affected at varying degrees. Upon feeding the         came up with the integration of topology and timeline information,
+alerts, BiAn outputs 2 as the most suspicious device with four           we realized that it was not retained in earlier logs, forcing us to
+anomalies found, and 3 as the second, having three anomalies.            delay the improvement until sufficient new data had accumulated.
+BiAn successfully detects all anomalies and locates the error device     Besides, some data required extra preprocessing to meet the design
+in 28 seconds. In contrast, operators--despite having access to the      requirements. In general, we find that adapting datasets to support
+same data--struggled to pinpoint the exact alerts all at once and        new features is often a bottleneck in evolving the design, as it incurs
+locate the root cause immediately. After considerable analysis, they     non-trivial overhead due to format mismatches or missing context.
+eventually suspected 2 or 3 might have failed. They confirmed            As a result, the full design and development cycle of BiAn extended
+2 as the error device and completed the isolation in 22 minutes.         well beyond the 10-month deployment duration that we claimed.
+BiAn could have significantly reduced the TTR.
+                                                                         Onboarding operators to BiAn. Although we collaborate closely
+Incident 2. This case aims to highlight how the integration of           with operators in building BiAn, it is a different yet important job to
+topology helps. In a sub-network of our WAN, 1 is connected to 1         teach them to use it efficiently. To facilitate a seamless transition, we
+and 2, with 2 also connected to 2. After Stage 1, BiAn assigned          integrated BiAn into the NOC's on-call platform. The user interface
+equal failure scores to 1 and 2 due to comparable anomalies,             and output format (ranked devices and explanations) align with
+both having traffic drop and flapping; other devices have far fewer      the system that they are familiar with. Newly onboarded operators
+anomalies. However, in Stage 2, the topology pipeline revealed that      have reported a comfortable experience with BiAn, with most
+2 is directly connected to 1 as a parent node. As a result, BiAn         requiring minimal training to get started. We share more details on
+flagged 2 as the error device with a much higher score. The root         our interaction with operators in Appendix D.
+cause was a line card failure in 2. When this incident occurred, on-
+call operators were notified. With BiAn, they conducted additional       6 Performance Evaluation
+measurements for 2 and confirmed it was indeed faulty. Thanks
+to BiAn, the TTR was only 3 minutes.                                     We conduct a series of experiments to understand the performance
+                                                                         of BiAn, corresponding to the technical challenges mentioned in
+Incident 3. Accurate localization can sometimes be particularly          §2.4. We first demonstrate that BiAn can accurately locate error de-
+challenging without timeline data. In an incident, three devices were    vices in various scenarios (§6.1). Next, we measure system latency
+diagnosed with one or more anomalies: 1 experienced disconnec-           to show that BiAn enables fast investigation (§6.2). We conduct
+tion and network changes; 2 and 1 showed traffic drop. Both              ablation studies to evaluate how each component contributes to the
+disconnection and traffic drop are classified as priority-1 anomalies,   overall performance (§6.3) and show the benefit of the Rank of Ranks
+so BiAn initially assigned similar scores to all of them, making         in reducing output randomness (§6.4). We run microbenchmarks to
+localization difficult. However, the timeline provides important con-    examine the impact of fine-tuning on monitor alert summary and
+text: multiple alerts were reported for 1 and 2, while 1's alerts        single-device anomaly analysis in Pipeline 1, as well as the effective-
+occurred earlier. This greatly increased 1's suspicion. BiAn thus        ness of continuous prompt updating (§6.5). Then, we discuss the
+                                                                         affordability of deploying BiAn in terms of training and inference
+Towards LLM-Based Failure Localization in Production-Scale Networks                                SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+100              Hot Device  100                                                       Hot Device  100                                     Hot Device
+
+                 BIAN                                                                  BIAN                                                BIAN
+Accuracy (%)
+90                                                          Accuracy (%)90                                                             90
+                                                                                                                         Accuracy (%)
+80                           80                                                                                                        80
+
+70                           70                                                                                                        70
+
+60                           60                                                                                                        60
+
+50   Low Medium  High        50 <=1 min 1-5 min                                        >5 min                                          50  Port Card Device Network
+
+     Figure 9: Localization accuracy under different incident categorizations (risk level, difficulty, incident type).
+
+costs (§6.6). Finally, we replace the default model, Qwen [10], with                   extraction of key information. The accuracy of Hot Device drops
+other top-performing LLMs and evaluate (§6.7).                                         more sharply. In the middle, the incidents are categorized by resolu-
+                                                                                       tion time (i.e., time-to-root-causing) calculated during post-incident
+Experiment setup. We install BiAn on a server equipped with                            reviews. Shorter times indicate that the cases are easier to address.
+an Intel Xeon Platinum 8269CY CPU clocked at 2.50 GHz, 32 GB                           As shown, easy cases (  1 ) have the highest accuracy of 95.7%
+RAM, and 1 TB SSD for both online deployment and performance                           and medium cases (1 <  5 ) approach 92.9%. For harder cases
+evaluation purposes. We select 357 non-trivial cases from real inci-                   ( > 5 ), accuracy goes down, likely due to their complexity,
+dents that occurred in our network infrastructure over the past 17                     which also makes them considerably time-consuming for human
+months5 for evaluation.                                                                operators. Despite this, BiAn's fast resolution capability (discussed
+                                                                                       next in §6.2) ensures that even if top-1 is not the actual error device,
+Models. For performance evaluation, we use Qwen2.5 in BiAn,                            the trial-and-error phase (note, in most cases, mitigation solutions
+with the fine-tuned Qwen2.5-7B-Instruct handling the first two                         applied to wrong targets are still tolerable) is still shorter compared
+steps of Pipeline 1 and Qwen2.5-72B-Instruct for all other tasks.                      to manually inspecting extensive logs and aimlessly looking for
+For real-world deployment (§5), BiAn always leverages the latest                       the error device. Hot Device fails to report the actual error devices
+Qwen models available at the time.                                                     in all hard cases. On the right, we categorize failures based on
+                                                                                       their physical root cause types: port, line card, device, and network
+6.1 Accuracy                                                                           disconnection. BiAn performs best in resolving line card-related
+                                                                                       failures. This is because such failures typically affect only the host-
+Accuracy is defined as whether the system picks the actual error                       ing device, which means its neighboring devices are less affected
+device as top-1 (see more details in Appendix E). We compare                           and thus may have fewer anomalies. Other error types receive
+BiAn with our baseline, Hot Device, one of our in-use automated                        comparable results.
+failure localization tools. A hot device is the device having the most
+associated alerts. Similar to 007 [7] which focuses on pinpointing                        While we have compared BiAn with Hot Device which is adapted
+problems in TCP flows, this is a "democratic" approach that assumes                    from 007 [7], we emphasize that BiAn serves a role different from
+the error device, being the source of the incident, exhibits various                   that of existing failure localization tools in the IM workflow (§2.1).
+anomalies while its neighboring devices only show partial or less                      It is not intended to replace them, but rather to complement by
+severe symptoms. Over 357 cases, BiAn achieves 95.5% accuracy                          assisting operators when self-healing fails.
+averaged over 10 runs, outperforming the baseline's 86.3%. When
+Hot Device cannot tell the differences between several top devices                     6.2 Latency
+and produces tied top-1s, its accuracy drops to 70.5%, whereas
+BiAn still maintains high accuracy at 97.1%, highlighting BiAn's                       BiAn delivers real-time assistance in root causing and failure local-
+advantage of comprehensively analyzing diverse alerts.                                 ization, which can greatly reduce the total time required for inves-
+                                                                                       tigation and mitigation. We break down the latency of each system
+   We also consider top-2 and top-3 accuracies, where the error                        component in Figure 10, together with the end-to-end latency. Over-
+device falls into the top 2 or 3 most suspicious devices. The results                  all, the entire reasoning process completes within 30 seconds. When
+are 98.6% and 99.3%, respectively (Hot Device yields 88.9% and 93.0%).                 an incident occurs, the automated system notifies on-call opera-
+These results are encouraging and already satisfy our operators                        tors to start investigation and loads relevant information, which
+(§5.1), as (1) explanations from BiAn can significantly accelerate the                 typically takes a minute. This means that BiAn's output is ready
+investigation even if the top-1 device is incorrect, and (2) operators                 by the time operators get online. Looking at the breakdown, the
+often still review several top-ranked devices for validation before                    reasoning task of Stage 2 takes relatively longer than other com-
+making final decisions.                                                                ponents because it needs to incorporate the analysis results from
+                                                                                       all devices for generating the final output. Ideally, the end-to-end
+   We further group the incidents in different ways and present                        latency matches the sum of individual component latencies as the
+the results of BiAn and Hot Device in Figure 9. BiAn always wins.                      workflow is designed for concurrent execution of agents within the
+Firstly, on the left, we categorize the incidents into three risk levels               same step. However, factors such as compute resources for LLM
+(see §5.1). We can find that the accuracy remains similar between the                  inference can affect the latency. With our evaluation setup, the
+first two groups, indicating that BiAn is relatively equally helpful                   end-to-end latency is only 15% greater than the sum, thanks to our
+to incidents at low and medium risk levels. For high-risk incidents,                   high degree of parallelism.
+accuracy drops below 90%. This decline is due to the high number
+of concurrent incidents, which increases noise and complicates the                        Figure 11 shows the latency reduction for alert summary and
+                                                                                       anomaly analysis achieved by applying fine-tuned smaller models.
+5We have made every effort to gather more incidents while ensuring data quality. Each
+ of the selected cases has a ground truth error device, which has been discussed and
+ confirmed by operators during post-incident reviews.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                        Chenxu Wang, Xumiao Zhang et al.
+
+              30                                        30                    Stage2                10                                10
+              25                                                                                     8                                  8
+              20                                        25                    Stage1-Step3           6                                  6
+              15                                                                                     4                                  4
+Time (s)      10                              Time (s)  20                    Stage1-Step2  Time (s) 2                        Time (s)  2
+                                                                              Stage1-Step1           0 Default Finetune                 0 Default Finetune
+               5                                                                                     Monitor Alert Summary
+               0 Stage1 Stage1 Stage1 Stage2            15                                                                            Device Anomaly Analysis
+
+                      Step1 Step2 Step3                 10
+
+                                                        5
+
+                                                        0 Actual Theoretical
+                                                          End-to-end Sum
+
+                  Figure 10: End-to-end latency breakdown.                                  Figure 11: Latency for fine-tuned components.
+
+100                                                                                       100
+                                                                                                Top3
+Accuracy (%)  95                                                              Accuracy (%)      Top2                       B                           C
+                                                                                                Top1               3/5 cases
+              90                                                                                                                            1/3 of all
+                                                                                           95 all cases                                     cases use
+              85                                                                                                                            early stop
+                                                                                           90
+              80 Stage1 +Top-p +Pipe.2 +Top-p +Top-p +Top-p        Hot                      A                      14                   18         22
+
+                                                                                                               10
+
+                  +Pipe.3 +Pipe.2 +Pipe.3 +Pipe.2,3 Device                                                         Time (s)
+
+                  Figure 12: Accuracy at different design phases.             Figure 13: Performance trade-off in the early stop mechanism.
+
+We can observe significant savings. Together with the results in                            6.4 Result Stability
+§6.5, we aim to demonstrate that fine-tuning smaller models on less
+complex tasks with domain-specific knowledge can reduce resource                            We introduced Rank of Ranks (§4.2) to mitigate randomness in the
+usage without compromising performance--in fact, improving ac-                              LLM's output. We compare results from single-run final scoring
+curacy in our case.                                                                         (Stage 2) versus running it three and five times, then calculating the
+                                                                                            average ranks to determine the error device. As shown in Figure 14,
+6.3 Ablation Study                                                                          while average accuracy remains comparable across all settings,
+                                                                                            the Rank of Ranks approach noticeably reduces the variance in
+We next evaluate the contributions of different components.                                 accuracy. Increasing the number of rounds from 3 to 5 does not bring
+                                                                                            significant difference. Note that this design was inspired by the self-
+Progressive design. We progressively add various reasoning steps                            consistency technique [67] which proves to be simple yet effective
+to the original SOP-based pipeline (Pipeline 1). Figure 12 presents                         in deductive reasoning where conclusions can be deterministically
+the results for different design phases. Running only Pipeline 1                            derived from observations. In our inductive failure localization task,
+achieves an accuracy of 87.2%, which already surpasses the perfor-                          however, results depend on analyzing noisy data, making accuracy
+mance of Hot Device. With the Top-p filter, a second run of Pipeline 1                      improvements less pronounced.
+on the top candidates increases accuracy by 5.9%. Further incorpo-
+rating the topology or the timeline pipelines brings the accuracy                           6.5 Microbenchmarks
+to higher (4th and 5th bars). Finally, the accuracy reaches 95.5%
+with all components enabled (also see §6.1). Note, running the three                        We conduct additional experiments on specific components.
+pipelines without the Top-p filter (3rd bar) results in lower accuracy
+compared to the final version, because including data of all devices                        Monitor alert summary. An alert summary, if not empty, consists
+for all pipelines significantly inflates the input token count, which                       of key elements such as type, start/end timestamps, alert digest,
+dilute the model's attention.                                                               and type-specific details. We manually check if the summaries
+                                                                                            capture critical information in the digest. Results aggregated from
+Early stop. After the first reasoning stage, BiAn uses the entropy                          four representative alert types are plotted in Figure 15. Across all
+of failure scores to determine whether to proceed to Stage 2 (§4.4).                        summaries regardless of whether the device is the error device, fine-
+The entropy threshold affects the accuracy-latency trade-off. As                            tuned models achieve an average accuracy of 98.7%, significantly
+depicted in Figure 13, when the threshold is higher, more cases stop                        outperforming the default model. Such tasks, though simpler, may
+early, leading to lower latency but less satisfactory accuracy. At                          need domain expertise for effective and accurate summarization.
+zero threshold, BiAn consider all cases uncertain and send them
+to Stage 2, achieving the highest accuracy at the cost of increased                         Single-device anomaly analysis. The next step involves deter-
+latency. Notably, these curves illustrate a convex relationship: early                      mining if a device exhibits a specific anomaly. Figure 15 (right)
+adjustments yield substantial accuracy gains with minimal time                              shows that our fine-tuned models achieve 98.6% accuracy, beating
+investment (dashed line  represents the accuracy gain per unit                              the default model by over 6%.
+time). With an appropriate threshold, we can intercept simpler
+cases at Stage 1 to save time, while reserving Stage 2 for more                             Prompt updating. We evaluate the prompt updating algorithm
+challenging cases to achieve accurate localization. We consider                             using five-fold cross-validation, splitting our incident dataset into
+point  as an optimal trade-off and use this threshold (0.75) in                             80% training and 20% testing. We conduct multiple iterations of
+deployment. This reduces the overall processing time to 70.0% with                          the algorithm and measure accuracy after each iteration, averaging
+only a 0.5% accuracy loss compared to always running Stage 2.                               the results over five runs. After three iterations, training accuracy
+                                                                                            increases from 88.7% to 90.0%, and test accuracy rises from 81.7%
+                                                                                            to 85.9%. The marginal gain is largely due to the high baseline
+Towards LLM-Based Failure Localization in Production-Scale Networks                            SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+100                100                                                  100                                                                       1
+ 95                                        Qwen                                   Training
+ 90                                                                                            Testing                                            0.8
+ 85                                   Finetuned                          80
+ 80 1 3 5           95
+Accuracy (%)
+                                     Accuracy (%)                       60                                                                        0.6
+                                                                                    Accuracy (%)
+                   90                                                   40                                                                        0.4
+                                                                                                                                             CDF
+                   85                                                   20                                                                        0.2  BIAN-Stage 1
+                                                                                                                                                       BIAN
+
+                   80 Step1                      Step2                  00                  1  2        3                                         00 0.1 0.2 0.3 0.4 0.5 0.6
+                                                                                                                                                               Cost ($)
+                                                                            Number of Iterations
+
+Figure 14: Impact of Figure 15: Benefits of fine- Figure 16: Accuracy with number of Figure 17: Training and in-
+
+Rank of Ranks rounds. tuning on Steps 1 and 2.                       iterations in prompt updating.        ference costs.
+
+Table 1: Performance of different models.                                   7 Lessons and Discussion
+
+  Model Name       Size  Top 1  Top 2  Top 3                                We share our lessons learned in designing and deploying BiAn, and
+                                                                            discuss some open questions.
+Qwen2.5            72B    95.5   98.6   99.3
+Llama-3.1          405B   95.7   98.7   99.3                                API latency fluctuation. BiAn relies on Qwen's online services for
+GPT-4o                    95.2   98.1   99.3                                inference. It issues an API call for each reasoning task. As incidents
+Claude-3.5-Sonnet    -    93.9   97.4   98.5                                can happen at any time, BiAn is triggered at different times. We
+Gemini-1.5-Pro       -    93.2   97.9   98.7                                have noticed variations in end-to-end latency. We run the inference
+                     -                                                      tasks at different times over 24 hours (details in Appendix F) and find
+                                                                            that, average latency remains stable throughout the day (around
+performance, as over 90% of incidents already achieve 100% accu-            5 seconds) but individual calls can experience significant fluctua-
+racy. We exclude them and repeat the experiment whose results are           tions (up to 16 seconds). This can impact the latency-sensitive tasks.
+presented in Figure 16. After three iterations, accuracy improves           Similar issues are also observed in other LLM services.
+from 54.0% to 62.0% for the training set, and from 36.7% to 50.0% for
+testing. Beyond that, excessive prompt length hinders LLM's com-            Explainability and trust. BiAn provides detailed explanations
+prehension, causing performance degradation as the LLM begins               along with failure scores, for two main reasons: (1) they build op-
+to ignore most of the augmented instructions.                               erators' trust, especially during early deployment; and (2) they
+                                                                            facilitate feedback that helps refine prompts, and even framework
+6.6 Training and Inference Costs                                            design. Experiments show that accuracy is not affected by whether
+                                                                            we ask the LLM agent to provide explanations, but including ex-
+The primary costs of deploying BiAn in our network infrastructure           planations reduces score entropy (e.g., {0.5, 0.3, 0.2}{0.7, 0.2, 0.1}),
+come from LLM usage: (1) fine-tuning specialized LLMs for alert             indicating greater confidence. Moreover, it is hard to know in ad-
+summary and device anomaly analysis, and (2) online inference               vance whether correct rankings come with wrong explanations,
+for all LLM agents in BiAn during live investigations. For fine-            or whether useful explanations are hidden by incorrect rankings.
+tuning, we record the actual costs incurred by our training jobs,           Future work can explore how to validate the consistency between
+which is $121.63 on average. For inference, we calculate the cost           scores and explanations.
+for each incident based on Qwen's input/output token pricing.
+Input tokens include both prompts and upstream data from the                Prompt engineering. We have spent considerable effort on im-
+monitors or the previous step in BiAn. Figure 17 shows the CDF              proving the LLM prompts in BiAn and gained some insights. First,
+of per-incident costs for two settings: running only the SOP-based          managing prompt length is crucial. We have observed a decline
+Pipeline 1 and running the full BiAn. The average cost is only $0.17        in performance as prompt length increases, calling for precise in-
+and $0.18, respectively, demonstrating BiAn's cost efficiency at            structions to minimize distractions from less important information.
+scale. We note that, Pipeline 1 alone already beats Hot Device in           Similar challenges arise in prompt updating (§4.3), where prompt
+accuracy, and an additional $0.01 per incident brings further gains         length increases with iterations. The performance decline due to
+(see §6.1). Such improvements are meaningful in large-scale cloud           growing prompts will eventually outweigh the benefits brought by
+environments, where better incident management translates into              augmented knowledge. This indicates a limitation of "training" LLM
+significant savings in terms of service availability and quality.           prompts versus LLM parameters. Second, prompt obedience can be
+                                                                            inconsistent. LLM agents sometimes fail to follow our instructions,
+6.7 Running with Other LLMs                                                 such as skipping analysis steps or producing overly verbose content.
+                                                                            We need to carefully tune the prompts to clarify roles and align
+Since BiAn was originally designed for internal use, we initially           agent behavior with the intended tasks. On the other hand, we want
+deployed it with Qwen [10], our open-source language model series.          agents to explore different reasoning paths on complex cases (e.g.,
+To validate the generalizability of our approach, we extend our             devices with similar symptoms, multiple root causes). It has been
+experiments to include several state-of-the-art LLMs. For fairness,         non-trivial to make the trade-off between control and flexibility.
+we did not specially optimize prompts for different models. As              We have applied various techniques, including few-shot prompting
+summarized in Table 1, BiAn consistently achieves high top-1 to top-        (in-context learning) [12, 71], chain-of-thought prompting [70], and
+3 accuracies on all models. The results suggest that our design is not      self-consistency [67].
+only effective with Qwen but also works well across other leading
+models. This cross-model evaluation highlights the robustness of
+our proposed framework.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                     Chenxu Wang, Xumiao Zhang et al.
+
+Multi-agent systems. Multi-agent orchestration [15, 29, 40, 73] is            IPTV/IP networks used by ISPs [6, 48, 76]. NetSonar [83] builds a
+another direction that deserves further study. In the early design            gray box tester for network tomography. NetPoirot [8] tells if bot-
+stage, we explored enabling LLM agents to freely plan analysis tasks,         tlenecks reside in the network. NetNORAD [38] and Pingmesh [22]
+including alert processing and device scoring. However, this setup            locate failures at a network level (e.g., spine, ToR switch). They can
+quickly ran into practical challenges: without clear task bound-              serve as monitoring data sources for operators and BiAn, for ex-
+aries and guidelines, the agents often entered loops of repeated              ample, by generating alerts or recommending orders of fixes. Some
+actions, failed to terminate properly, or accumulated excessive con-          works target data center network failures and need hardware sup-
+text, leading to performance degradation. Later, we transitioned to a         port [26, 42, 66]. INT [11] and provenance-based solutions [14, 75]
+structured, hierarchical framework with predefined roles, informed            are resource-intensive. Packet marking is intrusive and fields may
+by the thinking and handling processes of human operators. The                not be available [55]. These are hard to be deployed in heteroge-
+roles are scoped and incorporate data from different dimensions               neous infrastructures like ours.
+(e.g., alerts, topologies, timelines). Despite the improvements in con-
+trollability, this static workflow has limited flexibility--except that       Troubleshooting at upper layers. Efforts are also made in de-
+we can define more roles (e.g., for new alert types) under the frame-         tecting software and service issues in cloud environments. Some
+work. In the future, to handle increasingly complex incidents as              approaches identify root causes leveraging dependencies between
+network infrastructure evolves, the agents need to have more adap-            entities [9, 17, 27, 34]. For example, Murphy [27] uses a Markov
+tive behaviors, such as retrying failed analysis, skipping irrelevant         Random Field to model dependencies for performance diagnosis.
+steps, or dynamically invoking other agents. Designing multi-agent            These works primarily conduct analysis on performance metrics,
+systems [13] raises new challenges in prompt engineering, agent               whereas BiAn operates on textual alerts generated by monitor-
+coordination, and model tuning.                                               ing and diagnosis systems. Others address purely application-layer
+                                                                              bugs unrelated to physical devices [43, 50, 57, 60, 68, 85], and thus
+Limitations. While BiAn has greatly improved incident investiga-              cannot assist physical network teams in locating device faults.
+tion, certain limitations remain: (1) BiAn falls short in multi-device
+failures. It assumes a single error device per incident. Although             Utilizing LLMs in the network domain. Besides the works men-
+rare, there are cases where multiple devices contribute equally. For          tioned earlier in §2.3, there are other attempts that apply LLMs
+instance, network updates involving configuration changes on two              in systems and networking. In cloud software incident manage-
+devices may result in errors on both. Nevertheless, the accompany-            ment, Roy et al. [56] evaluate the ReAct framework [78] in incident
+ing scores and explanations often reveal that the top two are closely         analysis. Zhang et al. [86] use in-context learning to address chal-
+ranked, enabling operators to identify both as faulty, quickly. (2)           lenges in fine-tuning general-purpose LLMs. RCAgent [69] is an
+BiAn relies on the effectiveness of upstream monitors. If monitors            agent capable of tool use for analyzing cloud job anomalies. LM-
+generate invalid or ambiguous data that can hardly differentiate              PACE [84] estimates output confidence for black-box root causing
+responsibilities among devices, it may struggle to provide accurate           from incident summaries. NetLLM [72] modifies LLM architectures
+results. Notably, this also challenges human operators, who often             for network-specific applications. They have provided valuable
+report uncertainty or need more time. BiAn shines at efficiently              insights for us in building BiAn.
+understanding and reasoning through large amounts of data. (3)
+BiAn does not yet support link-based incidents. It currently focuses          9 Conclusion
+on device-based incidents which accounts for the majority of cases.
+Link-based incidents follow different investigation processes and             We present BiAn, a practical framework that leverages LLMs to
+SOPs. We are extending BiAn to handle both device- and link-based             improve root cause analysis and failure localization in network in-
+incidents effectively.                                                        cident management. By decoupling the complex reasoning process
+                                                                              across vast volumes of monitoring data, BiAn--through its hier-
+8 Related Work                                                                archical, multi-pipeline design and other system enhancements--
+                                                                              significantly boosts the efficiency of localization while maintaining
+Network telemetry and measurements. Operators rely on mea-                    explainability. Its successful deployment in Alibaba Cloud's pro-
+surements to assess network health. Numerous studies aim to                   duction network demonstrates both the feasibility and impact of
+indicate fault-related information through flow-level or packet-              applying LLM-based approaches in network operations at scale. We
+level data [24, 25, 35, 36, 51, 58, 59, 79, 82, 88, 90]. Some utilize         are actively working to further advance BiAn, and we hope our
+such measurements for preliminary identification and routing of               experience can spur more research in AI for networking.
+faults [8, 18, 19, 44, 45, 49]. While helpful in narrowing down a range
+of devices, they cannot pinpoint error devices. Other works opti-             Acknowledgments
+mize telemetry systems themselves in terms of overhead, reliability,
+and availability [4, 20, 21, 23, 30­32, 41, 46, 47, 54, 61, 77, 80, 87, 89],  We acknowledge all teams within Alibaba Cloud that contributed
+without directly addressing failure localization. NetPilot [74], Cor-         to the success of BiAn, including the Network Automation, Net-
+rOpt [91], and SWARM [52] optimize incident mitigation strategies             work Operations, and Network Systems, to name a few. We thank
+after failures are located.                                                   our shepherd, Brighten Godfrey, and the anonymous reviewers
+                                                                              for their insightful comments. This work was supported by the
+Network failure localization. Various works target diagnosis                  National Natural Science Foundation of China under Grant No.
+and failure localization. Some use statistical techniques to locate           62325205, the Beijing Municipal Science and Technology Project
+link failures [28, 37], while others analyze packet drops [7, 53, 62].        No. Z241100004224023, the National Natural Science Fund for the
+Several studies propose rule-based troubleshooting systems for                Excellent Young Scientists Fund Program (Overseas), and Alibaba
+                                                                              Cloud through the Alibaba Research Intern Program. Ennan Zhai,
+                                                                              Chen Tian, and Guyue Liu are the corresponding authors.
+Towards LLM-Based Failure Localization in Production-Scale Networks                                                          SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+References                                                                                         Research. 61­74.
+                                                                                             [22] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave
+ [1] 2023. IT outages cost companies up to $1M per hour: report. https://www.ciodive.
+      com/news/I T- outage- cost- report- new- relic/696359/.                                      Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, Hua Chen, et al. 2015. Pingmesh: A
+                                                                                                   large-scale system for data center network latency measurement and analysis.
+ [2] 2024. Anthropic - Introducing Claude 3.5 Sonnet. https://www.anthropic.com/                   In Proceedings of the 2015 ACM Conference on Special Interest Group on Data
+      news/claude- 3- 5- sonnet.                                                                   Communication. 139­152.
+                                                                                             [23] Arpit Gupta, Rob Harrison, Marco Canini, Nick Feamster, Jennifer Rexford, and
+ [3] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge Akkaya, Floren-                 Walter Willinger. 2018. Sonata: Query-driven streaming network telemetry.
+      cia Leoni Aleman, Diogo Almeida, Janko Altenschmidt, Sam Altman, Shyamal                     In Proceedings of the 2018 conference of the ACM special interest group on data
+      Anadkat, et al. 2023. Gpt-4 technical report. arXiv preprint arXiv:2303.08774                communication. 357­371.
+      (2023).                                                                                [24] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David Mazières, and
+                                                                                                   Nick McKeown. 2014. I know what your packet did last hop: Using packet
+ [4] Anup Agarwal, Zaoxing Liu, and Srinivasan Seshan. 2022. {HeteroSketch}:                       histories to troubleshoot networks. In 11th USENIX Symposium on Networked
+      Coordinating network-wide monitoring in heterogeneous and dynamic networks.                  Systems Design and Implementation (NSDI 14). 71­85.
+      In 19th USENIX Symposium on Networked Systems Design and Implementation                [25] Rob Harrison, Qizhe Cai, Arpit Gupta, and Jennifer Rexford. 2018. Network-wide
+      (NSDI 22). 719­741.                                                                          heavy hitter detection with commodity switches. In Proceedings of the Symposium
+                                                                                                   on SDN Research. 1­7.
+ [5] Toufique Ahmed, Supriyo Ghosh, Chetan Bansal, Thomas Zimmermann, Xuchao                 [26] Vipul Harsh, Tong Meng, Kapil Agrawal, and Philip Brighten Godfrey. 2023.
+      Zhang, and Saravan Rajmohan. 2023. Recommending root-cause and mitigation                    Flock: Accurate network fault localization at scale. Proceedings of the ACM on
+      steps for cloud incidents using large language models. In 2023 IEEE/ACM 45th                 Networking 1, CoNEXT1 (2023), 1­22.
+      International Conference on Software Engineering (ICSE). IEEE, 1737­1749.              [27] Vipul Harsh, Wenxuan Zhou, Sachin Ashok, Radhika Niranjan Mysore, Brighten
+                                                                                                   Godfrey, and Sujata Banerjee. 2023. Murphy: Performance diagnosis of distributed
+ [6] MAHIMKAR Ajay. 2008. Troubleshooting Chronic Conditions in Large IP Net-                      cloud applications. In Proceedings of the ACM SIGCOMM 2023 Conference. 438­
+      works. ACM CoNEXT, December 2008, Madrid, Spain (2008).                                      451.
+                                                                                             [28] Herodotos Herodotou, Bolin Ding, Shobana Balakrishnan, Geoff Outhred, and
+ [7] Behnaz Arzani, Selim Ciraci, Luiz Chamon, Yibo Zhu, Hongqiang Harry Liu, Jitu                 Percy Fitter. 2014. Scalable near real-time failure localization of data center
+      Padhye, Boon Thau Loo, and Geoff Outhred. 2018. 007: Democratically finding                  networks. In Proceedings of the 20th ACM SIGKDD international conference on
+      the cause of packet drops. In 15th USENIX Symposium on Networked Systems                     Knowledge discovery and data mining. 1689­1698.
+      Design and Implementation (NSDI 18). 419­435.                                          [29] Sirui Hong, Mingchen Zhuge, Jonathan Chen, Xiawu Zheng, Yuheng Cheng,
+                                                                                                   Jinlin Wang, Ceyao Zhang, Zili Wang, Steven Ka Shing Yau, Zijuan Lin, Liyang
+ [8] Behnaz Arzani, Selim Ciraci, Boon Thau Loo, Assaf Schuster, and Geoff Outhred.                Zhou, Chenyu Ran, Lingfeng Xiao, Chenglin Wu, and Jürgen Schmidhuber. 2024.
+      2016. Taking the blame game out of data centers operations with netpoirot. In                MetaGPT: Meta Programming for A Multi-Agent Collaborative Framework. In
+      Proceedings of the 2016 ACM SIGCOMM Conference. 440­453.                                     The Twelfth International Conference on Learning Representations.
+                                                                                             [30] Qun Huang, Patrick PC Lee, and Yungang Bao. 2018. Sketchlearn: Relieving
+ [9] Paramvir Bahl, Ranveer Chandra, Albert Greenberg, Srikanth Kandula, David A                   user burdens in approximate measurement with automated statistical inference.
+      Maltz, and Ming Zhang. 2007. Towards highly reliable enterprise network ser-                 In Proceedings of the 2018 Conference of the ACM Special Interest Group on Data
+      vices via inference of multi-level dependencies. ACM SIGCOMM Computer                        Communication. 576­590.
+      Communication Review 37, 4 (2007), 13­24.                                              [31] Qun Huang, Siyuan Sheng, Xiang Chen, Yungang Bao, Rui Zhang, Yanwei Xu, and
+                                                                                                   Gong Zhang. 2021. Toward {Nearly-Zero-Error} sketching via compressive sens-
+[10] Jinze Bai, Shuai Bai, Yunfei Chu, Zeyu Cui, Kai Dang, Xiaodong Deng, Yang Fan,                ing. In 18th USENIX Symposium on Networked Systems Design and Implementation
+      Wenbin Ge, Yu Han, Fei Huang, et al. 2023. Qwen technical report. arXiv preprint             (NSDI 21). 1027­1044.
+      arXiv:2309.16609 (2023).                                                               [32] Qun Huang, Haifeng Sun, Patrick PC Lee, Wei Bai, Feng Zhu, and Yungang Bao.
+                                                                                                   2020. Omnimon: Re-architecting network telemetry with resource efficiency and
+[11] Ran Ben Basat, Sivaramakrishnan Ramanathan, Yuliang Li, Gianni Antichi,                       full accuracy. In Proceedings of the Annual conference of the ACM Special Interest
+      Minian Yu, and Michael Mitzenmacher. 2020. PINT: Probabilistic in-band network
+      telemetry. In Proceedings of the Annual conference of the ACM Special Interest               Group on Data Communication on the applications, technologies, architectures, and
+      Group on Data Communication on the applications, technologies, architectures, and            protocols for computer communication. 404­421.
+      protocols for computer communication. 662­680.                                         [33] Pengxiang Jin, Shenglin Zhang, Minghua Ma, Haozhe Li, Yu Kang, Liqun Li,
+                                                                                                   Yudong Liu, Bo Qiao, Chaoyun Zhang, Pu Zhao, et al. 2023. Assess and summarize:
+[12] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan,                        Improve outage understanding with large language models. In Proceedings of the
+      Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda
+      Askell, et al. 2020. Language models are few-shot learners. Advances in neural               31st ACM Joint European Software Engineering Conference and Symposium on the
+      information processing systems 33 (2020), 1877­1901.                                         Foundations of Software Engineering. 1657­1668.
+                                                                                             [34] Srikanth Kandula, Ratul Mahajan, Patrick Verkaik, Sharad Agarwal, Jitendra
+[13] Mert Cemri, Melissa Z Pan, Shuyi Yang, Lakshya A Agrawal, Bhavya Chopra,                      Padhye, and Paramvir Bahl. 2009. Detailed diagnosis in enterprise networks.
+      Rishabh Tiwari, Kurt Keutzer, Aditya Parameswaran, Dan Klein, Kannan Ram-                    In Proceedings of the ACM SIGCOMM 2009 conference on Data communication.
+      chandran, et al. 2025. Why do multi-agent llm systems fail? arXiv preprint                   243­254.
+      arXiv:2503.13657 (2025).                                                               [35] Pravein Govindan Kannan, Nishant Budhdev, Raj Joshi, and Mun Choon Chan.
+                                                                                                   2021. Debugging transient faults in data centers using synchronized network-
+[14] Ang Chen, Yang Wu, Andreas Haeberlen, Wenchao Zhou, and Boon Thau Loo.                        wide packet histories. In 18th USENIX Symposium on Networked Systems Design
+      2016. The good, the bad, and the differences: Better network diagnostics with                and Implementation (NSDI 21). 253­268.
+      differential provenance. In Proceedings of the 2016 ACM SIGCOMM Conference.            [36] Ramana Rao Kompella, Jennifer Yates, Albert Greenberg, and Alex C Snoeren.
+      115­128.                                                                                     2007. Detection and localization of network black holes. In IEEE INFOCOM
+                                                                                                   2007-26th IEEE International Conference on Computer Communications. IEEE,
+[15] Weize Chen, Yusheng Su, Jingwei Zuo, Cheng Yang, Chenfei Yuan, Chen Qian,                     2180­2188.
+      Chi-Min Chan, Yujia Qin, Yaxi Lu, Ruobing Xie, et al. 2023. Agentverse: Facilitat-     [37] Ramana Rao Kompella, Jennifer Yates, Albert Greenberg, and Alex C Snoeren.
+      ing multi-agent collaboration and exploring emergent behaviors in agents. arXiv              2009. Fault localization via risk modeling. IEEE Transactions on Dependable and
+      preprint arXiv:2308.10848 (2023).                                                            Secure Computing 7, 4 (2009), 396­409.
+                                                                                             [38] Petr Lapukhov and Aijay Adams. 2016. NetNORAD: Troubleshooting net-
+[16] Yinfang Chen, Huaibing Xie, Minghua Ma, Yu Kang, Xin Gao, Liu Shi, Yunjie Cao,                works via end-to-end probing. https://engineering.fb.com/2016/02/18/core-
+      Xuedong Gao, Hao Fan, Ming Wen, et al. 2024. Automatic root cause analysis                   infra/netnorad- troubleshooting- networks- via- end- to- end- probing/.
+      via large language models for cloud incidents. In Proceedings of the Nineteenth        [39] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin,
+      European Conference on Computer Systems. 674­688.                                            Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel,
+                                                                                                   et al. 2020. Retrieval-augmented generation for knowledge-intensive nlp tasks.
+[17] Yu Gan, Mingyu Liang, Sundar Dev, David Lo, and Christina Delimitrou. 2021.                   Advances in Neural Information Processing Systems 33 (2020), 9459­9474.
+      Sage: practical and scalable ML-driven performance debugging in microservices.         [40] Guohao Li, Hasan Hammoud, Hani Itani, Dmitrii Khizbullin, and Bernard
+      In Proceedings of the 26th ACM International Conference on Architectural Support             Ghanem. 2023. Camel: Communicative agents for" mind" exploration of large
+      for Programming Languages and Operating Systems. 135­151.                                    language model society. Advances in Neural Information Processing Systems 36
+                                                                                                   (2023), 51991­52008.
+[18] Jiaqi Gao, Nofel Yaseen, Robert MacDavid, Felipe Vieira Frujeri, Vincent Liu,           [41] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. 2016. {FlowRadar}: A
+      Ricardo Bianchini, Ramaswamy Aditya, Xiaohang Wang, Henry Lee, David Maltz,                  better {NetFlow} for data centers. In 13th USENIX symposium on networked
+      et al. 2020. Scouts: Improving the diagnosis process through domain-customized
+      incident routing. In Proceedings of the Annual conference of the ACM Special Interest
+      Group on Data Communication on the applications, technologies, architectures, and
+      protocols for computer communication. 253­269.
+
+[19] Kaihui Gao, Chen Sun, Shuai Wang, Dan Li, Yu Zhou, Hongqiang Harry Liu,
+      Lingjun Zhu, and Ming Zhang. 2022. Buffer-based end-to-end request event
+      monitoring in the cloud. In 19th USENIX Symposium on Networked Systems Design
+      and Implementation (NSDI 22). 829­843.
+
+[20] Yilong Geng, Shiyu Liu, Zi Yin, Ashish Naik, Balaji Prabhakar, Mendel Rosenblum,
+      and Amin Vahdat. 2019. {SIMON}: A simple and scalable method for sensing,
+      inference and measurement in data center networks. In 16th USENIX Symposium
+      on Networked Systems Design and Implementation (NSDI 19). 549­564.
+
+[21] Mojgan Ghasemi, Theophilus Benson, and Jennifer Rexford. 2017. Dapper: Data
+      plane performance diagnosis of tcp. In Proceedings of the Symposium on SDN
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                Chenxu Wang, Xumiao Zhang et al.
+
+      systems design and implementation (NSDI 16). 311­324.                              [63] Gemini Team, Rohan Anil, Sebastian Borgeaud, Yonghui Wu, Jean-Baptiste
+[42] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. 2016. LossRadar: Fast                 Alayrac, Jiahui Yu, Radu Soricut, Johan Schalkwyk, Andrew M Dai, Anja Hauth,
+                                                                                               et al. 2023. Gemini: a family of highly capable multimodal models. arXiv preprint
+      detection of lost packets in data center networks. In Proceedings of the 12th            arXiv:2312.11805 (2023).
+      International on Conference on emerging Networking EXperiments and Technologies.
+      481­495.                                                                           [64] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne
+[43] Ze Li, Qian Cheng, Ken Hsieh, Yingnong Dang, Peng Huang, Pankaj Singh,                    Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric Hambro, Faisal
+      Xinsheng Yang, Qingwei Lin, Youjiang Wu, Sebastien Levy, et al. 2020. Gandalf:           Azhar, et al. 2023. Llama: Open and efficient foundation language models. arXiv
+      An intelligent,{End-To-End} analytics service for safe deployment in {Large-             preprint arXiv:2302.13971 (2023).
+      Scale} cloud infrastructure. In 17th USENIX Symposium on Networked Systems
+      Design and Implementation (NSDI 20). 389­402.                                      [65] Haopei Wang, Anubhavnidhi Abhashkumar, Changyu Lin, Tianrong Zhang, Xi-
+[44] Kefei Liu, Zhuo Jiang, Jiao Zhang, Shixian Guo, Xuan Zhang, Yangyang Bai,                 aoming Gu, Ning Ma, Chang Wu, Songlin Liu, Wei Zhou, Yongbin Dong, et al. 2024.
+      Yongbin Dong, Feng Luo, Zhang Zhang, Lei Wang, et al. 2024. R-Pingmesh: A                {NetAssistant}: Dialogue Based Network Diagnosis in Data Center Networks. In
+      Service-Aware RoCE Network Monitoring and Diagnostic System. In Proceedings
+      of the ACM SIGCOMM 2024 Conference. 554­567.                                             21st USENIX Symposium on Networked Systems Design and Implementation (NSDI
+[45] Kefei Liu, Zhuo Jiang, Jiao Zhang, Haoran Wei, Xiaolong Zhong, Lizhuang Tan,              24). 2011­2024.
+      Tian Pan, and Tao Huang. 2023. Hostping: Diagnosing intra-host network bot-        [66] Weitao Wang, Xinyu Crystal Wu, Praveen Tammana, Ang Chen, and TS Eugene
+      tlenecks in {RDMA} servers. In 20th USENIX Symposium on Networked Systems                Ng. 2022. Closed-loop network performance monitoring and diagnosis with
+      Design and Implementation (NSDI 23). 15­29.                                              {SpiderMon}. In 19th USENIX Symposium on Networked Systems Design and
+[46] Zaoxing Liu, Ran Ben-Basat, Gil Einziger, Yaron Kassner, Vladimir Braverman,              Implementation (NSDI 22). 267­285.
+      Roy Friedman, and Vyas Sekar. 2019. Nitrosketch: Robust and general sketch-        [67] Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le, Ed Chi, Sharan Narang,
+      based monitoring in software switches. In Proceedings of the ACM Special Interest        Aakanksha Chowdhery, and Denny Zhou. 2022. Self-consistency improves chain
+      Group on Data Communication. 334­350.                                                    of thought reasoning in language models. arXiv preprint arXiv:2203.11171 (2022).
+[47] Zaoxing Liu, Antonis Manousis, Gregory Vorsanger, Vyas Sekar, and Vladimir          [68] Zhe Wang, Huanwu Hu, Linghe Kong, Xinlei Kang, Qiao Xiang, Jingxuan Li,
+      Braverman. 2016. One sketch to rule them all: Rethinking network flow mon-               Yang Lu, Zhuo Song, Peihao Yang, Jiejian Wu, et al. 2024. Diagnosing Application-
+      itoring with univmon. In Proceedings of the 2016 ACM SIGCOMM Conference.                 network Anomalies for Millions of {IPs} in Production Clouds. In 2024 USENIX
+      101­114.                                                                                 Annual Technical Conference (USENIX ATC 24). 885­899.
+[48] Ajay Anil Mahimkar, Zihui Ge, Aman Shaikh, Jia Wang, Jennifer Yates, Yin            [69] Zefan Wang, Zichuan Liu, Yingying Zhang, Aoxiao Zhong, Jihong Wang, Fengbin
+      Zhang, and Qi Zhao. 2009. Towards automated performance diagnosis in a large             Yin, Lunting Fan, Lingfei Wu, and Qingsong Wen. 2024. Rcagent: Cloud root cause
+      IPTV network. ACM SIGCOMM Computer Communication Review 39, 4 (2009),                    analysis by autonomous agents with tool-augmented large language models.
+      231­242.                                                                                 In Proceedings of the 33rd ACM International Conference on Information and
+[49] Ajay Anil Mahimkar, Han Hee Song, Zihui Ge, Aman Shaikh, Jia Wang, Jennifer               Knowledge Management. 4966­4974.
+      Yates, Yin Zhang, and Joanne Emmons. 2010. Detecting the performance impact        [70] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi,
+      of upgrades in large operational networks. In Proceedings of the ACM SIGCOMM             Quoc V Le, Denny Zhou, et al. 2022. Chain-of-thought prompting elicits reasoning
+      2010 Conference. 303­314.                                                                in large language models. Advances in neural information processing systems 35
+[50] Sonu Mehta, Ranjita Bhagwan, Rahul Kumar, Chetan Bansal, Chandra Maddila,                 (2022), 24824­24837.
+      Balasubramanyan Ashok, Sumit Asthana, Christian Bird, and Aditya Kumar. 2020.      [71] Jerry Wei, Jason Wei, Yi Tay, Dustin Tran, Albert Webson, Yifeng Lu, Xinyun
+      Rex: Preventing bugs and misconfiguration in large services using correlated             Chen, Hanxiao Liu, Da Huang, Denny Zhou, et al. 2023. Larger language models
+      change analysis. In 17th USENIX Symposium on Networked Systems Design and                do in-context learning differently. arXiv preprint arXiv:2303.03846 (2023).
+      Implementation (NSDI 20). 435­448.                                                 [72] Duo Wu, Xianda Wang, Yaqi Qiao, Zhi Wang, Junchen Jiang, Shuguang Cui, and
+[51] Masoud Moshref, Minlan Yu, Ramesh Govindan, and Amin Vahdat. 2016. Trumpet:               Fangxin Wang. 2024. NetLLM: Adapting Large Language Models for Networking.
+      Timely and precise triggers in data centers. In Proceedings of the 2016 ACM              In Proceedings of the ACM SIGCOMM 2024 Conference. 661­678.
+      SIGCOMM Conference. 129­143.                                                       [73] Qingyun Wu, Gagan Bansal, Jieyu Zhang, Yiran Wu, Beibin Li, Erkang Zhu, Li
+[52] Pooria Namyar, Arvin Ghavidel, Daniel Crankshaw, Daniel S Berger, Kevin                   Jiang, Xiaoyun Zhang, Shaokun Zhang, Jiale Liu, et al. 2024. Autogen: Enabling
+      Hsieh, Srikanth Kandula, Ramesh Govindan, and Behnaz Arzani. 2025. Enhancing             next-gen LLM applications via multi-agent conversations. In First Conference on
+      Network Failure Mitigation with {Performance-Aware} Ranking. In 22nd USENIX              Language Modeling.
+      Symposium on Networked Systems Design and Implementation (NSDI 25). 335­357.       [74] Xin Wu, Daniel Turner, Chao-Chih Chen, David A Maltz, Xiaowei Yang, Lihua
+[53] Yanghua Peng, Ji Yang, Chuan Wu, Chuanxiong Guo, Chengchen Hu, and Zong-                  Yuan, and Ming Zhang. 2012. NetPilot: Automating datacenter network failure
+      peng Li. 2017. {deTector}: a topology-aware monitoring system for data center            mitigation. In Proceedings of the ACM SIGCOMM 2012 conference on Applications,
+      networks. In 2017 USENIX Annual Technical Conference (USENIX ATC 17). 55­68.             technologies, architectures, and protocols for computer communication. 419­430.
+[54] Tongqing Qiu, Zihui Ge, Dan Pei, Jia Wang, and Jun Xu. 2010. What happened          [75] Yang Wu, Ang Chen, and Linh Thi Xuan Phan. 2019. Zeno: Diagnosing per-
+      in my network: mining network events from router syslogs. In Proceedings of the          formance problems with temporal provenance. In 16th USENIX Symposium on
+      10th ACM SIGCOMM conference on Internet measurement. 472­484.                            Networked Systems Design and Implementation (NSDI 19). 395­420.
+[55] Arjun Roy, Hongyi Zeng, Jasmeet Bagga, and Alex C Snoeren. 2017. Passive            [76] He Yan, Lee Breslau, Zihui Ge, Dan Massey, Dan Pei, and Jennifer Yates. 2010.
+      realtime datacenter fault detection and localization. In 14th USENIX Symposium           G-rca: a generic root cause analysis platform for service quality management in
+      on Networked Systems Design and Implementation (NSDI 17). 595­612.                       large ip networks. In Proceedings of the 6th International COnference. 1­12.
+[56] Devjeet Roy, Xuchao Zhang, Rashi Bhave, Chetan Bansal, Pedro Las-Casas, Ro-         [77] Tong Yang, Jie Jiang, Peng Liu, Qun Huang, Junzhi Gong, Yang Zhou, Rui Miao,
+      drigo Fonseca, and Saravan Rajmohan. 2024. Exploring llm-based agents for                Xiaoming Li, and Steve Uhlig. 2018. Elastic sketch: Adaptive and fast network-
+      root cause analysis. In Companion Proceedings of the 32nd ACM International              wide measurements. In Proceedings of the 2018 Conference of the ACM Special
+      Conference on the Foundations of Software Engineering. 208­219.                          Interest Group on Data Communication. 561­575.
+[57] Junxian Shen, Han Zhang, Yang Xiang, Xingang Shi, Xinrui Li, Yunxi Shen,            [78] Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan,
+      Zijian Zhang, Yongxiang Wu, Xia Yin, Jilong Wang, et al. 2023. Network-centric           and Yuan Cao. 2023. React: Synergizing reasoning and acting in language models.
+      distributed tracing with deepflow: Troubleshooting your microservices in zero            In International Conference on Learning Representations (ICLR).
+      code. In Proceedings of the ACM SIGCOMM 2023 Conference. 420­437.                  [79] Minlan Yu, Albert Greenberg, Dave Maltz, Jennifer Rexford, Lihua Yuan, Srikanth
+[58] Vibhaalakshmi Sivaraman, Srinivas Narayana, Ori Rottenstreich, Shan Muthukr-              Kandula, and Changhoon Kim. 2011. Profiling network performance for multi-
+      ishnan, and Jennifer Rexford. 2017. Heavy-hitter detection entirely in the data          tier data center applications. In 8th USENIX Symposium on Networked Systems
+      plane. In Proceedings of the Symposium on SDN Research. 164­176.                         Design and Implementation (NSDI 11).
+[59] Haifeng Sun, Jiaheng Li, Jintao He, Jie Gui, and Qun Huang. 2023. OmniWindow:       [80] Minlan Yu, Lavanya Jose, and Rui Miao. 2013. Software {Defined} {Traffic}
+      A general and efficient window mechanism framework for network telemetry. In             Measurement with {OpenSketch}. In 10th USENIX symposium on networked
+      Proceedings of the ACM SIGCOMM 2023 Conference. 867­880.                                 systems design and implementation (NSDI 13). 29­42.
+[60] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2016. Simplifying dat-           [81] Zhaoyang Yu, Minghua Ma, Chaoyun Zhang, Si Qin, Yu Kang, Chetan Bansal,
+      acenter network debugging with {PathDump}. In 12th USENIX Symposium on                   Saravan Rajmohan, Yingnong Dang, Changhua Pei, Dan Pei, et al. 2024. Moni-
+      Operating Systems Design and Implementation (OSDI 16). 233­248.                          torAssistant: Simplifying Cloud Service Monitoring via Large Language Models.
+[61] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2018. Distributed network              In Companion Proceedings of the 32nd ACM International Conference on the Foun-
+      monitoring and debugging with {SwitchPointer}. In 15th USENIX Symposium on               dations of Software Engineering. 38­49.
+      Networked Systems Design and Implementation (NSDI 18). 453­456.                    [82] Hongyi Zeng, Peyman Kazemian, George Varghese, and Nick McKeown. 2012.
+[62] Cheng Tan, Ze Jin, Chuanxiong Guo, Tianrong Zhang, Haitao Wu, Karl Deng,                  Automatic test packet generation. In Proceedings of the 8th international conference
+      Dongming Bi, and Dong Xiang. 2019. {NetBouncer}: Active device and link fail-            on Emerging networking experiments and technologies. 241­252.
+      ure localization in data center networks. In 16th USENIX Symposium on Networked    [83] Hongyi Zeng, Ratul Mahajan, Nick McKeown, George Varghese, Lihua Yuan, and
+      Systems Design and Implementation (NSDI 19). 599­614.                                    Ming Zhang. 2015. Measuring and Troubleshooting Large Operational Multipath
+                                                                                               Networks with Gray Box Testing. Technical Report MSR-TR-2015-55.
+Towards LLM-Based Failure Localization in Production-Scale Networks                        SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+[84] Dylan Zhang, Xuchao Zhang, Chetan Bansal, Pedro Las-Casas, Rodrigo Fonseca,                          Reasoning Stage 1 - Single-device Anomaly Analysis
+      and Saravan Rajmohan. 2024. LM-PACE: Confidence estimation by large language
+      models for effective root causing of cloud incidents. In Companion Proceedings of            You are an experienced network operations engineer specializing in investigating
+      the 32nd ACM International Conference on the Foundations of Software Engineering.            complex incidents in large-scale networks. Your task is to perform a comprehensive
+      388­398.                                                                                     analysis of all relevant monitoring data summaries, and determine whether there is
+                                                                                                   an anomaly of XXX in the current device, step by step.
+[85] Qiao Zhang, Guo Yu, Chuanxiong Guo, Yingnong Dang, Nick Swanson, Xin-                         Data Summaries:
+      sheng Yang, Randolph Yao, Murali Chintalapati, Arvind Krishnamurthy, and
+      Thomas Anderson. 2018. Deepview: Virtual disk failure diagnosis and pattern                      <Summary 1>: {Summary content}, {Summary 2}: {Summary content}, ...
+      detection for azure. In 15th USENIX Symposium on Networked Systems Design and                    ...
+      Implementation (NSDI 18). 519­532.                                                           Analysis SOPs:
+                                                                                                       Step 1: <Description>
+[86] Xuchao Zhang, Supriyo Ghosh, Chetan Bansal, Rujia Wang, Minghua Ma, Yu                            Step 2: <Description>
+      Kang, and Saravan Rajmohan. 2024. Automated root causing of cloud incidents                      ...
+      using in-context learning with GPT-4. In Companion Proceedings of the 32nd ACM               Example #1:
+      International Conference on the Foundations of Software Engineering. 266­277.                    Input: <Data summaries>
+                                                                                                       Summary: <Step-by-step analysis>
+[87] Hao Zheng, Chengyuan Huang, Xiangyu Han, Jiaqi Zheng, Xiaoliang Wang, Chen
+      Tian, Wanchun Dou, and Guihai Chen. 2024. Mon: Empowering Microsecond-                       Response Format:
+      level Network Monitoring with Wavelets. In Proceedings of the ACM SIGCOMM                        Step 1: <Analysis>, Step 2: <Analysis>, ...
+      2024 Conference. 274­290.                                                                        Conclusion: ...
+
+[88] Yu Zhou, Chen Sun, Hongqiang Harry Liu, Rui Miao, Shi Bai, Bo Li, Zhilong                  Figure 19: Prompt template for device anomaly analysis.
+      Zheng, Lingjun Zhu, Zhen Shen, Yongqing Xi, et al. 2020. Flow event telemetry
+      on programmable data plane. In Proceedings of the Annual conference of the ACM          analyzed; (3) Summary guidelines: providing guidelines on how
+      Special Interest Group on Data Communication on the applications, technologies,         to summarize; (4) One-shot example: providing an example of the
+      architectures, and protocols for computer communication. 76­89.                         data along with the expected summary; (5) Response format: high-
+                                                                                              lighting the format of the response (i.e., alert summary). We also
+[89] Yang Zhou, Ying Zhang, Minlan Yu, Guangyu Wang, Dexter Cao, Eric Sung, and               share the template for single-device anomaly analysis (Pipeline 1
+      Starsky Wong. 2022. Evolvable network telemetry at facebook. In 19th USENIX             Step 2) in Figure 19. Similarly, we first define the role of the agent
+      Symposium on Networked Systems Design and Implementation (NSDI 22). 961­975.            and describe the expected input (e.g., alert summary format). Then,
+                                                                                              we specify how to perform an analysis. One-shot example helps
+[90] Yibo Zhu, Nanxi Kang, Jiaxin Cao, Albert Greenberg, Guohan Lu, Ratul Mahajan,            the agent understand its role with in-context learning. At the end,
+      Dave Maltz, Lihua Yuan, Ming Zhang, Ben Y Zhao, et al. 2015. Packet-level               response format is provided.
+      telemetry in large datacenter networks. In Proceedings of the 2015 ACM Conference
+      on Special Interest Group on Data Communication. 479­491.                              B Input Examples
+
+[91] Danyang Zhuo, Monia Ghobadi, Ratul Mahajan, Klaus-Tycho Förster, Arvind                  The following example is an alert produced by the monitoring sys-
+      Krishnamurthy, and Thomas Anderson. 2017. Understanding and mitigating                  tem. As shown, the events have undergone aggregation, resulting in
+      packet corruption in data center networks. In Proceedings of the Conference of the      a semi-structured format that contains mostly human-readable tex-
+      ACM Special Interest Group on Data Communication. 362­375.                              tual fields. This format incorporates preliminary classifications and
+                                                                                              statistics, eliminating the need for operators and BiAn to directly
+                         APPENDIX                                                             process raw time series data, numerical values, or charts.
+
+   Appendices are supporting material that has not been peer-                               1{
+reviewed. As supplementary materials, we provide additional de-                             2 "brief": "inter-pod circuit|CITY61-R1-VM-##-G1_CITY61-VM-GATE-
+tails, including prompt templates, monitoring data examples, details
+regarding fine-tuning, our interaction with operators, clarifications                                      G2_GATE EGRESS|2/32 ANOMALY: BGP-down-Alert",
+on the accuracy metric, explanations on some terms, and an experi-                          3 "circuitGroupName": "CITY61-R1-VM-##-G1_CITY61-VM-GATE-G2_GATE
+ment on inference API calls. While the core paper is self-contained,
+these materials offer more information for interested readers.                                             EGRESS",
+                                                                                            4 "clusterNameA": "CITY61-R1-VM-##-G1",
+A Prompt Templates                                                                          5 "clusterNameB": "CITY61-VM-GATE-G2",
+                                                                                            6 "deviceNameA": "R1-VM-##-G1-1.CITY61",
+                  Reasoning Stage 1 - Monitor Alert Summary                                 7 "deviceNameB": "GATE-VM-4.CITY61",
+                                                                                            8 "eventSource": "SYSLOG EVENT",
+    You are an experienced network operations engineer specializing in investigating        9 "faultScenario": "LINK FLAPPING",
+    complex incidents in large-scale networks. Your task is to analyze monitoring alerts,  10 "gmtCreate": "2024-09-20 16:03:11",
+    extract key information, and generate a data summary.                                  11 "gmtModified": "2024-09-20 16:03:12",
+                                                                                           12 "level": "2",
+    Field Description:                                                                     13 "scanObjs": "R1-VM-##-G1-1.CITY61#100GE1/0/5,R1-VM-##-G1-2.CITY61
+       Device Name: <Device A>
+       Event Details: ...                                                                                  #100GE1/0/5,GATE-VM-4.CITY61#HU1/12",
+       ...                                                                                 14 "type": "LINK_GROUP",
+                                                                                           15 "typeName": "[V2|P2][low freq] backbone link flapping"
+    Summary Guidelines:                                                                    16 },
+     1. Ensure the summary is concise and clear.                                           17 {
+     2. Include key information such as XXX, XXX, ...                                      18 ...
+     3. Extract the relevant details without omission.                                     19 },
+                                                                                           20 ...
+    Example #1:
+       Input: <Monitoring log>                                                               C Fine-tuning
+       Summary: ...
+                                                                                              Training strategy. In practice, we find that combining data gener-
+    Response Format:                                                                          ated for multiple different tasks into a single training set does not
+       Device Name: <Device A>                                                                diminish the accuracy of the fine-tuned model across individual
+       Digest: ...                                                                            tasks. In fact, this approach often leads to modest improvements in
+
+  Figure 18: Prompt template for monitor alert summary.
+
+We apply various prompt engineering techniques when designing
+prompts for the LLM agents in BiAn. Figure 18 shows the prompt
+template for monitor alert summary, Step 1 in Pipeline 1. The tem-
+plate contains five parts: (1) Role definition: specifying the agent's
+role; (2) Field description: describing the fields in the log to be
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                    Chenxu Wang, Xumiao Zhang et al.
+
+performance. This finding is significant as it reduces the resource     In the context of error device localization, we frame the problem
+consumption for training and deploying models. In our current de-       as a special case of classification, where each sample (i.e., incident)
+ployment, we maintain only one fine-tuned model each for Step 1         contains exactly one positive instance, the true error device. We
+and Step 2.                                                             illustrate this with Table 2. Assume we have  incidents and BiAn
+
+Hyper knobs. We have conducted a thorough exploration of the            successfully identifies the error device in  of them. Without loss
+fine-tuning hyperparameters. We observe that richer training data       of generality, let the initial number of candidate devices be , de-
+generally yields better performance of fine-tuned models while          termined by upstream monitoring and filtering tools. The accuracy
+larger batch sizes accelerate the training process. For most tasks,
+a dataset of 2,000 examples per task is sufficient to achieve near-     is calculated as:
+optimal performance, comparable to models trained on 5,000 ex-
+amples. Interestingly, we also find that reducing the batch size                             +    + ( - 1)                                       (1)
+enhances accuracy, with the best results achieved using a batch size                                =                                   =,
+of 1.                                                                                       × 
+                                                                                                                                        
+D Interaction with Operators
+                                                                        which reduces to the fraction of cases in which the system correctly
+Questionnaire. To evaluate operators' satisfaction with BiAn,           identifies the error device. This also allows us to derive other metrics.
+we collected feedback focused on the clarity and usefulness of
+the explanations provided by BiAn. For medium- and high-risk            For example, the false positive rate is:
+incidents, they also assessed if critical information was included.
+As mentioned in §5.1, we used a 3-point scale: 0 (not helpful), 1           =    -         =  1 (   -      =  1 (1 -                          1  (1 - ).
+(somewhat helpful), and 2 (very helpful). Experienced operators                                         )                                 )=
+participated in reviewing the outputs of BiAn. To gain more insights     ×    
+into the system's performance in real-world operations, we also                                                 
+include the following questions in the questionnaire:
+                                                                                                                                                 (2)
+  1 Which types of incidents are handled inadequately?
+  2 What problems should we prioritize to address next?                 Similarly, we can get the true positive rate, true negative rate, and
+  3 Was this case trivial to resolve?                                   false negative rate if needed.
+  4 Whether trivial or not, was the explanation helpful?
+  5 If BiAn fails in this case, was the explanation for the top-1       F Inference API Calls
+ (incorrect) device reasonable? Any logical fallacies?
+                                                                        16                                                          16
+Result display. Operators provide feedback on how to improve
+output formatting based on their typical reading patterns. Their sug-   12                                                          12
+gestions include adding bold titles at the top of push notifications,   Time (s)
+using collapsible views for detailed explanations, and embedding        8                                                 Time (s)  8
+original monitor alerts. We have incorporated these recommenda-
+tions iteratively into BiAn to enhance result readability. In addition  4                                                           4
+to LLM-based reasoning, BiAn also integrates relevant references
+to better support operators in the decision-making process, includ-     0                                                           0
+ing links to tools for deeper analysis and data visualization (e.g.,        00:00
+traffic statistics, packet loss rates). The resources enable operators          02:00
+to make more informed decisions.                                                     04:00
+                                                                                         06:00
+Learning curve. A common barrier for our operators to adopting                                08:00
+new tools is a steep learning curve or deviation from their existing                              10:00
+practices. To minimize this, BiAn's core design aligns with internal                                   12:00
+operational guidelines, ensuring acceptance by both experienced                                            14:00
+and newly onboarded operators. As we maintain close collaboration                                               16:00
+with the NOC team throughput the development process, most                                                          18:00
+operators become proficient with BiAn after just a few real-world                                                        20:00
+cases.                                                                                                                       22:00
+                                                                                                                                               00:00
+E Accuracy                                                                                                                                         02:00
+                                                                                                                                                        04:00
+                                                                                                                                                             06:00
+                                                                                                                                                                 08:00
+                                                                                                                                                                      10:00
+                                                                                                                                                                          12:00
+                                                                                                                                                                               14:00
+                                                                                                                                                                                   16:00
+                                                                                                                                                                                        18:00
+                                                                                                                                                                                            20:00
+                                                                                                                                                                                                 22:00
+
+                                                                            (a) Step 1: Alert summary. (b) Step 2: Anomaly Analysis.
+
+                                                                                       Figure 20: Inference API call latency.
+
+                                                                        In §7, we observed fluctuating latency when invoking Qwen's in-
+                                                                        ference APIs. This perceived latency consists of network latency,
+                                                                        task scheduling latency, and inference latency. The former two
+                                                                        may be related to the current background load on the Qwen plat-
+                                                                        form. Inference latency itself can be influenced by factors such as
+                                                                        inference framework, acceleration methods, available resources for
+                                                                        inference, batching states of the inference task, hardware stragglers,
+                                                                        and dynamic scaling of underlying infrastructure components. To
+                                                                        further investigate the fluctuating latency, we run an experiment:
+                                                                        we repeatedly run inference tasks for the alert summary and device
+                                                                        anomaly analysis steps over a 24-hour period, 100 times per hour.
+                                                                        As shown in Figure 20, while the Qwen API can provide a stable
+                                                                        overall latency on average, the fluctuation in latency for individual
+                                                                        calls remains substantial, potentially impacting latency-sensitive
+                                                                        inference tasks. For stable latency, we can consider adopting a
+                                                                        locally deployed, dedicated resource approach (see Figure 11 for
+                                                                        a comparison between local fine-tuned inference and Qwen API
+                                                                        invocation).
+
+Table 2: Confusion matrix for error device localizaion.
+
+       Root Cause (Positive) Non-Root Cause (Negative)
+
+True        ( - 1)
+
+False   -   ( - 1)( -  )
+

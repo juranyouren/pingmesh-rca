@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 sys.path.append("/home/sbp/lixinyang/pingmesh")
 from utils.prompts import PROMPT,SKILLED_PROMPT
 from SkillBank.SkillExecutor import SkillExecutor
+
 def save_json(data, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
@@ -17,7 +18,6 @@ def save_json(data, path):
 def load_json(path):
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
-
 
 class SkilledAnalyzer:
     def __init__(self, model_path="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B", ASCEND_RT_VISIBLE_DEVICES="0,1",skill_json_path="/home/sbp/lixinyang/pingmesh/SkillBank/skills.json",short=0):
@@ -28,7 +28,6 @@ class SkilledAnalyzer:
         
         self.model_path = model_path
         self.ASCEND_RT_VISIBLE_DEVICES = ASCEND_RT_VISIBLE_DEVICES
-        #self.skills = self._load_skill(skill_json_path)
         print("loading skills")
         self.executor=SkillExecutor()
         
@@ -59,9 +58,6 @@ class SkilledAnalyzer:
         )
 
     def _load_skill(self, skill_path: str) -> list:
-        """
-        从外部 JSON 文件加载技能库配置，并调用 _refine_skill_id 验证和重排
-        """
         if not skill_path or not os.path.exists(skill_path):
             print(f"[{os.getpid()}] 警告: 找不到技能库文件 {skill_path}，将使用空技能库。")
             return []
@@ -73,7 +69,6 @@ class SkilledAnalyzer:
             if not isinstance(raw_skills, list):
                 raise ValueError("技能库 JSON 文件的顶层结构必须是 List。")
             
-            # 调用重排函数，确保每个 skill 都有唯一的 skill_id
             valid_skills = self._refine_skill_id(raw_skills)
             
             print(f"[{os.getpid()}] 成功从 {skill_path} 加载并校验了 {len(valid_skills)} 个分析技能。")
@@ -84,14 +79,9 @@ class SkilledAnalyzer:
             return []
 
     def _refine_skill_id(self, raw_skills: list) -> list:
-        """
-        在挂载技能库时验证是否有重复的 skill_id。
-        如果存在重复或缺失，则重新分配一个全局唯一的 ID。
-        """
         seen_ids = set()
         refined_skills = []
         
-        # 1. 扫描一遍，找出当前全部合法的数字 ID 中的最大值，作为分配新 ID 的基准
         max_numeric_id = 0
         for s in raw_skills:
             sid = str(s.get("skill_id", "")).strip()
@@ -100,12 +90,10 @@ class SkilledAnalyzer:
                 
         next_available_id = max_numeric_id + 1
 
-        # 2. 逐个验证并重新编排
         for skill in raw_skills:
-            refined_skill = skill.copy() # 复制一份，避免直接修改原始输入
+            refined_skill = skill.copy()
             current_id = str(refined_skill.get("skill_id", "")).strip()
             
-            # 如果 ID 为空，或者已经存在于 seen_ids 中（说明重复了），则重新分配
             if not current_id or current_id in seen_ids:
                 new_id = str(next_available_id)
                 print(f"[{os.getpid()}] 提示: 发现重复或缺失的 skill_id (原值: '{current_id}'), 已重新编排为: '{new_id}'")
@@ -118,47 +106,8 @@ class SkilledAnalyzer:
             
         return refined_skills
 
-    def _build_retrieval_prompt(self, original_prompt: str) -> str:
-        """构建阶段一：用于检索可用 Skill 的 Prompt"""
-        skills_summary = []
-        for s in self.skills:
-            skills_summary.append(
-                f"Skill ID: {s['skill_id']}\n"
-                f"Name: {s['skill_name']}\n"
-                f"Trigger Logic: {json.dumps(s['trigger_conditions'], ensure_ascii=False)}"
-            )
-        skills_text = "\n\n".join(skills_summary)
-        
-        retrieval_prompt = (
-            "You are an expert network troubleshooter. Below is the list of available diagnostic skills "
-            "and their trigger conditions:\n"
-            "=== AVAILABLE SKILLS ===\n"
-            f"{skills_text}\n"
-            "========================\n\n"
-            "Here is the network anomaly information:\n"
-            f"{original_prompt[:1500]}...\n\n" # 截断原始 prompt 以防过长，只需让它看关键信息即可
-            "Based on the anomaly information and the skill trigger conditions, select the most relevant skill IDs to use. "
-            "Output ONLY a JSON list of integers representing the skill_ids (e.g., [1, 2, 5]). Do not output any other text."
-        )
-        return retrieval_prompt
-
-    def _extract_skill_ids(self, response_text: str) -> list:
-        """从阶段一模型返回的内容中提取解析 Skill ID"""
-        # DeepSeek-R1 可能带有 <think> 标签，将其剥离
-        content = response_text
-        if "</think>" in content:
-            content = content.split("</think>")[-1]
-            
-        # 使用正则寻找方括号中的数字列表
-        match = re.search(r'\[([\d\s,\'"]+)\]', content)
-        if match:
-            nums = re.findall(r'\d+', match.group(1))
-            return [str(n) for n in nums]
-        return []
-
     def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, dirpath: str) -> str:
         """构建阶段二：将检索到的 Skill Instructions 注入原始 Prompt 进行最终推理，并进行 Token 级安全截断"""
-        # 2. 从指定目录读取 nodes 和 info 数据
         nodes_path = os.path.join(dirpath, "nodes.json")
         info_path = os.path.join(dirpath, "info.json")
         
@@ -173,7 +122,6 @@ class SkilledAnalyzer:
             with open(info_path, 'r', encoding='utf-8') as f:
                 info_data = f.read()
 
-        # 3. 执行选中的 Skill 并收集诊断结果
         skill_ret = "当前未调用任何专家工具，请仅依靠 Info 和 Nodes 数据进行推导。"
         if selected_skill_ids:
             selected_skills = [s for s in self.skills if s["skill_id"] in selected_skill_ids]
@@ -181,37 +129,29 @@ class SkilledAnalyzer:
                 instructions = []
                 for s in selected_skills:
                     if s.get("python_executor"):
-                        # 执行 Python 脚本并获取返回字符串
                         exec_result = self.executor.execute(s["python_executor"], dirpath)
                         instructions.append(f"[{s['skill_name']} 执行结果]:\n{exec_result}")
                     else:
                         instructions.append(f"[{s['skill_name']} 规则要求]:\n" + json.dumps(s['execution_instructions'], ensure_ascii=False, indent=2))
                 skill_ret = f"{chr(10).join(instructions)}\n"
 
-        # 4. Token 级智能截断处理
         tokenizer = self.llm.get_tokenizer()
         max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len * 0.8)
 
-        # 预计算：如果不放入 Info 和 Nodes，模板和 Skill Results 会占用的 Token 数
         base_prompt_empty = SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES="")
         base_tokens = tokenizer.encode(base_prompt_empty)
         base_len = len(base_tokens)
 
-        # 留给 Info 和 Nodes 的 Token 额度
         remaining_tokens = max_input_tokens - base_len
 
-        # 极端情况：Skill 数据本身就爆了（通常说明你的 Python 脚本吐了未经清洗的脏数据）
         if remaining_tokens <= 0:
             truncated_skill = tokenizer.decode(base_tokens[:max_input_tokens])
             return truncated_skill + "\n[系统警告：工具输出数据过长，上下文已被强制截断！]"
 
-        # 分别计算 Info 和 Nodes 的 Token
         info_tokens = tokenizer.encode(info_data)
         nodes_tokens = tokenizer.encode(nodes_data)
 
-        # 如果总体超长，执行分级截断
         if len(info_tokens) + len(nodes_tokens) > remaining_tokens:
-            # 策略：保障 Info 最多占用剩余空间的 40%，剩下的全给 Nodes
             max_info_tokens = int(remaining_tokens * 0.4)
             
             if len(info_tokens) > max_info_tokens:
@@ -223,7 +163,6 @@ class SkilledAnalyzer:
             if len(nodes_tokens) > remaining_for_nodes:
                 nodes_data = tokenizer.decode(nodes_tokens[:remaining_for_nodes]) + "\n...[Nodes 数据因超长被截断]..."
 
-        # 5. 格式化最终填充完毕的 Prompt
         final_prompt = SKILLED_PROMPT.format(
             SKILLRET=skill_ret,
             INFO=info_data,
@@ -233,7 +172,6 @@ class SkilledAnalyzer:
         return final_prompt
 
     def _safe_truncate(self, text: str) -> str:
-        """兜底的截断方法"""
         tokenizer = self.llm.get_tokenizer()
         tokens = tokenizer.encode(text)
         max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len *0.8)
@@ -241,8 +179,9 @@ class SkilledAnalyzer:
             return tokenizer.decode(tokens[:max_input_tokens]) + "\n\n...[因超长被截断]..."
         return text
 
-    def batch_infer(self, dirpaths: list, prompts: list, batch_size: int = 8) -> list:
-        print(f"[{os.getpid()}] 正在执行技能检索与推理 (共 {len(prompts)} 条, Batch Size: {batch_size})...")
+    # [MODIFIED] 增加 target_skill_ids 参数
+    def batch_infer(self, dirpaths: list, prompts: list, target_skill_ids: list, batch_size: int = 8) -> list:
+        print(f"[{os.getpid()}] 正在执行技能推理 (直接使用传入的技能集 {target_skill_ids}) (共 {len(prompts)} 条, Batch Size: {batch_size})...")
 
         def vllm_invoke(llm, inputs:list, sampling_params, desc="Inferring", b_size=1):
             from tqdm import tqdm
@@ -257,23 +196,15 @@ class SkilledAnalyzer:
             return all_responses
             
         try:
-            # Stage 1: 模型调用 - 检索 Skill
-            retrieval_prompts = [self._build_retrieval_prompt(p) for p in prompts]
-            retrieval_responses = vllm_invoke(
-                llm=self.llm, 
-                inputs=retrieval_prompts, 
-                sampling_params=self.sampling_params, 
-                desc="Stage 1: Retrieving Skills",
-                b_size=batch_size
-            )
-            
-            # 组装带 Skill 的最终 Prompt
+            # [MODIFIED] 跳过 Stage 1，直接构建 Final Prompts
             final_prompts = []
-            skill_ids_list=[]
-            for dirpath, original_p, ret_res in zip(dirpaths, prompts, retrieval_responses):
-                skill_ids = self._extract_skill_ids(ret_res)
-                skill_ids_list.append(skill_ids)
-                final_p = self._build_final_prompt(original_p, skill_ids,dirpath)
+            skill_ids_list = []
+            retrieval_responses = ["Skipped Retrieval Stage"] * len(prompts) # 使用占位符保持向下兼容结构
+
+            for dirpath, original_p in zip(dirpaths, prompts):
+                # 直接使用传入的 target_skill_ids
+                skill_ids_list.append(target_skill_ids)
+                final_p = self._build_final_prompt(original_p, target_skill_ids, dirpath)
                 final_prompts.append(final_p)
 
             # Stage 2: 模型调用 - 基于 Skill 执行根因分析
@@ -284,7 +215,7 @@ class SkilledAnalyzer:
                 desc="Stage 2: Root Cause Analysis",
                 b_size=batch_size
             )
-            return final_responses,final_prompts,retrieval_responses,skill_ids_list
+            return final_responses, final_prompts, retrieval_responses, skill_ids_list
             
         except Exception as e:
             print(f"\n[Error {os.getpid()}] vLLM 批量推理执行异常: {str(e)}")
@@ -311,21 +242,25 @@ def generate_prompts(root_path: str) -> tuple:
                 
     return dirpath_list, prompt_list
 
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, batch_size: int = 8,short=0) -> dict:
+# [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
     sleep_time = (worker_id - 1) * 60
     time.sleep(sleep_time)
     
-    # 替换为 SkilledAnalyzer
     analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus,short=short)
-    responses,prmpts,ret_ress,skills = analyzer.batch_infer(dirpaths=dirpaths_chunk, prompts=prompts_chunk, batch_size=batch_size)
+    # [MODIFIED] 将 target_skill_ids 传入 batch_infer
+    responses, prmpts, ret_ress, skills = analyzer.batch_infer(
+        dirpaths=dirpaths_chunk, 
+        prompts=prompts_chunk, 
+        target_skill_ids=target_skill_ids, 
+        batch_size=batch_size
+    )
     
     resls=[]
-    
-    for dp, res,pmt,ret_res,skill in zip(dirpaths_chunk, responses,prmpts,ret_ress,skills):
-        
+    for dp, res, pmt, ret_res, skill in zip(dirpaths_chunk, responses, prmpts, ret_ress, skills):
         clean_res = res.strip() if isinstance(res, str) else str(res)
         result_dict = {
             "dir":dp,
@@ -336,10 +271,10 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
         }
         resls.append(result_dict)
 
-    
     return resls
 
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8,short=0) -> dict:
+# [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -375,6 +310,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     npus=npu_groups[i], 
                     dirpaths_chunk=dir_chunks[i], 
                     prompts_chunk=prompt_chunks[i],
+                    target_skill_ids=target_skill_ids, # [MODIFIED] 注入到子进程
                     batch_size=batch_size,
                     short=short
                 )
@@ -407,7 +343,6 @@ def generate_partial_prompts(dirpaths:list) :
 def get_dirpaths_from_fcases(fcase_path):
     fcases=load_json(fcase_path)
     res=[]
-
     for case in fcases:
         dir=case.get("name")
         res.append(dir)
@@ -415,10 +350,13 @@ def get_dirpaths_from_fcases(fcase_path):
 
 if __name__ == "__main__":
     # 配置
-    
-    available_npus = [0,1,2,3,4,5,6,7]
+    available_npus = [0,1]
 
-    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
+    # [MODIFIED] 定义要指定的全局 target_skill_ids
+    # 填入你希望模型调用的 ID，例如 ["1", "3", "5"] (必须是字符串格式)
+    target_skill_ids = ["1", "2"] 
+    
+    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
     dirpaths, prompts = generate_prompts(root_path)
 
     # dirpaths=get_dirpaths_from_fcases("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/ranking_failures.json")
@@ -432,6 +370,7 @@ if __name__ == "__main__":
             dirpath_list=dirpaths, 
             prompt_list=prompts, 
             npu_list=available_npus,
+            target_skill_ids=target_skill_ids, # [MODIFIED] 将固定 list 传进去
             batch_size=8,
             short=0
         )
@@ -449,5 +388,3 @@ if __name__ == "__main__":
             print(f"最终结果已合并并保存至: {save_path}")
     else:
         print("没有找到需要推理的任务。")
-
-    

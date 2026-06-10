@@ -1,13 +1,44 @@
-agent/ms_agent.log
-data
-data_process/__pycache__
-kernel_meta
-RootCauseAnalyze/__pycache__
-topo_simplify/__pycache__
-utils/__pycache__
-ms_agent.log
-agent/output
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
 
+# Logs
+*.log
+
+# Data (large binary/JSON datasets)
+data/
+
+# Agent outputs
+agent/output/
+agent/ms_agent.log
+
+# Jupyter checkpoints
+*.ipynb_checkpoints/
+kernel_meta/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Misc generated
 fusion_result.json
-agent/output
-SkillBank/failure_cases
+combined_all_code.txt
+
+# SkillBank large data files (keep code, ignore large JSON results)
+SkillBank/hit_report.json
+SkillBank/raw_co_occur.json
+SkillBank/alarm_co_occurrence_rules.json
+SkillBank/raw.json
+SkillBank/check_list.json
+SkillBank/failure_cases/
+
+# NetEventCause open-source dependency (large, keep as reference only)
+Baseline/NetEventCause/NetEventCause-main/
+Baseline/NetEventCause/NetEventCause-main.zip
+
+# PDF papers (large binaries, keep code only)
+docs/papers/*.pdf

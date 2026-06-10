@@ -1,0 +1,568 @@
+2025 IEEE 31th International Conference on Parallel and Distributed Systems (ICPADS) | 979-8-3315-4901-5/25/$31.00 ©2025 IEEE | DOI: 10.1109/ICPADS67057.2025.11322964  Classifying Host-Side RDMA Pingmesh Results to
+                                                                                                                                                                        Efficiently Identify Transport Faults in Data Centers
+
+                                                                                                                                                                                                             Songhao Ding, Boyang Zhou, and Yuhua Zheng
+                                                                                                                                                                                         Research Center for High-Efficiency Computing Infrastructure, Zhejiang Lab, Hangzhou, China
+                                                                                                                                                                               School of Intelligent Science and Technology, Hangzhou Institute for Advanced Study, UCAS, Hangzhou, China
+
+                                                                                                                                                                           Abstract--To diagnose the transport-layer fault in RDMA             RoCE topologies like rail-optimized ones--require manual
+                                                                                                                                                                        for ensuring the reliability of data center networks (DCN),            intervention, restricting diagnostic efficiency and usages [8].
+                                                                                                                                                                        the existing RDMA pingmesh (R-Pingmesh) technology often
+                                                                                                                                                                        requires manual analysis to identify the root causes of faults.           However, ensuring the fault identification efficiency is non-
+                                                                                                                                                                        However, the fault identification faces challenges in few-shot         trival, due to the two core challenges: (i) Few-shot train-
+                                                                                                                                                                        training for rare faults and prominent fault-normal data imbal-        ing--rare faults are extremely infrequent in production (trig-
+                                                                                                                                                                        ance. To address the challenges, this paper proposes an LSTM-          gered only by extreme conditions like sudden traffic over-
+                                                                                                                                                                        based fault classifier: The model pre-training phase captures          loads), transient, and hard to collect high-quality labeled
+                                                                                                                                                                        general fault patterns to alleviate the difficulty of few-shot         samples. (ii) Severe training data imbalance--RDMA clusters
+                                                                                                                                                                        training for rare faults. To deploy the model in the target            mostly operate in a normal state, RDMA transport-level-
+                                                                                                                                                                        DCN, it uses supervised fine-tuning (SFT) with the data obtained       related faults occur at a low frequency [9], measured by GPU
+                                                                                                                                                                        from the network to adapt to the different network topological         time (i.e., the product of a job's time to failure and its GPU
+                                                                                                                                                                        characteristics. Through such training, this classifier enables fine-  demand), they account for approximately 0.5% of the total
+                                                                                                                                                                        grained RDMA transport-layer fault diagnosis across multiple           GPU time of the cluster and only occur occasionally in long-
+                                                                                                                                                                        network topologies, achieving accurate classification of various       term pre-training tasks involving a large number of GPUs
+                                                                                                                                                                        fault types and fine-grained localization from "abnormal paths"        [10], leading model optimization to favor the majority class
+                                                                                                                                                                        to "fault segments". This collaborative design of pre-training and     during training and high missed detection rates for rare faults
+                                                                                                                                                                        topology adaptation achieves key challenges of few-shot learning       [11][12].
+                                                                                                                                                                        under data distribution imbalance for accurate distinction and
+                                                                                                                                                                        localization of RDMA transport-layer faults. Our experiments              To address these challenges, this paper proposes a novel
+                                                                                                                                                                        show that this method performs excellently on datasets from            end-to-end RDMA transport-layer fault diagnosis (RTFD),
+                                                                                                                                                                        different typical DCN, providing an effective technical solution       based on information collected by R-Pingmesh from hosts in
+                                                                                                                                                                        for the automated diagnosis of RDMA transport-layer faults.            the target DCN. RTFD centers on a classifier that utilizes a
+                                                                                                                                                                                                                                               long short-term memory (LSTM) to achieve accurate classi-
+                                                                                                                                                                           Index Terms--Datacenter, RDMA, Fault diagnosis                      fication of RDMA transport-layer faults [13]. To pretrain the
+                                                                                                                                                                                                                                               classifier, we use supervised learning with the R-Pingmesh
+                                                                                                                                                                                                  I. INTRODUCTION                              dataset, so that it is capable to recognize general fault patterns.
+                                                                                                                                                                                                                                               Furthermore, we make the pre-trained model to adapt to
+                                                                                                                                                                           In the field of multi-layer data center network (DCN) moni-         new network topology via supervised fine-tuning (SFT) [14].
+                                                                                                                                                                        toring and transport-level fault diagnosis in RDMA over Con-           With the classifier, RTFD identifies the faults by using high-
+                                                                                                                                                                        verged Ethernet version2 (RoCEv2) [1], the existing pingmesh           confidence predictions as pseudo labels and annotating low-
+                                                                                                                                                                        technology [2] in remote direct memory access (RDMA)                   confidence samples.
+                                                                                                                                                                        [3] ensures network reliability via monitoring and collecting
+                                                                                                                                                                        round-trip time (RTT) results for end-to-end RDMA data                    The performance of RTFD was evaluated using SimAI
+                                                                                                                                                                        transmissions among network interfaces on hosts [3][4]. It has         [15]--an open-source simulation platform tailored for large
+                                                                                                                                                                        been widely adopted as a practical technical solution [5][2],          language model (LLM) training--across three realistic and
+                                                                                                                                                                        due to its core advantages in fast measurements in the RDMA            representative DCN topologies. These topologies encompass
+                                                                                                                                                                        data transport RTT to provide a direct evidence for reflecting         small-to-medium scales and span single-plane to dual-plane
+                                                                                                                                                                        transport faults. The current RDMA pingmesh (R-pingmesh)               architectures, covering scenarios ranging from basic single-
+                                                                                                                                                                        often requires manual analysis on the measured data, which             plane deployments to complex dual-plane isolation configura-
+                                                                                                                                                                        cannot efficiently identify the root causes of faults, such as         tions. Numerical results fully validate the scheme's efficiency
+                                                                                                                                                                        packet drops, port failures, and link anomalies [2].                   in identifying RDMA transport-layer faults: the average clas-
+                                                                                                                                                                                                                                               sification accuracy attains 0.92, while the average area under
+                                                                                                                                                                           Currently, the existing work on the fault identification in         the curve (AUC) stands at 0.93. Even in the most complex
+                                                                                                                                                                        R-Pingmesh [2][6][7] is primarily limited to recognition effi-         dual-plane topology--marked by higher path redundancy and
+                                                                                                                                                                        ciency in two aspects. First, false positives need manual filter-      more dispersed feature distribution--key metrics, including
+                                                                                                                                                                        ing, inability to independently identify RNIC packet loss roots,       weighted precision, recall, and F1-score, still maintain a mini-
+                                                                                                                                                                        e.g., hardware anomalies, requiring manual device checks to            mum value of 0.84. Furthermore, the scheme enables efficient
+                                                                                                                                                                        extend response time. Second, it incurs a poor topology adapt-
+                                                                                                                                                                        ability, which needs manual deployment adjustment in special
+
+                                                                                                                                                                            Corresponding author, E-mail: zhouby@zhejianglab.org
+
+                                                                                                                                                                        Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+fine-grained classification of RDMA transmission anomalies             Pingmesh. As a dedicated RDMA monitoring tool, R-
+and exhibits stable performance across typical fault scenarios.     Pingmesh extends Pingmesh to RoCE scenarios and supports
+Even under conditions of severe data imbalance, it effectively      low-overhead measurement of network RTT and end-host
+reduces the missed detection rate for rare faults, which account    latency[2], yet it still fails to realize fine-grained RDMA
+for less than 5.1% of the total sample size. Crucially, through     transport-layer fault classification and relies on manual anal-
+a two-phase workflow consisting of pre-training and post-           ysis to determine fault roots. Another RDMA-focused tool,
+deployment SFT adaptation, the scheme minimizes reliance            RD-Probe, achieves sufficient monitoring coverage and high
+on manual operations. These results confirm that this adapted       scalability, but it only covers east-west traffic in data centers,
+classifier enable automatic feature calibration, and fault identi-  requires auxiliary tools to filter server-side faults, and depends
+fication eliminates the need for manual analysis of fault roots     entirely on switch configurations for topology construction
+or topology-specific deployment adjustments, thus laying a          [26]. Hostping cannot detect inherent host network issues,
+robust foundation for the stable operation of RDMA systems.         suffers reduced accuracy under high host load, and requires
+                                                                    manual follow-up in some cases [6].
+   The rest of this paper is structured below. Section II gives
+background. Section III presents our scheme. Section IV                Fault diagnosis. Hawkeye can diagnose multiple network
+provides the performance evaluation of the scheme. Section          anomalies, but it relies on programmable switches and focuses
+V details practical considerations. Section VI concludes the        telemetry on PFC, requiring modifications to adapt to non-PFC
+paper and discusses future work.                                    anomalies [7]. PreFix extracts features from historical switch
+                                                                    logs to predict faults via a random forest model but demands
+                          II. BACKGROUND                            separate training for different switch models and only targets
+                                                                    hardware faults [21].
+A. RDMA Transport Faults
+                                                                       Collie [27] is a tool that can systematically detect per-
+   Transport faults in RDMA networks refer to abnormal sce-         formance anomalies in RDMA subsystems without requiring
+narios impairing data transmission reliability [16], integrity, or  access to hardware internal designs. It constructs a compre-
+causing significant performance degradation, with causes cov-       hensive workload search space based on RDMA programming
+ering four core dimensions (hardware, network, configuration,       abstractions, combines the simulated annealing algorithm and
+performance) and relevant characteristics verified in numerous      the minimal feature set algorithm, uses performance counters
+academic studies [17]. Hardware-level transport faults, the         and diagnostic counters to guide the search, has detected 15
+most direct type, include RNIC-related faults and intra-host        new anomalies across 8 different RDMA subsystems, and can
+link faults, both causing connection interruptions, packet loss,    assist in the development of RDMA applications to avoid
+sharp throughput drops, and even Priority Flow Control (PFC)        anomalies.
+storms in lossless networks [18][19][6][20]. Network-level
+transport faults focus on transmission path anomalies, divided         Wang et al. proposed a two-stage graph deep learning-based
+into switch faults (hardware issues like port failures/forwarding   fault detection and positioning method for Internet communi-
+chip abnormalities, a key upstream trigger of RDMA faults           cation networks, which first uses graph neural networks to
+[21]; logical anomalies like PFC storms/deadlocks causing           extract graph-level features of the network and then employs
+RDMA packet suspension/discarding [22][7]) and physical             a fault detection and positioning algorithm to output results,
+link faults (e.g., link interruptions, cable-device mismatches)     achieving 96.5% fault positioning accuracy (outperforming
+that cause service outages in single-path RDMA deployments.         KNN and IRBFG algorithms) with good abnormal node detec-
+Configuration-level transport faults mainly stem from incorrect     tion performance and lower training time compared to standard
+parameter settings: RNIC routing configuration loss/error leads     deep learning [28].
+to connection timeouts (verified in practice); improper switch
+buffer configuration (failing to distinguish traffic characteris-      Thomas et al. proposed a novel CNN-Transformer model in
+tics) in TCP/RDMA coexistence deprives RDMA of resources,           the paper CNN-Based Transformer Model for Fault Detection
+causing latency surges and packet loss [23]. Performance-           in Power System Networks [29]; the model achieves fault
+related anomalies, a subset of generalized transport faults (no     detection and localization by processing current data and
+direct data loss but severe service quality degradation), include   simulating faults in power distribution systems to generate
+verified scenarios like intra-host resource contention throttling   experimental data. It demonstrates good performance in fault
+RDMA transmission rates and sharp rate drops from link              detection and localization, outperforms some existing mod-
+bandwidth contention [24][25].                                      els, and features high computational efficiency. However, it
+                                                                    has shortcomings including limited adaptability of the model
+B. Related Works                                                    architecture, unresolved issues with fault data in real-world
+                                                                    scenarios, a single verification scenario, easy misjudgment
+   In the field of RDMA network fault diagnosis and perfor-         of some faults, and problems with the relevant architecture
+mance monitoring, early research mainly focused on general          search.
+TCP networks, with Pingmesh as a typical representative--it
+enables coarse-grained fault localization but only identifies          Overall, existing tools still face challenges in cross-topology
+fault layers rather than specific devices.                          adaptability, few-shot training for rare RDMA faults [30], and
+                                                                    independence from manual intervention--gaps that this paper
+                                                                    aims to address.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+III. OUR SCHEME                                                     B. Feature Extraction
+
+   This section presents our proposed RTFD with its concrete        Algorithm 1 FEATUREEXTRACTION
+processes for feature extraction, model training and SFT, as
+well as fault detection and localization. Additionally, we dis-     Require: O = {o1, . . . , ot}, o = [D , B , P ]
+cuss algorithmic correctness and computational complexities.
+                                                                        W  N+, probe, Bprobe
+A. Overall Design
+                                                                    Ensure: Xt  R10
+   To address these challenges in RDMA transport fault diag-
+nosis -- poor network topology adaptability, few-shot training      1: Wt  {o |  = t - W + 1, . . . , t}
+difficulty for rare faults, and severe training data imbalance,
+RTFD is designed as an end-to-end RDMA transport-layer              2:  x¯t      1   Wt x , x2,t           1           Wt (x - x¯t)2,
+fault diagnosis system to perform analysis and classification                    W                      W -1
+on the path state based on the collected data from the clients.
+The client deployed on each host node to perform RDMA ping              x  {D, B, P }                 1×(1-P¯t
+in mesh and then periodically return the measured results [31].                                            D¯ t
+                                                                    3:  t  probe ×       , B¯t  µt               )  ,  t    t
+   To achieve efficient classification and precise localization     4:  Lt  t × D¯ t                                        µt
+of transport-level faults, the diagnostic process of RTFD                              Bprobe
+running on an in-network node as the master, identifies in-
+path transport states and localizes related faults by means of a    5: Xt  [D¯ t, D2 ,t, B¯t, B2 ,t, P¯t, P2 ,t, t, µt, t, Lt]
+LSTM classifier. To achieve this, we first establish the feature
+extraction method, and then use it to train, train the model and    6: return Xt
+further perform fault identification.
+                                                                       Feature extraction uses the observation sequence O =
+   (i) Feature extraction. Based on the collected R-pingmesh        {o1, . . . , ot}, where each o includes bandwidth B , packet
+results, RTFD first extracts sequential features that reflect       loss rate P , and transmission delay D . A sliding window
+the dynamic characteristics of the RDMA transport process.          of size W computes mean, variance, and range for these
+The features include the total delay between the source and         components, yielding 9 statistical features. Applying Little's
+destination ends [32], where RNIC processing delays are             law we further derive arrival rate , service rate µ, and
+affected by cache hit ratio [33], bandwidth, as well as packet      utilization . The final feature vector Xt combines all statistics
+loss rate of the current path.                                      for model input.
+
+   (ii) Model training. To pretrain the classifier, RTFD uses          We obtain three queue parameters of the path: arrival rate
+supervised learning and ensures its classification accuracy         , service rate µ, utilization , where utilization is calcu-
+in data-imbalanced scenarios. Then, to adapt to the DCN             lated from arrival rate and service rate. Subsequently, the
+topology, we further utilize the monitored data from the            obtained features form a 12-dimensional feature vector Xt 
+network to conduct an SFT [14] in the following steps. First,       [B¯t, B2 ,t, L¯t, L2 ,t, W¯ t, W 2 ,t, RB, RL, RW , t, µt, t], serv-
+RTFD extracts all paths from the target DCN topology and            ing as input for model training and inference.
+calculates a bandwidth baseline. The bandwidth baseline is
+used to calibrate the feature extraction process. Then, RTFD        C. Model Training and SFT
+adopts a hybrid strategy and to construct a fine-tuning dataset
+with this strategy. Finally, RTFD iteratively updates the LSTM         Training. To ensure the LSTM classification accuracy,
+classifier based on the pre-trained model parameters. This          RTFD pre-trains the LSTM model using supervised learning
+update enables the classifier to accurately adapt to the data       with labeled feature sequences and adapts it to the dynamic
+characteristics of different DCN topologies.                        network environment via continuous training on real-time data
+                                                                    [13].
+   (iii) Fault identification. With such an adopted model, RTFD
+proceeds to the fault localization procedure to deal with the          The training algorithm uses batch-wise processing to opti-
+unique spatiotemporal patterns of rare faults. It detects a faulty  mize model parameters efficiently, adopting the same Classify
+path by segmenting the abnormal path and leverages other            function as fault detection to ensure consistent training and
+paths in the cluster that include segments of the abnormal path.    inference behavior.
+Through step-by-step elimination of each segment, it finally
+achieves precise localization of the fault segment.                                        1    3                                         (1)
+                                                                                 L=-
+   With these aforementioned mechanisms, RTFD achieves the                                         yk(i) log P (i)(sk)
+transport-level fault identification. Additionally, it addresses                         |B|
+the shortcomings of existing tools in terms of fine-grained                                   iB k=1
+fault classification and cross-topology adaptability.
+                                                                       The cross-entropy loss function calculates the difference
+   Next, we detail RTFD with its specific processes.                between true one-hot encoded labels yk(i) and model prediction
+                                                                    probabilities P (i)(sk) that sample i belongs to state k, where
+                                                                    y(i) is a one-hot vector with yk(i) = 1 if sample i belongs to
+                                                                    state sk, otherwise 0. The loss is averaged over batch size |B|
+
+                                                                    for stable training. Gradient descent is used to update model
+
+                                                                    parameters:
+
+                                                                                              - L                                         (2)
+
+                                                                       Parameters are updated in the negative gradient direction,
+                                                                    making the loss function decrease, and finally returning opti-
+                                                                    mal parameters when training is completed.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+                                                Fig. 1. System framework of RTFD
+
+Algorithm 2 TRAINING                                              Algorithm 3 NETWORKADAPTATIONSFT
+
+Require: Training data D = {(X(n), y(n))}Nn=1, Maximum            Require: pre, Gnew, Dnew, high, low
+                                                                  Ensure: adapted
+     epochs E
+Ensure:                                                            1: Pnew  ExtractPaths(Gnew), Dft  
+                                                                   2: Bprobe,new  mean({B } Dnew )
+1: for epoch e = 1 to E do                                         3: for p  Pnew do
+                                                                   4: Xp  FeatureExtraction(Op, probe, Bprobe,new)
+2: for each batch B  D do                                          5: Pp  Classify(Xp, True) using pre
+                                                                   6: cp  max(Pp), s^p  arg max(Pp)
+3:  P(i)  Classify(X(i), True) for each (X(i), y(i))               7: if cp > high OR cp < low then
+
+    B
+
+4:  L       -   1   iB      3    yk(i)  log  P  (i) (sk )
+               |B|          k=1
+
+5:     - L
+
+6: end for                                                        8:  strue       s^p              if cp > high
+                                                                                  ManualLabel(p)   if cp < low
+7: end for
+8: return                                                         9:  Dft  Dft  {(Xp, strue)}
+
+                                                                  10: end if
+
+                                                                  11: end for
+
+   In the classifier training process, we use feature sequences   12:   pre
+processed through FeatureExtraction as input, with each fea-      13: for (X, strue)  Dft do
+ture sequence corresponding to the true state label of the path.  14: P  Classify(X, True) using 
+
+                                                                  15:   Adam(, strue, pre, )
+                                                                  16: end for
+
+                                                                  17: return 
+
+   Training convergence: The algorithm continues training            To adapt the pre-trained model to a new network, we use
+until reaching the maximum number of epochs E or until            SFT. For each path in Gnew, feature vectors are extracted and
+convergence criteria are met, such as when the loss function      the pre-trained model predicts probabilities; the confidence cp
+stabilizes or validation accuracy reaches a satisfactory level.   is the maximum probability. If cp > high, pseudo labels are
+The final output is the optimized parameter set  that             used; if cp < low, manual labels are required. The fine-tuning
+minimizes the classification error on the training dataset.       dataset Dft is constructed accordingly. Model parameters 
+                                                                  are updated from pre using Adam on Dft, with regularization
+   SFT. The SFT framework for domain adaptation is shown          to retain general knowledge. Segment-path relationships are
+below. The algorithm is closely integrated with the preceding     redefined for Gnew, enabling adaptation to new topologies.
+analysis.
+
+    Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+D. Fault Identification                                                 is that adaptation quality depends on domain similarity and
+                                                                        the quality of the adaptation process. This relationship can be
+Algorithm 4 FAULTDETECTIONANDLOCALIZATION                               expressed through a simplified bound:
+
+Require: Path P = (v1, . . . , vn), Feature sequences XP =              At  As - d - a                                                             (4)
+
+     [X1, . . . , XT -W +1], Model 
+
+Ensure: Path state s^  {s1, s2, s3}, Fault segments F                   The fine-tuning process achieves exponential convergence:
+
+1: s^  Classify(XP )                                                    t -   t0 -                                                                 (5)
+
+2: F  {(vi, vi+1) | i = 1, . . . , n - 1}
+
+3: if s^ = s1 then                                                      where  < 1 ensures rapid adaptation to new network
+                                                                        environments.
+4: for seg  F do
+                                                                           Our fault diagnosis system achieves correctness through
+5:        for p  {p | seg  p, p = P } do                                two fundamental convergence properties. The fault localization
+                                                                        algorithm (Algorithm 4) converges to the true fault segment
+6:           if Classify(Xp ) = s1 then                                 set under the monotonicity assumption that faulty segments
+                                                                        consistently cause fault symptoms in all containing paths. This
+7:           F  F \ {seg}                                               ensures convergence to the optimal solution:
+
+8:           break
+
+9:           end if
+
+10:       end for
+
+11: end for                                                             lim Fk = F 
+
+12: else                                                                k                                                                          (6)
+
+13: F                                                                      3) Computing Complexity: The computational complexity
+                                                                        of our fault diagnosis algorithm is determined by two core
+14: end if                                                              phases: feature extraction and LSTM processing.
+
+15: return s^, F                                                           Time complexity: The time complexity consists of two
+                                                                        components: the complexity of the feature extraction phase
+   RTFD detects path states from sequential features in two             and the complexity of the LSTM processing phase.Combining
+steps: (a) an LSTM-based classifier outputs s^ for path P               both phases, the total time complexity simplifies to:
+using feature sequence XP , where s^  {s1, s2, s3} (nor-
+mal, congestion, fault); (b) for fault localization, the path is        Ttotal = O T × max(W × d, h2)                                              (7)
+split into segments F = {(vi, vi+1)}, and each segment is
+checked: if any alternative path p containing the segment                  Space complexity: The space complexity comprises three
+yields Classify(Xp ) = s1, the segment is excluded from F .             components: feature storage, LSTM model parameters and
+If s^ = s1, then F = .                                                  constant auxiliary storage.
+
+E. Discussions                                                             The total space complexity is:
+
+We establish theoretical foundations for our RDMA fault                 Stotal = O T × d + h2                                                      (8)
+
+diagnosis framework through rigorous mathematical analysis,                Notably, LSTM state storage requires only O(h) memory,
+                                                                        independent of sequence length T , making it suitable for
+proving correctness guarantees, accuracy bounds, and perfor-            processing long observation sequences.
+
+mance characteristics.
+
+1) Algorithm Correctness: The training algorithm (Algo-
+
+rithm 2) enables the LSTM classifier to converge to stable
+
+locally optimal parameters through the optimization of the                              IV. PERFORMANCE EVALUATION
+
+cross-entropy loss function. Notably, the LSTM model con-               A. Experiment Settings
+
+tains multi-layer nonlinear activation functions, which results            This experiment adopted the open-source LLM training
+                                                                        simulation platform SimAI for experimental design [15], and
+in the non-convex nature of the model's overall optimization            conducted comparative experiments with three DCN topolo-
+                                                                        gies of different scales to verify the method's effectiveness and
+objective. Under standard conditions of bounded gradients               efficiency across environments.
+
+and  an   appropriately  set  learning    rate    (0,  2  ),  gradient     We evaluated three representative DCN topologies (covering
+                                                       L                small-scale single-plane to medium-scale dual-plane deploy-
+                                                                        ments). All three share the same RDMA protocol stack and
+descent still satisfies the following fundamental convergence           simulation configuration, differing only in network structure
+                                                                        and link parameters (isolating topological impacts on results):
+inequality:
+                                                                         (i) Spectrum-X 400Gbps H100: A small-scale single-plane
+             L(t+1)           L(t)  -     L(t     )2          (3)             topology where server NICs are uplinked to leaf switches,
+                                       2                                      with leaf switches aggregating traffic to a single upper
+                                                                              spine layer. Link parameters: NIC­Leaf (400 Gbps, 0.5µs
+This inequality ensures the monotonic decrease of the loss                    latency), Leaf­Spine (400 Gbps, 0.5µs latency).
+
+function and convergence to a stable local minimum, thereby
+
+establishing a theoretical foundation for the effectiveness of
+
+the algorithm.
+
+2) Classification Accuracy: The supervised fine-tuning
+
+framework (Algorithm 3) provides robust accuracy guarantees
+
+under domain shift through domain adaptation theory. When
+
+adapting from source domain to target domain, the key insight
+
+         Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+(ii) DCN+DualToR 200Gbps H100: A medium-scale single-             stabilizes after training to the 30th epoch; the validation loss
+      plane topology with Dual ToR architecture (each server's    remains within a low-fluctuation range around 0.25 without
+      NIC has dual uplinks to two ToRs), and the ToR layer is     significant rebound. Meanwhile, the validation accuracy con-
+      uplinked to multiple spines. Link parameters: NIC­ToR       tinuously improves from around 0.2 in the early training stage
+      (200 Gbps, 0.5 µs latency, dual uplink), ToR­Spine (400     and stabilizes at a high level of approximately 0.9 after the
+      Gbps, 0.5 µs latency).                                      30th epoch, which further indicates that the model has a good
+                                                                  training effect and strong generalization ability for network
+(iii) AlibabaHPN DualPlane 200Gbps H100: A medium-                fault scenarios.
+      scale dual-plane topology where server NICs are uplinked
+      to ToRs of two independent planes (Plane A/B), with
+      each plane aggregating traffic to its own spines [34].
+      Link parameters: NIC­ToR (200 Gbps, 0.5 µs latency,
+      dual uplink across planes), ToR­Spine (400 Gbps, 0.5 µs
+      latency per plane).
+
+B. Efficiency and Accuracy of Our Scheme
+
+Fig. 2. Training loss                                                              Fig. 4. Classification performance by fault type
+
+                                                                     To evaluate the proposed method's classification of different
+                                                                  RDMA faults, we tested it in six typical scenarios [34]. As
+                                                                  shown in Fig.4, the method performs stably and efficiently:
+                                                                  the six scenarios yield an average precision of 0.91, average
+                                                                  recall of 0.94, and average F1 score of 0.93, with each metric's
+                                                                  minimum no less than 0.87. Even for rare faults, recall reaches
+                                                                  0.890 and F1 score is 0.882, effectively alleviating missed
+                                                                  detections from data imbalance.
+
+                                                                     Such metric differences stem from varying sample sizes
+                                                                  and fault feature distinguishability -- for example, Normal
+                                                                  and Load Imbalance have recall near 0.99 due to promi-
+                                                                  nent features or sufficient samples, while Switch PFC Error
+                                                                  shows more balanced metrics (reflecting moderate distinction
+                                                                  between faults and normal states).
+
+                                                                     These results fully verify the method's effectiveness and
+                                                                  robustness in fine-grained RDMA scenario classification.
+
+                              Fig. 3. Validation accuracy                Fig. 5. Classification Performance comparison across topologies
+
+   During the training process of the network fault identifi-        To verify the cross-topology generalization ability of the
+cation model, both the model's training loss and validation       proposed method, we conducted experiments in three typical
+loss converge effectively: The training loss gradually decreases  data center topologies, namely single-plane, dual-ToR redun-
+from an initial value of approximately 1.75 to nearly 0.0 and
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+dancy, and dual-plane isolation topologies. As shown in the        topologies) show the system has an average accuracy of 0.918
+cross-topology performance metrics of Fig. 5, the method           and AUC of 0.94; key metrics remain above 0.838 even in
+demonstrates robust adaptability across all scenarios: the av-     data-imbalanced scenarios, demonstrating good performance
+erage accuracy across the three topologies is approximately        and cross-topology adaptability to support stable RDMA-
+0.918, and the average AUC value reaches 0.94; even in the         dependent workloads. Future research will focus on deploying
+more complex dual-plane isolation topology, the minimum            and verifying it in real data centers: building a testbed with
+value of key metrics such as weighted precision, recall, and       multiple topologies and complex workloads, collecting actual
+F1-score can still be maintained at 0.893. This performance        fault data/metrics, and validating its stability under real con-
+difference is mainly due to the structural complexity of dif-      ditions to bridge the simulation-practice gap.
+ferent topologies. For instance, the dual-plane isolation topol-
+ogy has higher path redundancy and more scattered feature             While our work is efficient in identifying transport-level
+distribution, and it is also related to the differences in link    faults, several future directions are worthy of study: (a)
+interaction modes and fault propagation paths. These results       Advancing deployment and testing in real environments can
+fully prove that the proposed RDMA fault diagnosis system          verify the actual performance of the technology in real data
+can adapt to diverse data center environments and possesses        centers and eliminate the gap between simulation and practice.
+excellent generalization ability.                                  (b) Expanding toward multi-layer hybrid fault diagnosis by
+                                                                   integrating log data and other multi-source data as well as
+                V. PRACTICAL CONSIDERATIONS                        optimizing the LSTM classifier, to address more complex fault
+                                                                   scenarios in RDMA networks.
+   RPFD depends on periodically collected R-ping mesh re-
+sults, which can be easily collected and implemented. The                               VII. ACKNOWLEDGMENT
+core logic of this data collection method is highly consistent
+with the proven data acquisition mechanism of Astral [35].            This work was supported in part by the National Key R&D
+For instance, to achieve hop-by-hop telemetry of RDMA              Program of China under Grant 2024YFB4505604. The authors
+network nodes and path status monitoring, Astral adopts a          would like to express their sincere gratitude to Yiwei Wang
+periodic probing scheme similar to R-pingmesh: It periodically     from the Research Center for High Efficiency Computing
+collects the connectivity, latency, and forwarding status of each  Infrastructure, Zhejiang Lab, for his valuable support during
+node along the end-to-end path through data packets. Mean-         this work.
+while, Astral's monitoring system automatically schedules the
+probing cycle and automatically aggregates periodic probing                                      ACRONYMS
+results with other data, requiring no manual intervention in the
+collection process. This fully matches RTFD's requirement of       AUC area under the curve
+relying on R-pingmesh for periodic data collection, making it      DCN data center network
+practical in real-world DCNs.                                      LLM large language model
+                                                                   LSTM long short-term memory
+   In RDMA DCN, excessively frequent data uploads may              R-pingmesh RDMA pingmesh
+impose transmission pressure on network links and create           RDMA remote direct memory access
+a performance bottleneck [6]. To address this issue, RTFD          RoCEv2 RDMA over Converged Ethernet version2
+can alleviate it by optimizing host-side configurations--for       RTFD RDMA transport-layer fault diagnosis
+instance, by reasonably limiting the data reporting rate to avoid  SFT supervised fine-tuning
+occupying excessive bandwidth. Alternatively, it can adopt
+a multi-domain management approach: dividing management                                         REFERENCES
+domains based on the DCN topology, and using multiple
+master nodes to perform block-based management on RDMA              [1] W. Xia, P. Zhao, Y. Wen, and H. Xie, "A survey on data center net-
+server clusters in different domains. This approach not only             working (DCN): Infrastructure and operations," IEEE communications
+reduces the centralized load on network links caused by cross-           surveys & tutorials, vol. 19, no. 1, pp. 640­656, 2016.
+domain transmission but also mitigates the impact of a single
+management node failure on the entire network [36].                 [2] D. Liu, E. Chen, and F. Zhang, "R-pingmesh: A service-aware roce
+                                                                         network monitoring and diagnostic system," in ACM SIGCOMM, 2024,
+            VI. CONCLUSION AND FUTURE WORK                               pp. 554­567.
+
+   This paper presents an end-to-end R-Pingmesh-based               [3] C. Guo, H. Wu, Z. Deng, G. Soni, J. Ye, J. Padhye, and M. Lipshteyn,
+RDMA transport-layer fault diagnosis method to address key               "Rdma over commodity ethernet at scale," in ACM SIGCOMM, 2016,
+challenges in large-scale data center RDMA fault diagnosis. It           pp. 202­215.
+uses a SFT framework for cross-topology adaptation, extracts
+rare fault features via service flow-embedded probing, and          [4] W. Hu, X. Chen, and Y. Zhao, "RDMA transports in datacenter net-
+optimizes LSTM training to mitigate data imbalance, realizing            works: Survey," IEEE Network, vol. 38, no. 6, pp. 380­387, 2024.
+fully automated fine-grained fault classification and accurate
+localization. Experiments on the SimAI platform (three typical      [5] C. Guo, L. Yuan, D. Xiang, Y. Dang, R. Huang, D. Maltz, Z. Liu,
+                                                                         V. Wang, B. Pang, H. Chen et al., "Pingmesh: A large-scale system
+                                                                         for data center network latency measurement and analysis," in ACM
+                                                                         SIGCOMM, 2015, pp. 139­152.
+
+                                                                    [6] T. Liu, U. Zhang, and V. Chen, "Diagnosing end-host network bottle-
+                                                                         necks in rdma servers," IEEE/ACM Transactions on Networking, vol. 32,
+                                                                         no. 5, pp. 4302­4316, 2024.
+
+                                                                    [7] Y. Wang, Z. Li, and A. Zhao, "Hawkeye: Diagnosing rdma network
+                                                                         performance anomalies with pfc provenance," in ACM SIGCOMM, 2025,
+                                                                         pp. 481­495.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+ [8] V. Tong, H. A. Tran, S. Souihi, and A. Mellouk, "A novel quic traffic      [30] B. Cai, L. Huang, and M. Xie, "Bayesian networks in fault diagnosis,"
+      classifier based on convolutional neural networks," in IEEE Global              IEEE Transactions on industrial informatics, vol. 13, no. 5, pp. 2227­
+      Communications Conference, 2018, pp. 1­6.                                       2240, 2017.
+
+ [9] X. Gao, J. Ren, C. Jian, and Y. Ji, "Fats: Fault-aware optimization for    [31] K. Liu, J. Zhang, Z. Jiang, X. Zhang, S. Guo, Y. Bai, Y. Dong, Z. Zhang,
+      large-scale model training," in IEEE Advanced Information Technology,           X. Shi, L. Wang et al., "Hostmesh: Monitor and diagnose networks
+      Electronic and Automation Control Conference, vol. 8. IEEE, 2025,               in rail-optimized roce clusters," in Proceedings of the 8th Asia-Pacific
+      pp. 845­849.                                                                    Workshop on Networking, 2024, pp. 122­128.
+
+[10] X. Hu, Y. Li, and Z. Zhang, "Characterization of large language model      [32] R. Mittal, V. T. Lam, N. Dukkipati, E. Blem, H. Wassel, and M. Ghobadi,
+      development in the datacenter," in USENIX Symposium on Networked                "Timely: RTT-based congestion control for the datacenter," ACM SIG-
+      Systems Design and Implementation, 2024, pp. 709­729.                           COMM Computer Communication Review, vol. 45, no. 4, pp. 537­550,
+                                                                                      2015.
+[11] M. Gupta, R. Kumar, D. Dobriyal, and P. Pandey, "Design strategies
+      and performance enhancement techniques for spine-leaf architecture: A     [33] J. Zhu, K. Li, and L. Zhao, "ECN or delay: Lessons learnt from analysis
+      review," NEU Journal for Artificial Intelligence and Internet of Things,        of dcqcn and timely," in ACM International on Conference on emerging
+      vol. 2, no. 4, 2023.                                                            Networking EXperiments and Technologies, 2016, pp. 313­327.
+
+[12] P. Li, Z. Chen, L. T. Yang, J. Gao, Q. Zhang, and M. J. Deen, "An          [34] M. Qian, N. Sun, and O. Liu, "Alibaba hpn: A data center network for
+      improved stacked auto-encoder for network traffic flow classification,"         large language model training," in ACM SIGCOMM, 2024, pp. 691­706.
+      IEEE Network, vol. 32, no. 6, pp. 22­27, 2018.
+                                                                                [35] Q. Meng, H. Zheng, Z. Zhang, C. Lao, C. Huang, B. Li, Z. Zhu, H. Lu,
+[13] A. Azari, P. Papapetrou, S. Denic, and G. Peters, "Cellular traffic              W. Dang, Z. Lin et al., "Astral: A datacenter infrastructure for large
+      prediction and classification: A comparative evaluation of lstm and             language model training at scale," in ACM SIGCOMM, 2025, pp. 609­
+      arima," in International Conference on Discovery Science, 2019, pp.             625.
+      129­144.
+                                                                                [36] J. Zhang, H. Yuan, Z. Wang, P. Yu, H. Song, D. Qu, S. Yan, and
+[14] H. Zheng, L. Shen, A. Tang, Y. Luo, H. Hu, B. Du, Y. Wen, and                    X. Zheng, "Revisiting the underlying causes of rdma scalability issues,"
+      D. Tao, "Learning from models beyond fine-tuning," Nature Machine               in IEEE International Symposium on Parallel and Distributed Process-
+      Intelligence, vol. 7, no. 1, pp. 6­17, 2025.                                    ing with Applications. IEEE, 2024, pp. 227­235.
+
+[15] V. Wang, W. Chen, and X. Zhang, "SimAI: Unifying architecture
+      design and performance tuning for large-scale llm training," in USENIX
+      Symposium on Networked Systems Design and Implementation, 2025,
+      pp. 541­558.
+
+[16] Z. Wang, T. Ma, L. Kong, Z. Wen, J. Li, Z. Song, Y. Lu, G. Chen, and
+      W. Cao, "Zero overhead monitoring for cloud-native infrastructure using
+      RDMA," in USENIX Annual Technical Conference, 2022, pp. 639­654.
+
+[17] M. Haroon, Z. A. Siddiqui, M. Husain, A. Ali, and T. Ahmad, "A
+      proactive approach to fault tolerance using predictive machine learning
+      models in distributed systems," IJERR, vol. 44, pp. 208­220, 2024.
+
+[18] X. Wei, Z. Dong, R. Chen, and H. Chen, "Deconstructing rdma-enabled
+      distributed transactions: Hybrid is better!" in USENIX Symposium on
+      Operating Systems Design and Implementation, 2018, pp. 233­251.
+
+[19] A. Chen, B. Wang, and C. Liu, "DTS: A dual transport switching scheme
+      for rdma-based applications," in IEEE International Performance, Com-
+      puting, and Communications Conference. IEEE, 2022, pp. 114­119.
+
+[20] S. Kim, T. Park, and U. Lee, "TCCL: Discovering better communication
+      paths for pcie gpu clusters," in ACM International Conference on Archi-
+      tectural Support for Programming Languages and Operating Systems,
+      2024, pp. 999­1015.
+
+[21] F. Zhang, G. Chen, and H. Wang, "Prefix: Switch failure prediction
+      in datacenter networks," Proceedings of the ACM on Measurement and
+      Analysis of Computing Systems, vol. 2, no. 1, 2018.
+
+[22] T. Wang, Y. Zhang, A. Zhou, and S. Wang, "An enhancement framework
+      for rdma congestion control in multi-tenant datacenters," in IEEE
+      Network Operations and Management Symposium, 2024, pp. 1­9.
+
+[23] M. Zhang, N. Zhao, and P. Chen, "BRT: Buffer management for
+      rdma/tcp mix-flows in datacenter networks," IEEE Transactions on
+      Network and Service Management, vol. 21, no. 4, pp. 4146­4160, 2024.
+
+[24] S. M. Shetty and S. Shetty, "Analysis of load balancing in cloud data
+      centers," Journal of Ambient Intelligence and Humanized Computing,
+      vol. 15, no. 1, pp. 973­981, 2024.
+
+[25] G. Appenzeller, I. Keslassy, and N. McKeown, "Sizing router buffers,"
+      ACM SIGCOMM Computer Communication Review, vol. 34, no. 4, pp.
+      281­292, 2004.
+
+[26] G. Ding, H. Huang, and I. Wang, "Rd-probe: Scalable monitoring
+      with sufficient coverage in complex datacenter networks," in ACM
+      SIGCOMM, 2024, pp. 258­273.
+
+[27] X. Kong, Y. Zhu, H. Zhou, Z. Jiang, J. Ye, C. Guo, and D. Zhuo, "Col-
+      lie: Finding performance anomalies in rdma subsystems," in USENIX
+      Symposium on Networked Systems Design and Implementation, 2022,
+      pp. 287­305.
+
+[28] L. Wang, Y. He, and L. Li, "A single-terminal fault location method for
+      hvdc transmission lines based on a hybrid deep network," Electronics,
+      vol. 10, no. 3, p. 255, 2021.
+
+[29] J. B. Thomas, S. G. Chaudhari, N. K. Verma et al., "CNN-based
+      transformer model for fault detection in power system networks," IEEE
+      Transactions on Instrumentation and Measurement, vol. 72, pp. 1­10,
+      2023.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 12,2026 at 01:43:11 UTC from IEEE Xplore. Restrictions apply.
+

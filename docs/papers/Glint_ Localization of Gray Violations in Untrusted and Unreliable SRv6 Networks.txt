@@ -1,0 +1,1009 @@
+812  IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+Glint: Localization of Gray Violations in Untrusted
+            and Unreliable SRv6 Networks
+
+        Kaiyang Zhao , Han Zhang , Member, IEEE, Yahui Li, Xingang Shi , Member, IEEE,
+     Zhiliang Wang , Member, IEEE, Xia Yin, Senior Member, IEEE, Jiankun Hu , Fellow, IEEE,
+
+                                            and Jianping Wu, Fellow, IEEE
+
+   Abstract--In the Segment Routing over IPv6 (SRv6) network,                                            I. INTRODUCTION
+a wide range of network events (e.g., attacks, intrusions, vio-
+lations, malicious route announcements) may occur. Network                     N OWADAYS, modern services demand high network reli-
+management requires real-time monitoring of untrusted and                            ability to ensure availability and satisfy service-level
+unreliable environments (e.g., unsafe components and devices).                 agreements [1], [2], [3]. Segment routing [4] over IPv6 (SRv6)
+Early localization of abnormal links causing violations in the                 is used in many large commercial networks, such as Alibaba
+SRv6 network helps minimize the compensation required for                      [5], Baidu [6], and others [7], [8], [9], [10], to meet the
+service unavailability. However, the overhead of the state-of-the-             demands of different services.
+art methods does not scale efficiently to large-scale SRv6 networks
+and exhibit poor robustness to addressing various disturbances                    However, vendors can introduce hardware backdoors, and
+from unreliable networks. To cope with these challenges, we                    even malicious attackers can reduce network quality through
+propose Glint, an in-band network telemetry framework to                       social engineering methods (contaminating optical fibers and
+localize abnormal links in SRv6 networks. The key idea of Glint                interfaces, etc.). Attacks involve attackers bribing maintenance
+is sampling part of the information while the overall information              personnel to perform subtle actions, such as contaminating
+is known. Glint provides probabilistic in-band collection to gather            optical fibers and interfaces with microscopic particles [11] or
+segment-level telemetry data, reducing overhead and improv-                    manipulating environmental humidity to induce static charge
+ing efficiency. Glint also proposes distributed verification-based             buildup [12]. These actions increase signal loss, causing net-
+detection to enhance the trustworthiness of security assessments,              work degradation that is difficult to detect. Moreover, such
+further improving robustness against disturbances. In addition,                attacks can serve as preparatory steps for large-scale denial-
+we design selective telemetry that reduces telemetry reports while             of-service attacks. These events (such as attacks and failures)
+preserving security-relevant visibility. Our evaluations demon-                affect the security of routing paths, making the network no
+strate that, compared to the state-of-the-art frameworks, Glint                longer trustworthy and reliable.
+significantly reduces header bandwidth overhead by 75.6% and
+memory overhead by 48.7% while reducing false positives. We                       Any violation (i.e., any improper or unexpected behavior)
+also implement Glint on the Intel Tofino switch, achieving over                in SRv6 networks that results in non-transient packet loss,
+a 50% reduction in hardware resource consumption compared                      impacting only a subset of traffic, is called as a gray violation
+to existing methods.                                                           in this paper. That violation can be caused by malicious attacks
+                                                                               introducing hardware issues (e.g., fiber [13], interfaces [14],
+   Index Terms--Path security, gray violation, segment routing,                and chips [15]) or software issues (e.g., network operating
+IPv6, intrusion detection.                                                     systems [16]), where the attacked traffic cannot be definitively
+                                                                               attributed to particular packets or flows. Moreover, we attribute
+   Received 19 June 2025; revised 2 December 2025; accepted 21 December        the violation to the logical link-level, which encompasses the
+2025. Date of publication 31 December 2025; date of current version 9 January  hardware and software of the forwarding devices at both ends,
+2026. This work was supported in part by the National Natural Science          along with the ports and physical links connecting them.
+Foundation of China under Grant 62572269 and Grant 62394322. The
+associate editor coordinating the review of this article and approving it for     Localization of the link-level violation provides knowl-
+publication was Dr. Dusit Niyato. (Corresponding author: Han Zhang.)           edge for recovery. Conversely, region-level localization [17]
+                                                                               requires more effort to precisely diagnose. Component-level
+   Kaiyang Zhao is with the Department of Computer Science and Technology,     localization is impractical because individually verifying every
+Tsinghua University, Beijing 100084, China.                                    component would be time-consuming. In addition, link-level
+                                                                               localization enables providers to quickly recover by routing
+   Han Zhang, Xingang Shi, and Zhiliang Wang are with the Institute for Net-   alterations while maintaining an appropriately confined viola-
+work Sciences and Cyberspace, Tsinghua University, Beijing 100190, China,      tion domain for diagnosis.
+also with the Zhongguancun Laboratory, Beijing 100081, China, and also
+with Tsinghua National Laboratory for Information Science, and Technology         There are three challenges for localization in SRv6 net-
+(TNLIST), Beijing 100084, China (e-mail: zhhan@tsinghua.edu.cn).               works: (1) The huge address space of IPv6 and the
+                                                                               multi-path caused by SR increases the volume of state
+   Yahui Li is with the Institute for Network Sciences and Cyberspace,         information required. Large-scale SRv6 networks increase
+Tsinghua University, Beijing 100190, China.
+
+   Xia Yin and Jianping Wu are with the Department of Computer Science
+and Technology, Tsinghua University, Beijing 100084, China, also with the
+Zhongguancun Laboratory, Beijing 100081, China, and also with Tsinghua
+National Laboratory for Information Science, and Technology (TNLIST),
+Beijing 100084, China.
+
+   Jiankun Hu is with the Cyber Security Laboratory, School of Engineering
+and IT, Australian Defence Force Academy, University of New South Wales,
+Canberra, ACT 2612, Australia.
+
+   Digital Object Identifier 10.1109/TIFS.2025.3649962
+
+          1556-6021 © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and
+                         similar technologies. Personal use is permitted, but republication/redistribution requires IEEE permission.
+                                           See https://www.ieee.org/publications/rights/index.html for more information.
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+ZHAO et al.: LOCALIZATION OF GRAY VIOLATIONS IN UNTRUSTED AND UNRELIABLE SRv6 NETWORKS                                                    813
+
+operational overhead, making the deployment of current             packets. Meanwhile, detection prevents disturbance caused by
+violation localization prohibitively expensive. (2) The hetero-    congestion-induced packet loss. In addition, a false positive
+geneous SRv6 ecosystem complicates violation localization.         reduction mechanism is operated in the control plane. Such
+Facilitated gradual deployment is a significant benefit of         robustness against network disturbances is essential to ensure
+SRv6 network development. Incremental deployment (where            reliable security localization.
+legacy devices lack support for new functionalities) results
+in heterogeneous device capabilities. These devices vary in           Lastly, we propose selective telemetry to reduce the over-
+terms of software support, which poses challenges for the          head of reporting telemetry (Section III-D). During each
+full deployment of the new technology. (3) SRv6 networks           period, Glint identifies the most information-rich telemetry
+cannot be treated as ideal networks without disturbances.          reports and selectively transmits these high-volume data. On
+This inherent uncertainty arises from variations, including        the server side, these reports enable accurate localization of
+network congestion, routing fluctuations, and heterogeneous        gray violations in SRv6 networks. By selective telemetry, the
+device processing discrepancies.                                   reporting overhead is fixed instead of being related to network
+                                                                   size.
+   Existing approaches do not adequately address these chal-
+lenges. Out-of-band approaches, such as host-based approach-          In summary, our contributions are summarized as follows:
+es [17], [18], [19], [20], struggle to reflect real packet
+forwarding conditions, especially for intermittent violations.       · We conduct a wide study of the new requirements
+Furthermore, in-band approaches include controller-centric              imposed by gray violation localization in SRv6 network
+centralized approaches and distributed approaches executed              and raise a new understanding of the in-switch localiza-
+inside the switch, depending on where the main functions                tion framework (Section II).
+are executed. Contro-ller-centric approaches [21], [22], [23]
+require centralizing large volumes of traffic with long rout-        · We design and implement Glint, an in-switch framework
+ing paths, resulting in unsustainable overhead. In-switch               that efficiently and robustly localizes gray violations
+approaches [24], [25], [26] have high resource demands.                 in large-scale high-speed SRv6 networks. Probabilistic
+Furthermore, these approaches exhibit systemic vulnerabilities          sampling of intra-segment information, sliding-window-
+when confronted with device congestion, packet reordering,              based detection and a telemetry selection model based
+and clock synchronization discrepancies, triggering false pos-          on self-information are described in detail (Section III).
+itive alerts.
+                                                                     · We perform a comprehensive evaluation of Glint, demon-
+   Glint.We propose Glint (Gray violation localization using            strating its efficiency and robustness in localizing gray
+in-band network telemetry), a gray violation localization               violations and its advantages over existing approaches.
+framework in the SRv6 networks. Unlike previous approaches,             Our evaluations with real topology and demand indicate
+Glint achieves overhead compression through the probabilistic           that Glint reduces header bandwidth overhead by 75.6%
+method while maintaining reporting accuracy. To realize these           and memory overhead by 48.7% without false positive
+objectives, Glint facilitates both efficient telemetry and robust       reports. We also implement a prototype of Glint in P4 [27]
+detection with the following novel designs:                             and deploy it to an Intel Tofino switch [28] (Section IV).
+
+   First, we design segment-speared in-band collection to             We organize the remainder of this paper as follows: In
+achieve low overhead and lossless information collection (Sec-     Section II, we discuss the background and motivation. In
+tion III-B). The original overhead of collection increases with    Section III, we provide an overview of Glint and present our
+the scale of the network. We propose to segment information,       design. We present the results, and a comprehensive evaluation
+where the required information is divided into two levels:         of Glint using our testbed is discussed in detail in Section IV.
+inter-segment and intra-segment. Intra-segment information         Section V is related works, and Section VI is the conclusion.
+contains the results of a single segment, while inter-segment
+information is a summary of the results of all segments. By                      II. BACKGROUND AND MOTIVATION
+sampling in the data plane, the overhead is fixed (including
+complete inter-segment and sampled intra-segment informa-          A. Localizing Gray Violation in SRv6 Network
+tion) instead of network size-related. Glint can determine when
+it has collected complete intra-segment information due to the        1) Attackers Exploit Network Performance Degradation
+integrity of the inter-segment information. Furthermore, we        to Conceal Malicious Activities: Even when a network
+design a distributed path-tracing encoding to cooperate with       remains partially operational, intermittent packet loss can cre-
+sampling.                                                          ate opportunities for malicious activity. Attackers may exploit
+                                                                   performance degradation to conceal their operations and evade
+   Second, to quickly and robustly detect gray violations          timely detection. Because the network still appears opera-
+that cause packet loss in high-speed networks, we propose          tional, service disruptions from low-rate Denial-of-Service
+distributed verification-based detection (Section III-C). The      (DoS) attacks are often mistaken for ordinary congestion. As
+verification process is executed on the data plane to support      a result, these disruptions are attributed to benign performance
+high-speed networks. We use a sliding window for verifica-         fluctuations instead of being recognized as signs of an ongoing
+tion, thus mitigating the clock synchronization disturbance.       attack. This misinterpretation affords adversaries an extended
+Glint employs a self-cyclic verification encoding system that      window to execute objectives. Furthermore, sustained perfor-
+effectively reduces false positive alerts from out-of-order        mance issues may serve as a persistent cover for broader, more
+                                                                   damaging intrusions.
+
+                                                                      2) Threat Model: This work examines gray violations. In
+                                                                   such cases, an attacker induces non-disruptive packet loss
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+814                                                         IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+     Fig. 1. Packet interval of loss from gray violations.         Fig. 3. Statistical characteristics of SRv6 networks.
+
+     Fig. 2. Availability impacted by packet loss.
+
+through external means. The defender attempts to locate these      Fig. 4. Gray violations in SRv6 networks are difficult to localize. The
+violations by using available network devices. We assume           intermittent packet loss caused by gray violation and the multipath brought
+that the system has no prior knowledge of the threat. This         by SRv6 make the packet loss events that can be actually detected in the state
+assumption implies the ability to handle zero-day attacks.         space extremely sparse.
+Note that violations that cause complete service disruption
+are outside the scope of this work. We also assume that the        losses can significantly impact availability, underscoring the
+attacker cannot control the devices within the administrative      need for effective localization of gray violations. Operators
+domain.                                                            can precisely control packet forwarding based on specific SLO
+                                                                   requirements using segment routing. When an SLO violation
+   3) Packet Loss from Gray Violations is Intermittent, Which      occurs, segment routing must promptly adjust the path to
+Degrades Quality of Service (QoS): Gray violations can be          ensure continuous service quality compliance.
+categorized as those that impact all packets or specific packets.
+The first case is characterized by some intermittent packet loss      4) Localizing Gray Violations is Challenging Due to the
+in all packets with no discernible pattern, such as the interface  Need for Full Coverage at All Times and Devices: Intermittent
+flap. In contrast, violations that affect specific packets appear  packet loss from gray violation affects the performance of
+intermittent due to the presence of unaffected packets in the      high-priority services, but is difficult to localize and can take
+traffic mix.                                                       hours or days [24], which is potentially costly [30]. Gray vio-
+                                                                   lations can occur unpredictably at any time and in any network
+   We delineate three common gray violations [14], [15], [16]      device. According to the law of large numbers (O(104) devices
+associated with devices that impact all packets or those related   and O(105) links), the sheer scale of modern networks ensures
+to packet length and protocol that affect only packets. We         that such violations are statistically inevitable. Consequently,
+derived the actual network traffic trace from the WIDE MAWI        effective localization theoretically requires continuous moni-
+backbone network over a 15-minute interval on April 12, 2023       toring of all packets at all times, tracing their forwarding
+[29]. This dataset contains approximately 116 million packets,     paths, and verifying every device traversed. However, imple-
+offering a representative sample of traffic patterns. Each of      menting such comprehensive monitoring is both technically
+these gray violations contributes to intermittent packet loss.     complex and financially prohibitive, making it impractical.
+
+   The analysis indicates that 97% of the loss intervals exceed       5) SRv6 Compromises the Deterministic Monitoring Cover-
+one packet, with an average interval of 40 packets, as shown       age to Localize Gray Violations: As a form of loose routing,
+in Fig. 1. In summary, non-transient packet loss from gray         SRv6 specifies only certain nodes that a packet must traverse,
+violations is not continuous but rather occurs intermittently.     which are identified within the segment list. The unspecified
+                                                                   portions of the route are subject to multi-path forwarding.
+   However, the network is susceptible to gray violations,         Consequently, gray violations are difficult to localize, as SRv6
+which pose challenges to reliable QoS. Service Level Objec-
+tives (SLOs) offer a quantitative framework to delineate the
+service level that consumers can anticipate from a provider.
+As shown in Fig. 2, a gray violation causing a packet loss
+of 0.05% reduces the availability to 95% for a service with
+a drop rate SLO of 0.1%. This highlights that even minor
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+ZHAO et al.: LOCALIZATION OF GRAY VIOLATIONS IN UNTRUSTED AND UNRELIABLE SRv6 NETWORKS                                                    815
+
+enables service flows to traverse multiple paths, meaning                                                     TABLE I
+intermittent performance degradation at a single node may not        A SUMMARY OF THE FEATURES OF EXISTING APPROACHES FOR LOCAL-
+disrupt the overall flow. Furthermore, as shown in Fig. 4, only
+when the state that passes through the faulty link and causes                                         IZING GRAY FAILURE
+packet loss is captured can the localization be effectively
+performed. In the state space obtained by monitoring, the states     not support multiplications, divisions, floating-point opera-
+with information are sparse.                                         tions, or loops of variable length.
+
+   Fig. 3 quantifies multipath prevalence in SRv6 under real-           3) Requirement 3 - Robust to Disturbances in SRv6 Net-
+world topologies and traffic engineering (TE) policies. Our          work: Network congestion should not be mistaken for packet
+analysis employs six real-world network topologies from the          loss violations. Similarly, out-of-order packets should not be
+REPETITA dataset [31] with standard SRLS [32] configu-               equated with packet loss. The flexible segment routing mech-
+rations (default path computation and optimization settings)         anism can lead to packets taking different paths, increasing
+for TE. The SRv6 implementation demonstrates consistent TE           the likelihood of out-of-order delivery. Furthermore, external
+outcomes with segment stacks predominantly containing 2-3            factors such as switch clock synchronization errors are distur-
+SIDs. Almost 13.8% of SID pairs exhibit intrinsic multipath.         bance sources. Previous violation localization systems mainly
+The average multipath count per flow reaches 2.6 paths, while        addressed isolated violations, overlooking the influence of
+individual SID pairs in dense topology utilize up to 18 paths.       external disturbances. It is essential for the system to maintain
+This pervasive path diversity dilutes transient violation signals    robustness against these network disturbances.
+across redundant routes, challenging violation localization in
+SRv6.                                                                C. Motivating Glint
+                                                                        Existing gray violation localization approaches can be
+B. New Requirements of Localizing Gray Violation in SRv6
+Network                                                              divided into three main types according to their core deploy-
+                                                                     ment locations: host, controller, and switch. Table I provides
+   1) Requirement 1 - Low Overhead in the Large-Scale SRv6           an analysis of the inherent limitations of each category.
+Network: SRv6 has gained widespread adoption in large-
+scale network environments, such as data center networks                1) Host-Based Approaches are Insufficient to Completely
+[5], [10] and backbone networks [6]. Existing gray violation         Address Gray Violations: Probe packets from host-based
+localization systems [19], [21] are designed for smaller-            approaches [17], [18], [19] often fail to reflect the actual
+scale networks, where overhead is manageable. These systems          forwarding conditions of the production packets due to proto-
+assumed a limited number of switches, which did not account          col priority differentiation and transient path inconsistencies.
+for the scale of modern SRv6 networks.                               Previous work has utilized IP-in-IP encapsulation techniques
+                                                                     [19] or passive monitoring tools [18] to improve. Nevertheless,
+   In particular, SRv6 uses an IPv6 address to identify each         precise emulation of production-grade forwarding behaviors
+segment. This lets it support up to 2128 unique segment              remains unattainable due to inherent protocol prioritization
+identifiers, which makes it can work with huge networks              disparities. In addition, host-based approaches face challenges
+with millions or billions of nodes. As a result, the network         in covering violations that occur intermittently. To address
+diameters, which are the minimum distance between the most           this coverage issue, sending probe packets at microsecond
+distant nodes, are expected to grow. The overhead of the             frequencies could be an option. However, this solution is
+existing localization system is closely related to the scale of the  impractical due to hardware processing bottlenecks (e.g., NIC
+network. Therefore, service providers must ensure that their         packet generation limits).
+gray violation localization systems are applicable to large-scale
+SRv6 networks.                                                          2) Controller-Centric Approaches Struggle to Support
+                                                                     Large-Scale SRv6 Networks: The basic design concept
+   In SRv6 networks, the insertion of segment lists increases        involves mirroring network traffic to the controller, which
+header size, potentially causing Maximum Transmission Unit           then analyzes the traffic for various performance metrics. This
+(MTU) issues, particularly on links with limited MTU capac-          requires a centralized system to potentially handle hundreds
+ity. This concern becomes even more pronounced when INT              of Tbps of traffic, leading to increased network load pro-
+information is introduced. Therefore, it is imperative to care-      portional to the number of links. Conversely, counter-based
+fully consider the bandwidth consumption resulting from SRv6
+SR lists and INT insertions.
+
+   2) Requirement 2 - Supporting the High-Speed SRv6 Net-
+work: SRv6 requires efficient packet parsing and forwarding
+capabilities in high-speed networks to meet low latency and
+high throughput demands. As network speeds exceed 100
+Gbps and reach Tbps, operators face challenges in deploying
+new capabilities due to limited resources and abilities. High-
+speed networks demand more advanced processing capabilities
+but face limitations with existing systems. For instance, the
+programmable data plane, while tailored for swift packet
+processing, does not accommodate complex operations. It does
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+816  IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+                                                                             sacrificing accuracy; high-priority flows maintain independent
+                                                                             counters, while less critical flows use hash trees, consuming
+                                                                             6.65% of device memory.
+
+                                                                                Telemetry systems such as INT generate large amounts of
+                                                                             traffic that can overload the network. Moreover, collecting
+                                                                             events results in extremely high event rates. The overload
+                                                                             of the control plane occurs when the event rate exceeds the
+                                                                             bandwidth capacity of the link or the processing capability of
+                                                                             the server [35].
+
+Fig. 5. Comparison between counter-based, protocol-based, and verification-  D. The Key Idea of Glint
+based frameworks.
+                                                                                  Our approach: In-switch segmented verification-based
+methods assume low packet loss rates and high-speed inter-                   telemetry. In this paper, we propose an in-switch viola-
+faces between control and data planes [22], [23]. These                      tion localization system, Glint based on verification. Glint
+assumptions may not stand up to the varied conditions pre-                   optimizes the system overhead using segment-speared in-
+sented by the SRv6 network. For instance, LossRadar [23] is                  band collection (Section III-B), allowing the system to scale
+unable to accurately determine violation locations when faced                efficiently in large-scale SRv6 networks. Glint also introduces
+with a packet loss rate of 0.15% in a 100 Gbps switch with                   distributed verification-based detection that facilitates line
+32 ports.                                                                    speed detection and addresses the issue of false positives,
+                                                                             which are common in verification-based systems (Section
+   3) Current in-Switch Approaches Lack Robustness and                       III-C). Lastly, Glint proposes selective telemetry (Section
+Involve Excessive Overhead: Protocol-based solutions [24],                   III-D), which reduces the overhead of telemetry reporting.
+[26] operate between adjacent hops, which requires additional
+acknowledgment for synchronization. Protocol adoption is                        Glint differs from existing in-switch gray violation local-
+hindered by non-standardized hardware functionality profiles.                ization systems in two key aspects. First, Glint can run
+The absence of universal feature abstraction layers forces                   efficiently on large-scale SRv6 networks. Existing methods
+protocol developers to accommodate vendor-specific capability                exhibit overhead that scales linearly with the network diameter,
+matrices. Therefore, an incremental deployment strategy is                   significantly limiting their performance in large networks. In
+essential, including initial implementation of agents on a                   contrast, Glint is designed to ensure that overhead remains
+subset of devices and subsequently expanding the deployment                  stable even as network size grows, addressing the scalability
+across the network. Their lack of incremental deployment                     limitations. For SRv6, the path actually has an invariant, that
+capabilities places them at a disadvantage in practical systems.             is, the nodes that must be passed through are specified by
+An alternative approach involves counting the packets sent                   the segment list. Glint uses this property to segment the
+and received between upstream and downstream switches.                       information to reduce the overhead. Second, Glint maintains
+Counter-based methods [25] require precise clock synchro-                    robustness against network disturbances, a critical improve-
+nization to ensure that the packet counts. Therefore, none                   ment over existing systems. Traditional systems often fail
+of the aforementioned approaches can withstand network                       to properly handle network disturbances, such as out-of-
+disturbances, as shown in Fig. 5. Moreover, their overhead                   order packets and clock synchronization errors. These systems
+is significant.                                                              typically assume ideal conditions or require the deployment of
+                                                                             agents on every switch, which is neither feasible nor scalable
+   High bandwidth overheads degrade application perfor-                      in modern high-speed networks. On the other hand, Glint is
+mance. The significant per-packet overheads from INT affect                  specifically designed to be robust against these disturbances.
+the application-level throughput. At high network utilization,               As a result, Glint achieves low-overhead, line-rate operation
+the residual capacity is reduced. The additional bytes in the                while ensuring robust gray violation localization.
+header will cause a greater degradation of goodput than that
+of the payload byte overhead. Although some networks utilize                                          III. GLINT DESIGN
+jumbo frames to alleviate this issue, it is important to note that
+not all networks are capable of supporting such configurations.              A. Glint Overview
+
+   Memory overhead from information storage is a concern.                       The architecture illustrated in Fig. 6 presents the framework
+Each flow in in-switch approaches requires independent coun-                 of Glint, emphasizing its ability to localize violations. Glint
+ters or buffers. The memory cost of counters, typically 32 bits,             consists of two core components: Glint server and Glint
+can be substantial, while buffers consume even more mem-                     agent. The Glint server is responsible for receiving commands
+ory. For example, DOVE [25] maintains a counter for each                     from network operators, sending configurations to the respec-
+monitored flow, only tracking 512 high-priority flows, which                 tive agents. It also collects reports from agents and provides
+consumes approximately 4.80% of device memory. FANcY                         a report containing the violation timestamp and affected link
+[26] attempts to use fewer counters to monitor more flows,                   to the operator. Meanwhile, the Glint agent focuses on in-
+                                                                             band information collection and packet loss detection within
+                                                                             the data plane, while the control plane is dedicated to reducing
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+ZHAO et al.: LOCALIZATION OF GRAY VIOLATIONS IN UNTRUSTED AND UNRELIABLE SRv6 NETWORKS                                                    817
+
+Fig. 6. The overview of the Glint framework and its workflow.
+
+Fig. 7. Fields of Glint Header with SRv6. The reserved and pad fields can  false positives ( ). Upon detecting a violation, the control
+be reduced to provide space for other header fields.                       plane initiates selective telemetry (Section III-D), prioritizing
+                                                                           violation data while filtering redundant information to reduce
+false positives. In essence, Glint encompasses the configura-              reporting overhead ( ).
+tion phase, the update phase, and the analysis phase.
+                                                                              Analysis phase. Glint server aggregates telemetry reports
+   Configuration phase. The network operator specifies the                 to complete localization ( ). The analyzer processes multiple
+affected service along with its segment list, consisting of SIDs,          fragments selectively reported by telemetry, combining them to
+and submits this information to the Glint server ( ). The                  generate a violation analysis, incorporating packet loss trends
+server generates specific configurations ( ) and assigns them              and segment-level diagnostics. Subsequently, the operator is
+to the roles, which are classified as inter-segment switches               presented with a violation report to guide recovery. It is worth
+and intra-segment switches. Inter-segment switches possess an              noting that specifying the recovery procedures is not within
+SID, whereas intra-segment switches do not. In this paper,                 the design objectives of this system. Different gray violations
+inter-segment refers to communications among inter-segment                 require distinct recovery strategies, enabling prompt resolution
+switches, while intra-segment pertains to interactions between             once the violation location is identified.
+intra-segment switches and other switches.
+                                                                           B. Segment-Speared in-Band Collection
+   Update phase. Glint agent is deployed on each switch, con-
+figured to process packets based on a pre-defined configuration               Glint requires the distributed in-band collection of infor-
+file. The agents analyze all packets traversing the device: if a           mation regarding keys and paths. It is necessary to capture
+packet matches, the agent inserts a Glint header at the ingress            the forwarding path of each service packet, along with a
+node, while the additional header is eliminated at the egress              unique key, as required in Section III-C. However, in SRv6, a
+node. The structure of the Glint INT header is delineated in               multi-path routing environment where service packets traverse
+Fig. 7.                                                                    nondeterministic paths, identifying the forwarding switches
+                                                                           presents challenges. Additionally, retrieving keys from all
+   As packets move through the network, detection and state                switches incurs substantial computational and bandwidth over-
+updates occur at each node. Glint captures in-band data within             head. Glint should minimize the header overhead from INT
+the data plane (Section III-B), collecting information for verifi-         (Requirement 1).
+cation to support detection and localization of violations ( ).
+Violation detection (Section III-C) is performed in the data                  1) Strawman Approach: Recording Information Cumula-
+plane ( ). Glint aggregates detection results over a predefined            tively: The existing in-band approach in networks involves
+interval and periodically reports them to the control plane ( ).           each switch appending its unique device ID and associated
+The control plane further refines the accuracy by reducing                 key to the INT header. As the network expands and paths
+                                                                           involve more switches, this cumulative encoding results in
+                                                                           a considerable bandwidth overhead that increases linearly
+                                                                           with the number of hops. As the INT header expands with
+                                                                           additional hops, resource consumption increases, leading to
+                                                                           reduced network throughput, particularly in large-scale SRv6
+                                                                           deployments where paths involve numerous segments.
+
+                                                                                  DESIGN 1: Probabilistic sampling of intra-segment
+                                                                           information. Glint involves dividing the telemetry data into
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+818                                  IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+                                                                               Algorithm 1 Reservoir Sampling
+
+                                                                                    Require: Switch Status S, including Time  and Info
+
+                                                                                    i
+
+                                                                                    Ensure: Sampled Information I, Path Length
+
+                                                                               1: function UPDATEINSWITCH (M, , I, s., s.i)
+
+                                                                               2: s  M  (h1(s.)  h2( ))                                     Sample
+                                                                               3: if s = 0 then
+
+                                                                               4:         Reset I to 0                             If sampled
+
+                                                                               5: I  update(I,s.i)
+
+                                                                               6: Increase by one
+
+                                                                               7: procedure FORWARDING (S{, i})
+
+                                                                               8: M  F(S)                                    Generate mask
+
+Fig. 8. Glint uses inter-segment and intra-segment information separately for  9: Set I to 0, to 1
+efficiency and accuracy.
+                                                                               10: for s in S do
+
+                                                                               11:        UPDATEINSWITCH (M, , I, s., s.i)
+
+intra-segment and inter-segment information, as in Fig. 8.                        For each intra-segment information that needs to be
+Inter-segment information represents an aggregation of intra-                  reported, the probability of reporting is 1/|S| and follows a
+segment information. For inter-segment information, Glint                      Bernoulli distribution j.
+employs a basic INT collection approach, which does not
+require path recording since the path is predefined by the seg-                               Â       1Ã  =  ÂnÃ   1   Â     1 Ãn-k            (2)
+ment list. In contrast, for intra-segment information, sampling                              j k, n,           k         1-
+is utilized, transmitting only a subset. Within each segment,                                                       k
+Glint applies a probabilistic sampling approach to capture
+essential data and path information. This design strategy                         If each packet contains its own information and there exist
+enables Glint to streamline data collection at the segment                     |S|, then the number of reports E that can collect all the
+level, balancing detailed telemetry on key metrics with mini-                  information is expected to be: E = |S|  H|S|, H|S| is the |S|-
+mized bandwidth.                                                               th harmonic number. Utilizes the asymptotic nature of the
+                                                                               harmonic number, and  is the Euler-Mascheroni constant:
+   2) Data-Plane Native Sampling: Equal probability sam-
+pling needs to be performed on the switches that the packets                                                           1        Â  1     Ã
+pass through. Reservoir sampling is implemented in the data                                                               +O
+plane, providing an approximate sampling method. However,                                 E  =  |S| log |S| + |S|  +   2           |S |        (3)
+reservoir sampling requires random number division and this
+function cannot be performed in the exiting data plane. To                     3) Distributed Intra-Segment Path Tracing: Glint first
+address this issue, Glint proposes a data-plane-native reservoir
+sampling method. A key feature of this method is the use of                    defines a flow f with a set of paths R f = (r1, r2, . . . , rx). When
+left-shift operations to approximate the function F(x). This
+approach overcomes the limitation that division cannot be                      d represents a device, each path rx can be composed of the
+executed in the data plane. For instance, when the maximum                     sequence (d1, d2, . . . , dy), where the device ID of dy is denoted
+anticipated network path length L equals 48 in the network,                    as cy. The path of a packet is encoded through a series of XOR
+the function F(x) is given by:
+                                                                               operations applied to the device identifiers at the intra-segment
+
+                                                                               switches.
+
+                                                                                             Path Codexf = c1  c2  · · ·  cy                   (4)
+
+     F(x) = (x|(x 1))|((x|(x 1)) 2)  (1)                                       In conjunction with probabilistic sampling, the path-tracing
+                                                                               system records only the sampled paths. Specifically, the system
+   The precision of the computation can be enhanced by                         records the path from the switch at the sampling switch
+applying a correction mask pre-calculated based on L. The                      (b-th switch) to the destination switch. Upon sampling, the
+M is calculated in advance based on hmax. For instance, the                    path is encoded with a default value in Glint, which is then
+approximate sampling probability of x = 9 without the M is                     continuously updated as the path progresses.
+1/16, and with the M = (0111)2 is 1/8.
+                                                                                             Path Codexf = cb  cb+1  · · ·  cy                 (5)
+   On the other hand, the random number is an XOR value
+of the last log2 bits of Ingress epoch and Path length (or                        Each network device has a unique 48-bit MAC, and the
+other hash functions h1, h2 that output the same number of                     manufacturer assigns the last 2 bytes. Native MAC codes
+bits). Since epoch has length , the random number can vary                     are already integrated into the hardware and do not require
+                                                                               additional software. Since the network environment acquires
+under the same epoch with the same group. Packets with the                     multiple devices from the same manufacturer simultaneously,
+                                                                               Glint takes the last µ bits of MAC and sets the  bits of anti-
+same timestamp and group have the same random number,                          collision bits to form Device ID. Anti-collision bits are all 0
+                                                                               by default.
+but the sampling granularity does not concern such a setting.
+Based on the previous discussion, Glint employs Algorithm 1                       Path code has the possibility of hash collision. This issue
+                                                                               can be addressed with the following approach. First, the
+to update the metadata.
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+ZHAO et al.: LOCALIZATION OF GRAY VIOLATIONS IN UNTRUSTED AND UNRELIABLE SRv6 NETWORKS                                                    819
+
+Fig. 9. Overview of sliding window-based detection.
+
+codes of all the end-to-end paths of the flows monitored in         the newly received key. The downstream switch performs
+the network will be calculated. Then it will verify whether         verification when it encounters the end-of-window marker. If
+these different paths are using the same code. If so, the anti-     it detects an error, it marks the packet loss and the related
+collision bit of one of the devices in the conflicting path will    code and finally resets the code to its initial state.
+be modified. The process will be looped back to re-verify
+the collision until no conflict exists. If the algorithm still         The length of the cyclic encoding directly impacts the
+does not return valid results, extend the length of . Hash          minimum detection period. A shorter cycle results in more
+collisions are rare, and even with a limited , conflicts are        frequent detections and reporting, which can lead to unnec-
+unlikely. Theoretically, increasing the length of  is equivalent    essary overhead. On the other hand, a longer cycle reduces
+to applying a double-hashing technique, where the second hash       the frequency of detection, potentially making the detection
+reduces collision probability further, ensuring unique codes for    granularity too coarse. Additionally, a longer encoding length
+different paths.                                                    increases both the bandwidth for transmitting the information
+                                                                    and the device memory for processing the codes.
+   In the Glint server path encoding database, each encoding is
+mapped to a defined path. Any encoding that does not match             1) Intra-Window False-Positive Reduction: To reduce false
+these predefined sequences indicates a invalid encoding, signi-     positives caused by out-of-order packets, Glint introduces a
+fying an unrecognized path within the network configuration,        self-cyclic encoding mechanism. Through multiple windows
+prompting the server to report the anomaly. The path encoding       of verification between upstream and downstream, verifier can
+database is hosted on the Glint server, as the encodings can        tolerate a certain degree of packet reordering, enhancing the
+be precomputed and only need to be compared when an                 accuracy of packet loss detection. The self-cyclic encoding
+anomaly is detected. Consequently, neither computation time         mechanism allows for handling out-of-order packets across
+nor storage cost becomes a bottleneck for the system.               multiple cycles due to its inherent design.
+
+C. Distributed Verification-Based Detection                            Lemma 1: An n-bit cyclic encoding can tolerate out-of-order
+                                                                    packets within a window of 2n packets without loss.
+   Glint employs gray violation detection based on verification:
+the upstream switch inserts its own key into the service packets       2) Inter-Window False-Positive Reduction: Glint also min-
+and the downstream switch verifies it. The idea is inspired by      imizes the occurrence of false positives before any reports are
+the fact that packet loss is usually intermittent as mentioned in   generated. By refining the detection process at the agent level,
+Section II. If packet loss is continuous, the verification process  the system ensures that only reports with a high confidence
+would result in false positives, making it no more accurate than    level are forwarded.
+a random guess. Only when the packet loss is discontinuous
+does the verification process yield the benefit of high detection      Lemma 2: If packets becoming out-of-order occurs across
+accuracy.                                                           cycles without any packet loss, the system will produce
+                                                                    consecutive error detections over multiple cycles.
+   Glint detection module must have low memory consumption
+(Requirement 1) on the switch with line-speed (Requirement             Due to the nature of self-cyclic encoding, it is possible to
+2) and tolerance for congestion, out-of-order packets and           handle packet reordering across cycles.
+partial deployment (Requirement 3).
+                                                                       Lemma 3: If packets becoming out-of-order occurs across
+          DESIGN 2: Sliding-window-based detec-                     cycles without any packet loss, the consecutive erroneous cycle
+tion.Downstream switches detect packet loss by verifying            results can be XOR-ed to produce the correct result.
+their sliding window, which avoids dependency on clock
+synchronization, as shown in Fig. 9. In the upstream egress            In summary, self-cyclic encoding is capable of preventing
+pipeline, a fixed key gn is generated by a self-cyclic sequencer    false positives that may arise due to packet reordering.
+with a period corresponding to gn, referred to as the key
+generator. The generator has a predefined characteristic value         Theorem 1: An n-bit cyclic encoding can tolerate out-of-
+for each step in the cycle and updates sequentially as packets      order packets within at least 2n+1 packets without packet loss.
+with corresponding flow identifiers arrive. Then, when the
+downstream switch receives packets with a key, it updates              Glint introduces three mechanisms that combine the results
+the code for the corresponding flow using the received key.         of adjacent failed windows: (a) Combining adjacent failure
+The update is performed by XORing the stored code with              windows uses a register to store f ailcode, checking discrep-
+                                                                    ancies via XOR with the current code, allowing tolerance
+                                                                    for packet reordering within 2n+1 packets; (b) Combining m
+                                                                    failure windows introduces two registers, f ailcode and f ailn,
+                                                                    performing verification only after processing n windows,
+                                                                    which minimizes verification overhead and supports flexible
+                                                                    error detection intervals; (c) Combining m windows with
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+820                          IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+deferred validation processes N windows before validation,                  Fig. 10. Selective reporting and violation localization.
+thus enhancing efficiency and reducing false positives while
+managing larger sequences of windows.                                                                  TABLE II
+                                                                               STATISTICAL INFORMATION OF THE NETWORKS
+   3) Ignore Congestion-Induced Packet Loss: Glint strategi-
+cally positions packet loss detection to prevent congestion-         Assume that a network segment M contains forwarding
+related logging losses. Typically, congestion occurs in the       devices, each with an independent violation probability pi. The
+Traffic Manager (TM) within switches, as it handles the           self-information of a packet loss event occurring in the M can
+switching logic for moving packets between ingress and egress     be expressed as:
+pipes. Thus, in Glint, the packets are verified and inserted
+after the TM of the upstream switch and before the TM of the                                                         !
+downstream switch.
+                                                                                                                Y
+   4) Incremental Deployment: It is essential to note that the                 I(M) = - log 1 - (1 - pi) ,
+operator does not typically upgrade all switches simultane-                                                                                    (7)
+ously. Therefore, Glint is designed with the deployment within
+a subset of the SRv6 network. Glint treats devices that do
+not support INT functionality as black boxes in our approach.
+In the event a violation occurs between two points, network
+administrators can require additional methods to pinpoint the
+exact location of the error.
+
+   For example, if a packet passes through a device that does
+not support Glint between two devices that do, the system
+will only indicate whether there is a violation between the two
+Glint-enabled devices. In this case, the scope of the violation
+is significantly narrowed for network administrators. They can
+focus on localized probing, such as mirroring the traffic flow
+and actively testing this segment, which is far more efficient
+than a global probing.
+
+                                                                                                                i=1
+
+D. Selective Telemetry                                            where  1  -  Q        (1  -  pi)  represents  the  probability   of  packet  loss
+
+   To address the challenges in network telemetry, the issue                       i=1
+arises in managing the event rate of telemetry (Requirement
+1). In typical setups, switches periodically report all encod-    in path M. This formulation incorporates individual device
+ing data across paths, which yields inter-segment and
+intra-segment information. However, this full-scale reporting     violation probabilities, assigning higher self-information to
+process introduces a significant bandwidth overhead. When
+data is collected concurrently from multiple switches, the        paths with fewer reliable devices.
+volume increases linearly with the number of monitored paths.
+                                                                  For non-loss events, which are assumed to have a high prob-
+       DESIGN 3: A telemetry selection model based on
+self-information.For networks experiencing gray violations,       ability due to generally low violation rates, Glint approximates
+where packet loss may be intermittent, a single non-loss report
+cannot conclusively verify that all links are violation-free.     the self-information as:
+Therefore, only packet loss information from inter-segment
+reporting provides reliable diagnostic value, whereas intra-                                                                 !
+segment non-loss data have limited ability to verify violation
+presence.                                                                      I(non-loss)  - log               Y               ,              (8)
+                                                                                                                   (1 - pi)
+   In this model, Glint utilizes the concept of self-information
+to quantify the diagnostic value of each telemetry event. Self-                                                 i=1
+information, denoted by I(n) for a specific event n, is
+inversely related to the probability of observing that event.     reflecting the low diagnostic value of frequent non-loss events,
+Formally, if an event n occurs with probability P(n|),            where I(non-loss) is typically close to zero.
+where  represents relevant network conditions, then the self-
+information of n is given by:                                        Thus, packet loss events in paths with fewer, but less reli-
+                                                                  able, devices yield higher self-information values, enhancing
+                                                                  their diagnostic value for localizing gray violations. To imple-
+                                                                  ment efficient telemetry, inter-segment switches will report
+                                                                  periodically within each epoch (using internal timestamps
+                                                                  without requiring synchronization). Each device reports only
+                                                                  the highest self-information metrics observed, as in Fig. 10.
+                                                                  After collecting a certain number (mentioned later) of reports,
+                                                                  the system can hypothesize about the status of unreported links
+                                                                  and localize violations.
+
+     I(n) = - log (P(n|)) ,  (6)                                                             IV. EVALUATION
+
+where lower probabilities of P(n|) yield higher values of         A. Setup and Glint Implementation
+I(n), indicating a greater amount of diagnostic information
+or novelty under specific network conditions.                        1) Scenarios: For performance comparison of large-scale
+                                                                  networks, we use the REPE-TITA [31], a framework for
+                                                                  repeatable traffic engineering algorithms experiments on a
+                                                                  large-scale dataset of real networks. We experimentally
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+ZHAO et al.: LOCALIZATION OF GRAY VIOLATIONS IN UNTRUSTED AND UNRELIABLE SRv6 NETWORKS                                                    821
+
+                     TABLE III                                                       TABLE IV
+METADATA FIELDS MAINTAINED BY GLINT                                 FIELDS IN REPORT HEADER BY GLINT
+
+demonstrate the overhead of the method using large topologies                                    Fig. 11. Header space usage.
+in REPETITA with demand matrices. The evaluation assumes
+that there are 512 flows (i.e., different Flow IDs) to monitor      is implemented using timestamp bit-shifting operations, ensur-
+for each pair of source and destination forwarding devices.         ing computational efficiency and precision.
+Table II lists the number of nodes, the total packet rate, and
+the maximum path length for each selected network.                     When an epoch passes and packet loss occurs in this epoch,
+                                                                    the inter-segment switch uploads INT report packets. Table IV
+   Traffic engineering solutions are realized through SRv6.         delineates the components of the report header. The Flow id
+Approximately 2000 services, randomly selected from the             and other information are replicated from the Glint header,
+set of demanded flows, exist within each SRv6 network.              as illustrated in Table III. We populate the remaining fields
+The segment list for each service is configured to contain          by querying the standard metadata. In the event of an event
+a maximum of 3 SIDs. Consequently, the segment list is              requirement, the original packet undergoes cloning, followed
+determined to be equivalent to the shortest path at the flow        by the insertion of the event header into the cloned packet.
+endpoint.                                                           Next, we truncate the cloned packet to remove the original
+                                                                    payload and then upload it to the analyzer.
+   In order to achieve the desired objective, DOVE [21] must
+be fine-tuned to achieve the target. Furthermore, we consider       B. Efficiency of Collection
+Netsight [21], LossRadar [23], NetSeer [24] and FANcY
+[26] as comparative methodologies, given their established             1) Bandwidth Overhead from Header Space: For DOVE
+superiority in existing literature.                                 [25], the usage of the header space is constant, and other
+                                                                    approaches are not required to use a header. The measurement
+   2) Network Testbed: We implement Glint on P4 [27] soft-          of the header space is shown in Fig. 11. The allocation of
+ware switch (BMv2 ­ behavioral model version 2 [36]). The           space for telemetry headers has a significant impact on the
+Mininet-emulated networks run on a Linux server with 4 ×            overall network bandwidth overhead throughout the duration
+2.40GHz Intel(R) Xeon(R) Gold 6240R CPUs and 512GB                  of transmission. While more bits are used to store telemetry
+of RAM. The queue rate of the forwarding device is set to           data, fewer bits are available to carry the packet payload and
+9000 pps, and the queue depth is 256 packets. Tcpreplay             stay within the MTU. In the six experimental networks, a
+for generating network traffic. Additionally, to ensure realistic   maximum of 4 bytes is reserved for telemetry data. The packet
+traffic patterns, we use actual trace data [29], closely emulating  header overhead of Glint is reduced by 75.6% on average
+real-world traffic characteristics.                                 compared to the state-of-the-art approach. For a network with
+                                                                    the default MTU of 1500 bytes, this will result in at least
+   3) Glint INT Header: The structure of the Glint INT header       0.26% bandwidth consumption. In addition, we also compare
+is delineated in Table III provided. Since the network environ-     the baseline without using the probabilistic compression, and
+ment acquires multiple devices from the same manufacturer           the results show the effectiveness.
+simultaneously, Glint takes the last 8 bits of MAC to form
+device ID.                                                             2) Bandwidth Overhead From Report: In Fig. 12, we
+                                                                    compare the bandwidth overhead of Glint, LossRadar [23],
+   4) Glint Report: We define the minimal time unit as an           DOVE [25], and FANcY [26]. The total traffic running on the
+epoch, with the experimental setup defaulting to 100 epochs
+per second, equivalent to an epoch duration of 10 milliseconds.
+When a switch enters a new epoch and receives packets,
+it triggers a report summarizing the activity of the previ-
+ous epoch. Notably, the duration of an epoch should be
+adjusted according to the transmission rate to accommodate
+varying traffic patterns. Importantly, epochs are not propagated
+between switches using INT, meaning they solely reflect the
+local timing of the current switch. This design eliminates the
+need for inter-switch time synchronization. Epoch calculation
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+822                                                  IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+Fig. 12. Overhead of generating reports on 8 Gbps link with 1% packet loss.  Fig. 14. Detection accuracy.
+
+                                                                                                                     TABLE VI
+
+                                                                             ACCURACY (%) OF GRAY VIOLATION LOCALIZATION UNDER VARYING
+                                                                                                        FLOW SIZES AND DROP RATES
+
+              Fig. 13. Approx algorithm vs. target.
+
+                               TABLE V
+     ANTI-COLLISION BIT SETTING DOWN FREQUENCY
+
+link is 8 Gbps, and the average packet loss rate is 1%. Among                Positives, TP), as undetected losses (False Negatives, FN) risk
+the methods, Glint generates the lowest overhead. Glint gen-                 disrupting transport-layer retransmission mechanisms. These
+erates around 4X of magnitude less overhead than DOVE and                    consequences typically outweigh the operational overhead of
+0.85% less overhead than FANcY. Fancy interacts through                      false alarms (False Positives, FP). The True Positive Rate
+protocol messages and does not perform INT processing on                     (TPR, defined as TP/(TP+FN)) serves as the primary evalua-
+all messages. However, Glint still maintains the same level of               tion metric because it quantifies the proportion of actual loss
+bandwidth and has better robustness for gradual deployment.                  events correctly detected.
+
+   3) Probabilistic Information: We measured the probabilis-                    Fig. 14 illustrates the efficacy of Glint across various loss
+tic information extraction ability of Glint. Fig. 13 illustrates             rates. It uses both k = 3 (3)-bit cyclic) and k = 4 (4)-bit
+how the correction mask enhances the precision of the sam-                   cyclic) configurations for packet loss detection. At a loss rate
+pling probability approximation in Glint. This improvement                   of 1%, the Glint TPR employing k = 4 exhibits a discernible
+is achieved through data plane operations that have a time                   advantage. However, a noticeable decline in Glint detection
+complexity of O(1).                                                          accuracy transpires as the loss rate increases to 10%. This
+                                                                             decrease predominantly stems from the loss of packets bearing
+   4) Path Encoding: With the native path encoding of Glint,                 detection bits at these increased loss rates. It can be observed
+there is a possibility of hash collision, despite the setting of             that the report count undergoes a reduction when the packet
+parameters µ and . We tested the performance of the path                     loss rate exceeds 10%. Nonetheless, though the accuracy of
+coding system in six networks (tested 1000 times with random                 detecting packet loss rates may dwindle at high packet loss
+device MAC codes) with µ = 21 and  = 2.                                      rates, the precision of identifying gray violation events remains
+                                                                             unaltered. The above conclusion is because the number of
+   In Table V, Glint only needs to send additional correction                packet losses included in the event has increased.
+paths to 1.577 devices on average in the largest Sprintlink
+network. In the experiment involving six networks, each device                  2) Localization Accuracy: Table VI reports the accuracy
+is allowed a maximum of two corrections to complete the                      of security event localization across different flow sizes and
+process.                                                                     drop rates. When each flow contains fewer than 10 packets,
+                                                                             Glint fails to identify. In contrast, for flows with 1,000 pack-
+C. Benefits of Detection                                                     ets or more, the system maintains the accurate localization
+                                                                             even under severe loss conditions. For moderate flow sizes
+   1) Detection Accuracy: Packet loss events occurring in ver-               (10­1,000 packets), the accuracy remains high under typical
+ification are defined as positive samples. The system prioritizes            loss rates but degrades when the drop rate approaches 95%.
+the accurate identification of actual packet loss events (True               Because Glint performs in-band telemetry using packets from
+                                                                             the underlying traffic flows, its accuracy inherently depends
+                                                                             on the volume of forwarded packets. When a flow is very
+                                                                             short (fewer than ten packets) or when the packet-loss rate is
+                                                                             abnormally high, the scarcity of available telemetry samples
+                                                                             can significantly degrade the accuracy. These results indicate
+                                                                             that Glint supports reliable security incident localization in
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+ZHAO et al.: LOCALIZATION OF GRAY VIOLATIONS IN UNTRUSTED AND UNRELIABLE SRv6 NETWORKS                                                    823
+
+Fig. 15. Comparison of false positive reduction mechanisms.
+
+                                                                                        Fig. 18. Event rate.
+
+Fig. 16. TCAM memory usage.
+
+                                                                   Fig. 19. Time from first inspection to violation.
+
+Fig. 17. SRAM memory usage.
+
+                                                                   Fig. 20. Time to receive exact location of violation.
+
+most operational traffic scenarios, confirming its ability to      [25] has twice the memory consumption of other methods
+identify abnormal links.                                           because it keeps two tables to select and monitor flows. SRAM
+                                                                   is mainly used to store telemetry information. Benefiting from
+   A small number of long flows typically account for the          verification-based detection, Glint achieves the best available
+majority of bytes transmitted across a network. Therefore,         device memory usage. In fact, there is still enough space for
+focusing on these dominant flows is often sufficient for effec-    additional services (at least 71.9% of TCAM and 99.0% of
+tive violation detection. When short flows represent a large       SRAM are still present). The memory overhead of Glint is
+fraction of the traffic, flow aggregation becomes a practical      reduced by 48.7% on average compared to the state-of-the-art
+alternative. Since Glint identifies traffic based on an ID,        approach. These statistics are implemented in software.
+multiple flows can be mapped to the same identifier at ingress
+nodes, allowing their aggregated behavior.                         D. Effectiveness of Telemetry
+
+   3) False Positive Reduction Effectiveness: Although Glint          1) Telemetry Event Rate: We compared the number of
+has a certain false positive reduction effect when it is natively  event reports of Glint before and after the use of selective
+implemented in the data plane, it can be further optimized         telemetry. We assume that the length of the Glint report packet
+in the control plane. We conducted experiments with different      remains unchanged, that is, if more information needs to be
+degrees of packet disorder (with different maximum disordered      transmitted, additional event reports are required. As shown in
+packet intervals and a disorder probability of 0.1%), as shown     Fig. 18, we found that after the use of selective telemetry, the
+in Fig. 15. Three false positive reduction mechanisms of Glint     number of event reports of Glint is reduced to 1/3.
+were tested, and the baseline is the effect of the system without
+using additional false positive reduction mechanisms. We can          2) Telemetry Accuracy: We run Glint and collect reports for
+find that Glint-c is the most effective false positive reduction   different packet loss rates and intra-segment path lengths. After
+mechanism, which avoids all false positive alarms within the       a violation occurs, Glint can immediately collect the violation
+experimental condition setting. However, for actual deploy-        in the segment, as shown in Fig. 19. What affects the speed
+ment, Glint-a is a better choice, because its implementation is    of violation collection is the setting of the reporting period,
+simpler.                                                           but for violation localization, there is no need to introduce
+                                                                   frequent reports to speed up detection.
+   4) Device Memory: Fig. 16 and Fig. 17 show the compar-
+ison of the usage of the device memory. The network device            After collecting the violation in the segment, the server
+has limited memory resources (e.g., Tofino3 has 200 Mb of          continuously receives sampled intra-segment information and
+SRAM and 10.3 Mb of TCAM [28]). TCAM is used to store              finally receives all the information within 2.5 s in all experi-
+additional forwarding tables to distinguish flow information.      ments, as Fig 20. Due to the uncertainty of selective telemetry,
+We consider the TCAM occupancy of the INT method. DOVE
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+824                                                         IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+                                                                                                            TABLE VII
+
+                                                                    HARDWARE RESOURCE USAGE OF GLINT COMPARED TO THE BASELINE
+                                                                                           ON A 64-PORT INTEL TOFINO SWITCH
+
+     Fig. 21. Impacts on traffic forwarding in case study.
+
+we advise the system to collect telemetry reports for more than
+5 seconds to guarantee the collection of all information.
+
+E. Functional Experience                                            Glint achieves significant improvements in resource efficiency
+                                                                    compared to FANcY. For example, Glint reduces SRAM
+   1) Case Study 1 (DoS attack): We implemented a traffic           usage by over 70% and stateful ALU utilization by nearly
+engineering program on top of Glint to evaluate its per-            59%. These reductions are particularly impactful, as FANcY's
+formance in handling gray violations. The DoS attack was            higher reliance on stateful ALUs stems from its complex
+launched via SYN flood targeting virtual routers, simulating        operations, which Glint optimizes effectively. Moreover, Glint
+real flooding attacks. When a violation from the DoS attack         achieves over 55% reductions in both TCAM and ternary
+occurs, the application reroutes packets using a new SRv6           crossbar usage compared to FANcY, reflecting its lightweight
+configuration that avoids the affected switch. Note that in         design. Glint also uses less than half the VLIW Actions of
+practical deployments, routing adjustments do not need to           FANcY, further emphasizing its streamlined implementation.
+occur as rapidly as demonstrated in this experiment.
+                                                                                            V. RELATED WORKS
+   Fig. 21 illustrates the impact of an attack. In the experiment,
+a single flow was established to observe throughput variations.     A. Monitoring SRv6 Networks
+At approximately epoch 640, a violation event was introduced,
+resulting in a sharp drop in throughput. The system detected           UDP-SR [37] adapts MPLS-based methods to SRv6,
+the violation within less than one second and initiated rerout-     enabling in-band probe messages for measuring delay and
+ing, leading to a gradual recovery of throughput. By epoch          packet loss. Similarly, STAMP [38] refines the TWAMP
+710, the flow was fully restored, demonstrating the effec-          protocol for SRv6 with new message formats to improve
+tiveness of Glint in quickly identifying and mitigating gray        loss detection. A cloud-native architecture in SRv6PM [39]
+violations. Furthermore, this time consumption is primarily         integrates big data tools for real-time performance analysis,
+due to rerouting rather than localization.                          while TWAMP [40] demonstrates an eBPF-based TWAMP
+                                                                    implementation for efficient end-to-end delay monitoring in
+   2) Case Study 2 (Route Hijacking attack): We simulated a         SRv6. SRmesh [41] provides efficient delay-bottleneck diag-
+router violation where a compromised router injected incorrect      nosis for large-scale SRv6 networks. These methods monitor
+routing table entries, redirecting traffic to unauthorized paths.   the network by constructing probe packets, and, as discussed in
+However, the destination IPv6 address and SR data enable it         Section II-B, host-based approaches are insufficient to address
+to eventually reach the destination, assuming that no routing       gray violations.
+loops occur. The packet goes through an unpredictable path.
+The path begins at the attacked router and traverses routers        B. In-Network Gray Failure Localization
+lacking the necessary configurations until reaching the egress
+node. We introduced packet loss to provoke a Glint report,             not designed for SRv6 networks have been proposed.
+which upon triggering, the server noticed an unexpected path        FlowRadar [22] and Marple [42] maintain hash tables on
+code. Analysis by the Glint server revealed the packet took         programmable switch ASIC pipelines to track flow statistics
+an unexpected route between the attacked router and the             and packet counts, enabling real-time gray failure localization.
+egress node. Certainly, in the absence of traffic flow, Glint       LossRadar [23] records only packet loss statistics, significantly
+is incapable of detecting anomalies, necessitating the use of       reducing resource consumption while maintaining detection
+supplementary proactive probing mechanisms.                         accuracy. Blink [43] detects gray failures by monitoring TCP
+                                                                    retransmission behaviors on switches. Netseer [24] introduces
+F. Tofino Made Glint                                                a ring buffer on upstream switches to cache recently transmit-
+                                                                    ted packets. When downstream switches detect discontinuities,
+   We implement Glint on the Intel Tofino-based pro-                event reports are generated for localization. dDrops [44] pro-
+grammable switch with 64 ports, and conduct comprehensive           vides a packet-level telemetry system with dynamic adaptation
+experiments to evaluate its resource overhead. We wrote             to port differences. FANcY [26] addresses limitations by
+another P4 program to randomly drop packets. This program           proposing a specialized gray failure localization technique for
+was installed on certain ports, and we redirected the traffic       ISP environments.
+through these ports to simulate packet loss.
+
+   Table VII highlights the hardware resource usage of Glint,
+with FANcY [26] as the primary baseline for comparison.
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+ZHAO et al.: LOCALIZATION OF GRAY VIOLATIONS IN UNTRUSTED AND UNRELIABLE SRv6 NETWORKS                                                    825
+
+                          VI. CONCLUSION                                      [14] (2024). Juniper Bug: Pr1459698­Silent Dropping of Traffic Upon Inter-
+                                                                                    face Flapping After DRD Auto-Recovery. [Online]. Available: https://
+   In this paper, we propose Glint, a gray violation localization                   prsearch.juniper.net/InfoCenter/index?page=prcontent&id=PR1459698
+framework in SRv6 network, which is based on in-band
+network telemetry. Glint provides segment-speared in-band                     [15] (2024). Juniper Bug: Pr1398407­on SRX4600 and SRX5000 Line
+information collection, with the goal of minimizing over-                           of Devices, BGP Packets Might Be Dropped Under High CPU
+head. In addition, Glint designs a verification-based detection                     Usage. [Online]. Available: https://prsearch.juniper.net/InfoCenter/
+method to robustly identify gray violations on the switch.                          index?page=prcontent&id=PR1398407
+Moreover, Glint uses selective telemetry aimed at addressing
+security concerns while decreasing the frequency of telemetry                 [16] (2024). Cisco Bug: CSCTC33158 7600-ES+40g3CXL Drops Random
+events. Evaluations show that Glint can reduce header band-                         Sized L2TPV3 Packets With Cookies Enabled. [Online]. Available:
+width overhead by 75.6% and memory overhead by 48.7%                                https://quickview.cloudapps.cisco.com/quickview/bug/CSCtc33158
+while reducing false positive reports.
+                                                                              [17] C. Guo et al., "Pingmesh: A large-scale system for data center network
+   Glint assumes that path selection in the overlay layer                           latency measurement and analysis," in Proc. ACM Conf. Special Interest
+remains relatively stable over short intervals, a condition that                    Group Data Commun., Aug. 2015, pp. 139­152.
+introduces certain limitations. In some practical environments,
+or in the near future, policy re-computation by the controller                [18] B. Arzani et al., "007: Democratically finding the cause of packet drops,"
+may trigger tunnel switching at timescales of seconds or even                       in Proc. 15th USENIX Symp. Networked Syst. Design Implement. (NSDI
+shorter. These changes cause parts of the inference results to                      18), 2018, pp. 419­435.
+rely on an overlay state that is already outdated.
+                                                                              [19] C. Tan et al., "NetBouncer: Active device and link failure localization
+   For the future, we plan to use machine-learning techniques                       in data center networks," in Proc. 16th USENIX Symp. Networked Syst.
+to improve the adaptability of Glint to dynamic network con-                        Design Implement. (NSDI 19), 2019, pp. 599­614.
+ditions and reduce the overall system overhead. By predicting
+future network conditions, Glint can analyze critical links with              [20] T. Pan et al., "Int-path: Towards optimal path planning for in-band
+greater specificity. In addition, we plan to integrate host-based                   network-wide telemetry," in Proc. IEEE Conf. Comput. Commun., Aug.
+active probing tools to cover legacy device domains that do                         2019, pp. 487­495.
+not support Glint.
+                                                                              [21] N. Handigol, B. Heller, V. Jeyakumar, D. Mazie`res, and N. McKeown,
+                      REFERENCES                                                    "I know what your packet did last hop: Using packet histories to
+                                                                                    troubleshoot networks," in Proc. 11th USENIX Symp. Networked Syst.
+[1] (2024). Redis SLA. [Online]. Available: https://cloud.baidu.com/doc/            Design Implement. (NSDI 14), Apr. 2014, pp. 71­85.
+
+SCS/s/ajwvxtqow                                                               [22] Y. Li, R. Miao, C. Kim, and M. Yu, "FlowRadar: A better NetFlow
+                                                                                    for data centers," in Proc. 13th USENIX Symp. Networked Syst. Design
+[2] (2024). AIRec SLA. [Online]. Available: https://cloud.baidu.com/doc/            Implement. (NSDI 16), Mar. 2016, pp. 311­324.
+
+AI REC/s/Llptksory                                                            [23] Y. Li, R. Miao, C. Kim, and M. Yu, Lossradar: Fast Detection
+                                                                                    of Lost Packets in Data Center Networks. New York, NY, USA:
+[3] (2024). CDS SLA. [Online]. Available: https://cloud.baidu.com/doc/              Association for Computing Machinery, 2016, pp. 481­495, doi: 10.1145/
+                                                                                    2999572.2999609.
+CDS/s/Yjwvyakvv
+                                                                              [24] Y. Zhou et al., "Flow event telemetry on programmable data plane,"
+[4] C. Filsfils, P. Camarillo, J. Leddy, D. Voyer, S. Matsushima, and Z. Li,        in Proc. Annu. Conf. ACM Special Interest Group Data Commun.
+                                                                                    Appl., Technol., architectures, protocols Comput. Commun., Jul. 2020,
+Segment Routing Over IPv6 (SRv6) Network Programming, document                      pp. 76­89.
+
+RFC 8986, Feb. 2021.                                                          [25] Y. Lei, Y. Zhou, Y. Lin, M. Xu, and Y. Wang, "DOVE: Diagnosis-driven
+                                                                                    SLO violation detection," in Proc. IEEE 29th Int. Conf. Netw. Protocols
+[5] (2024). Alibaba: Sonic Readiness for SRV6 USID Deployment.                      (ICNP), Nov. 2021, pp. 1­11.
+
+[Online]. Available: https://www.segment-routing.net/conferences/             [26] E. C. Molero, S. Vissicchio, and L. Vanbever, "FAst in-network gray
+                                                                                    failure detection for ISPs," in Proc. ACM SIGCOMM Conf., Aug. 2022,
+Paris24-Alibaba-Eddie-Ruan                                                          pp. 677­692.
+
+[6] Z. Wang et al., "Large-scale measurements and prediction of DC-           [27] P416 Portable Switch Architecture (PSA), P. L. Consortium, Menlo Park,
+                                                                                    CA, USA, 2019.
+WAN traffic," IEEE Trans. Parallel Distrib. Syst., vol. 34, no. 5,
+                                                                              [28] (2024). Intel Tofino Intelligent Fabric Processors. [Online]. Available:
+pp. 1390­1405, May 2023.                                                            https://www.intel.com/content/www/us/en/products/network-io/
+                                                                                    programmable-ethernet-switch/tofino-3-product-brochure.html
+[7] S. Matsushima, C. Filsfils, Z. Ali, Z. Li, K. Rajaraman, and A. Dhamija,
+                                                                              [29] (2024). Wide. [Online]. Available: https://mawi.wide.ad.jp/mawi
+"SRv6 Implementation and Deployment Status," Internet Eng. Task               [30] E. Schurman and J. Brutlag, "Performance related changes and their
+
+Force (IETF), Fremont, CA, USA, Tech. Rep., 2022.                                   user impact," in Proc. Velocity--Web Perform. Oper. Conf., 2009.
+
+[8] (2024). Rakuten: SRV6 Journey and Experience. [Online]. Available:        [31] S. Gay, P. Schaus, and S. Vissicchio, "REPETITA: Repeatable exper-
+                                                                                    iments for performance evaluation of traffic-engineering algorithms,"
+https://www.segment-routing.net/news/2024-07-22-SRv6-uSID-                          2017, arXiv:1710.08665.
+
+Rakuten-deployment-update                                                     [32] S. Gay, R. Hartert, and S. Vissicchio, "Expect the unexpected: Sub-
+                                                                                    second optimization for segment routing," in Proc. IEEE Conf. Comput.
+[9] (2024). Softbank: Mobile User Plane (MUP) Use-Case. [Online].                   Commun., May 2017, pp. 1­9.
+
+Available:       https://www.segment-routing.net/conferences/Paris23-         [33] B. Claise, "Cisco systems netflow services export version 9," Internet
+                                                                                    Eng. Task Force (IETF), Fremont, CA, USA, Tech. Rep. RFC 3954,
+Softbank-Satoru-Matsushima                                                          Oct. 2004. [Online]. Available: http://www.rfceditor.org/rfc/rfc3954.txt
+
+[10] (2024). Verizon: Design Experience of an SRV6 Usid Data Cen-             [34] M. Wang, B. Li, and Z. Li, "SFlow: Towards resource-efficient and agile
+                                                                                    service federation in service overlay networks," in Proc. 24th Int. Conf.
+ter. [Online]. Available: https://www.segment-routing.net/conferences/              Distrib. Comput. Syst., Jun. 2004, pp. 628­635.
+
+Paris24-Verizon-Gyan-Mishra                                                   [35] X. Chen et al., "MTP: Avoiding control plane overload with measure-
+                                                                                    ment task placement," in Proc. IEEE Conf. Comput. Commun., May
+[11] Endface Contamination Will Degrade Your Fiber Net-                             2021, pp. 1­10.
+
+work. Accessed: Jan. 1, 2026. [Online]. Available:                            [36] (2018). Behavioral Model (BMV2). [Online]. Available: https://
+                                                                                    github.com/p4lang/behavioral-model
+https://www.cablinginstall.com/connectivity/fiber-optic/article/
+                                                                              [37] M. Chen, P. L. Ventre, C. Filsfils, R. Gandhi, and S. Salsano,
+16467746/endface-contamination-will-degrade-your-fiber-network                      "Performance measurement using UDP path for segment routing
+                                                                                    networks," Internet Eng. Task Force, Fremont, CA, USA, Tech. Rep.,
+[12] Electrostatic Charge: An Invisible Threat to Fiber Optic Networks.             2019.
+
+Accessed: Jan. 1, 2026. [Online]. Available: https://bbcmag.com/              [38] C. Scarpitta, G. Sidoretti, A. Mayer, S. Salsano, A. Abdelsalam,
+                                                                                    and C. Filsfils, "High performance delay monitoring for SRv6-based
+electrostatic-charge-an-invisible-threat-to-fiber-optic-networks                    SD-WANs," IEEE Trans. Netw. Service Manage., vol. 21, no. 1,
+                                                                                    pp. 1067­1081, Feb. 2024.
+[13] D. Zhuo, M. Ghobadi, R. Mahajan, K.-T. Fo¨rster, A. Krishnamurthy,
+
+and T. Anderson, "Understanding and mitigating packet corruption in
+
+data center networks," in Proc. Conf. ACM Special Interest Group Data
+
+Commun., Aug. 2017, pp. 362­375.
+
+Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+826  IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY, VOL. 21, 2026
+
+[39] P. Loreti et al., "SRv6-PM: A cloud-native architecture for performance                                        Zhiliang Wang (Member, IEEE) received the B.E.,
+      monitoring of SRv6 networks," IEEE Trans. Netw. Service Manage.,                                              M.E., and Ph.D. degrees in computer science from
+      vol. 18, no. 1, pp. 611­626, Mar. 2021.                                                                       Tsinghua University, China, in 2001, 2003, and
+                                                                                                                    2006, respectively. Currently, he is an Associate Pro-
+[40] M. Chen, D. Voyer, R. Gandhi, B. Janssens, and C. Filsfils, "Performance                                       fessor with the Institute for Network Sciences and
+      measurement using TWAMP light for segment routing networks," Inter-                                           Cyberspace, Tsinghua University. His research inter-
+      net Eng. Task Force, Fremont, CA, USA, Tech. Rep., 1998.                                                      ests include formal methods and protocol testing,
+                                                                                                                    next-generation internet, and network measurement.
+[41] K. Zhao et al., "SRmesh: Deterministic and efficient diagnosis of latency
+      bottleneck links in SRv6 networks," in Proc. IEEE 33rd Int. Conf. Netw.                                       Xia Yin (Senior Member, IEEE) received the B.E.,
+      Protocols (ICNP), Sep. 2025, pp. 1­12.                                                                        M.E., and Ph.D. degrees in computer science from
+                                                                                                                    Tsinghua University, China, in 1995, 1997, and
+[42] S. Narayana et al., "Language-directed hardware design for network                                             2000, respectively. She is currently a Full Professor
+      performance monitoring," in Proc. Conf. ACM Special Interest Group                                            with the Department of Computer Science and Tech-
+      Data Commun., Aug. 2017, pp. 85­98.                                                                           nology, Tsinghua University. Her research interests
+                                                                                                                    include future internet architectures, formal methods,
+[43] T. Holterbach, E. C. Molero, M. Apostolaki, A. Dainotti, S. Vissicchio,                                        protocol testing, and large-scale internet routing.
+      and L. Vanbever, "Blink: Fast connectivity recovery entirely in the data
+      plane," in Proc. 16th USENIX Symp. Networked Syst. Design Implement.                                          Jiankun Hu (Fellow, IEEE) received the Ph.D.
+      (NSDI 19), 2019, pp. 161­176.                                                                                 degree in control engineering from Harbin Institute
+                                                                                                                    of Technology, China, in 1993, and the master's
+[44] M. Qian, L. Cui, X. Zhang, F. P. Tso, and Y. Deng, "DDrops: Detecting                                          degree in computer science and software engineering
+      silent packet drops on programmable data plane," Comput. Netw.,                                               from Monash University, Australia, in 2000. He
+      vol. 214, Sep. 2022, Art. no. 109171.                                                                         was a Research Fellow with Delft University of
+                                                                                                                    Technology, The Netherlands, from 1997 to 1998,
+                               Kaiyang Zhao received the B.S. degree from the                                       and Melbourne University, Australia, from 1998
+                               Department of Computer Science, Shandong Uni-                                        to 1999. He was with Ruhr University, Bochum,
+                               versity, China, in 2021. He is currently pursuing                                    Germany. He is currently a Full Professor and the
+                               the Ph.D. degree with the Department of Computer                                     Research Director of the Cyber Security Laboratory,
+                               Science, Tsinghua University. His research interests  School of Engineering and Information Technology, University of New South
+                               include routing protocols, network measurement,       Wales, Australia. His research interests include cyber-security and biometrics
+                               and next-generation internet.                         security, where he has published many papers in high-quality conferences
+                                                                                     and journals, including IEEE TRANSACTIONS ON PATTERN ANALYSIS AND
+                               Han Zhang (Member, IEEE) received the B.S.            MACHINE INTELLIGENCE. He received the prestigious German Alexander
+                               degree in computer science and technology from        von Humboldt Fellowship from Ruhr University from 1995 to 1996. He has
+                               Jilin University, Changchun, China, and the Ph.D.     received seven Australian Research Council (ARC) Grants and serves at the
+                               degree from Tsinghua University, Beijing, China. He   prestigious Panel of Mathematics, Information and Computing Sciences and
+                               is currently with the Institute for Network Sciences  the ARC Excellence in Research for Australia Evaluation Committee. He was
+                               and Cyberspace, Tsinghua University. His research     the Security Symposium Chair of the IEEE ICC and the IEEE Globecom. He
+                               interests include computer network systems and net-   has served on the editorial board for seven international journals, including
+                               work security.                                        IEEE TRANSACTIONS ON INFORMATION FORENSICS AND SECURITY.
+
+                               Yahui Li received the B.S. degree from the
+                               School of Software Engineering, Jilin University,
+                               Changchun, China, and the Ph.D. degree from
+                               Tsinghua University, Beijing, China. She is cur-
+                               rently with the Institute for Network Sciences and
+                               Cyberspace, Tsinghua University. Her research inter-
+                               ests include computer network systems and network
+                               security.
+
+     Xingang Shi (Member, IEEE) received the B.S.                                                                   Jianping Wu (Fellow, IEEE) received the B.S.,
+     degree from Tsinghua University and the Ph.D.                                                                  M.S., and Ph.D. degrees from Tsinghua Univer-
+     degree from The Chinese University of Hong Kong.                                                               sity. He is currently a Full Professor and the
+     He is currently with the Institute for Network Sci-                                                            Director of the Network Research Center and the
+     ences and Cyberspace, Tsinghua University. His                                                                 Ph.D. Supervisor with the Department of Com-
+     research interests include network measurement and                                                             puter Science, Tsinghua University. Since 1994,
+     routing protocols.                                                                                             he has been in charge of China Education and
+                                                                                                                    Research Network (CERNET). His research interests
+                                                                                                                    include next-generation internet, IPv6 deployment
+                                                                                                                    and technologies, and internet protocol design and
+                                                                                                                    engineering. He is a member of the Information
+                                                                                     Advisory Committee, Office of National Information Infrastructure, a Sec-
+                                                                                     retariat of the State Council of China, and the Vice President of the Internet
+                                                                                     Society of China (ISC).
+
+     Authorized licensed use limited to: NANKAI UNIVERSITY. Downloaded on March 19,2026 at 06:06:37 UTC from IEEE Xplore. Restrictions apply.
+

@@ -1,0 +1,1119 @@
+SkeletonHunter: Diagnosing and Localizing Network Failures in
+                  Containerized Large Model Training
+
+   Wei Liu1,2, Kun Qian2, Zhenhua Li1, Tianyin Xu3, Yunhao Liu1, Weicheng Wang2
+Yun Zhang2, Jiakang Li2, Shuhong Zhu2, Xue Li2, Hongfei Xu2, Fei Feng2, Ennan Zhai2
+
+                       1Tsinghua University 2Alibaba Cloud 3UIUC
+
+Abstract                                                                               1 Introduction
+
+The flexibility and portability characteristics have made containers                   Large model training is emerging as an important business for
+a popular serverless environment for large model training in recent                    cloud service providers (CSPs) [45, 50, 67]. It is typically launched
+years. Unfortunately, these advantages render the network support                      in either physical clusters or flexible containers in modern data
+for containerized large model training extremely challenging, due                      centers. While physical clusters can be fully utilized by profes-
+to the high dynamics of containers, the complex interplay between                      sional customers, they are not suited to common users for technical
+underlay and overlay networks, and the stringent requirements                          difficulties and resource wastes. In contrast, containerized model
+on failure detection and localization. Existing data center network                    training [10, 11, 15] has become popular in recent years together
+debugging tools, which rely on comprehensive or opportunistic                          with the advancement of serverless computing [74], due to its light-
+monitoring, are either inefficient or inaccurate in this setting.                      weight, portability, and isolation characteristics [57]. Specifically,
+                                                                                       containerized model training allows users to launch model training
+   This paper presents SkeletonHunter, a container network moni-                       tasks over shared RDMA NICs (RNICs) and GPUs through con-
+toring and diagnosis system that leverages the intrinsic and regular                   tainers that bundle training code, data, and dependencies. As a
+sparsity of the network traffic incurred by large model training. Its                  mainstream CSP, we have been operating a large-scale container-
+key idea is to reason about the traffic skeleton, which comprises a                    ized model training cloud with 40K+ RNICs and 40K+ GPUs for
+crucial set of network paths consistently traversed by the training                    over three years, serving 5M training tasks from users.
+traffic, so as to reliably detect and localize network failures in short
+time. We deployed it in production for six months, uncovering                             At such a large scale, the reliability of the network infrastructure,
+4,816 network failures with 98.2% precision and 99.3% recall, and                      especially the connectivity among training containers, is crucial to
+localizing them with a high accuracy of 95.7%. After fixing 98%                        the service quality. In a typical setting, an RDMA over Converged
+problematic network components, the monthly network failure                            Ethernet (RoCE) network is expected to have a round trip time
+rate has significantly dropped by 99.1%.                                               (RTT) of less than 20µs [35, 46, 51] with zero packet loss for high-
+                                                                                       performance training. This is because the training tasks are highly
+CCS Concepts                                                                           synchronous--even a 10µs increase in RTT can lead to a 20%
+                                                                                       slowdown in the training process [67]. In the worst case, when a
+· Networks  Data center networks; Network monitoring;                                  connectivity issue lasts for longer than 4s, the collective communi-
+Error detection and error correction; Network dynamics.                                cation will time out and thus fail the entire training task [16].
+
+Keywords                                                                                  Unfortunately, our long-term operational experience shows that
+                                                                                       accurately and timely pinpointing connectivity issues for large-
+Containerized Large Model Training; AI Infrastructure; Serverless                      scale containerized model training infrastructure is confronted
+Computing; Large-scale Network Monitoring and Troubleshooting;                         with three-fold major challenges as follows.
+Network Reliability; Traffic Pattern Analysis                                          · High Dynamics of Containers. Most containers have short
+
+ACM Reference Format:                                                                     life cycles, and grouped containers (that belong to the same task)
+Wei Liu, Kun Qian, Zhenhua Li, Tianyin Xu, Yunhao Liu, Weicheng Wang,                     have asynchronous running states. Our statistics show that over
+Yun Zhang, Jiakang Li, Shuhong Zhu, Xue Li, Hongfei Xu, Fei Feng, Ennan                   50% of the containers have a lifetime of less than 60 minutes;
+Zhai. 2025. SkeletonHunter: Diagnosing and Localizing Network Failures                    in contrast, the lifetime of a physical host is usually as long as
+in Containerized Large Model Training. In ACM SIGCOMM 2025 Conference                     months to years. Worse still, even grouped containers suffer a
+(SIGCOMM '25), September 8­11, 2025, Coimbra, Portugal. ACM, New York,                    couple of minutes of time lag in state synchronization. Both
+NY, USA, 14 pages. https://doi.org/10.1145/3718958.3750513                                factors make the container network structure frequently change.
+                                                                                       · Endpoint-Induced Complexity. A container in production
+Corresponding authors.                                                                    can bind to multiple (e.g., eight) RNICs for adapting to different
+                                                                                          patterns of training workloads, i.e., adaptive parallelism. The
+This work is licensed under a Creative Commons Attribution 4.0 International License.     bound pair of a container and an RNIC is termed as an endpoint.
+SIGCOMM '25, Coimbra, Portugal                                                            This induces more complexity to connectivity monitoring, since
+© 2025 Copyright held by the owner/author(s).                                             all endpoints now should be covered to ensure a reliable network.
+ACM ISBN 979-8-4007-1524-2/2025/09                                                     · Interplay between Overlay and Underlay. Containerized
+https://doi.org/10.1145/3718958.3750513                                                   model training infrastructure is typically shared among numer-
+                                                                                          ous tenants to concurrently train models, thus involving an
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                               Wei Liu et al.
+
+   additional overlay network atop the physical network for train-         are usually software- and hardware-related respectively, which will
+   ing resource/performance isolation. This, however, renders the          not propagate to each other. If we cannot find any problematic
+   instances of virtual network components (e.g., container network        components at each layer, we fine-check the RNICs that connect
+   interface [6], virtual switches [66], and RNIC flow tables [54])        the two layers, which requires a lot of manual efforts and may
+   significantly more than those in traditional data centers.              induce temporary network performance degradation.
+
+   Most importantly, these unique features of containerized model             We implement the above design into a practical system dubbed
+training bring a multiplicative effect to the difficulty of troubleshoot-  SkeletonHunter, which has been deployed in our production con-
+ing connectivity issues in the network. Suppose there are  con-            tainerized model training cloud for 10+ months (since Mar. 2024).
+tainers involved in a training task, each container is bound to an         Using only two middle-end backend servers, it continuously col-
+average of  RNICs, and each RNIC is associated with an average of          lects, filters, and aggregates connectivity data from 40K+ endpoints
+ virtual network components. Then, we need to examine  × ×                 that belong to 2K concurrent training tasks, based on which it
+(e.g., 1K × 8 × 16 = 128K) network components in each training             reliably detects and localizes network failures in a short time (8s on
+round (i.e., an iteration of model training, typically 30s), which is      average, which is essentially shorter than 30s, the typical duration
+impossible to achieve in practice.                                         of a training round).
+
+   Existing solutions for diagnosing data center networks either              SkeletonHunter helped us discover 4,816 network failures during
+comprehensively monitor all network packets [34, 87, 89], or oppor-        Mar.­Aug. 2024 with 98.2% precision and 99.3% recall, and local-
+tunistically sample the network traffic [32, 58, 71]. Neither applies to   ize them to 1,302 problematic network components with a high
+our scenario. The former requires heavy modifications to network           accuracy of 95.7%. We carefully analyze the false cases, finding
+infrastructure--although today's commodity switches provide some           that they mainly derive from intra-host connectivity issues like
+hardware supports for full-traffic monitoring (e.g., packet mirror-        the GPU-to-NIC NVLink and PCIe buses. Such issues can only be
+ing [69]), monitoring virtual network components such as software          detected using heavyweight hardware monitoring tools on each
+switches is heavyweight and incurs nontrivial performance degra-           host, which is orthogonal to the scope of SkeletonHunter.
+dation. The latter uses various strategies to sketch the network,
+but are not guaranteed to cover all the critical paths leading to             We fixed 98% of the 1,302 problematic network components in
+connectivity issues, and thus incur false negatives.                       Sep. 2024; the remaining 2% cannot be fixed due to their relevance to
+                                                                           hardware switches and RNICs whose internal implementations are
+   In this paper, we address the above challenges based on a key           invisible to CSPs like us [57, 87]. After that, the monthly network
+insight--there is intrinsic and regular sparsity hidden in the net-        failure rate of our production system during Oct.­Dec. 2024 has
+work traffic incurred by large model training. This is attributed to       been reduced by 99.1%, paving a dependable and generic network
+the wide usage of the collective communication paradigm in large           runtime for stateful/stateless functions in model training tasks.
+model training. Supported by sophisticated libraries like UCC [21],
+NCCL [20], MSCCL [18], and MPI [44], this paradigm has now be-                In summary, this paper makes the following contributions.
+come a de facto standard in industry due to its effectiveness and          · We are the first to point out the real-world challenges against
+efficiency. As a result, the actual connectivity only exists among
+the endpoints located at the same parallelism group [67], therefore           reliable network support for large-scale containerized model
+substantially and safely reducing the scrutinizing scope.                     training, as well as their multiplicative effect on troubleshooting
+                                                                              the connectivity issues.
+   As a CSP, however, practically using the insight is hindered by         · We propose SkeletonHunter, a container network monitoring
+our invisibility into the tenants' model composition, so we cannot            and diagnosis system that leverages the unique traffic patterns
+directly figure out the desired sparsity information. Instead, we             of large model training to accurately and efficiently pinpoint the
+resort to a more pragmatic approach by inferring the traffic skeleton         connectivity issues.
+that essentially connects all the active endpoints during a large          · SkeletonHunter has been deployed in our production container
+model training task. In other words, the skeleton comprises a crucial         network and has helped discover diverse network failures that
+set of network paths that the training traffic consistently traverses.        derive from the problems of different network components. We
+                                                                              have fixed most problematic network components and greatly
+   Specifically, we identify each crucial network path based on the           reduced the monthly failure rate.
+unique patterns of periodic traffic bursts that manifest on active            This work does not raise any ethical issues.
+endpoints of the training containers. This phenomenon originates
+from an imperative operation during large model training, i.e., the        2 Background
+iterative synchronization of enormous parameters in each training
+round. With the inferred traffic skeleton information, we build an         The rapid advancement of deep learning models, especially large
+optimal probing matrix among the endpoints to effectively detect           language models (LLMs) such as GPT 3 [8], Llama 3 [17], Qwen 3 [22],
+network failures with minimum resource utilization.                        and DeepSeek V3 [14] have driven the demand for massive com-
+                                                                           puting and networking resources for model training. For example,
+   For a detected failure between a pair of endpoints, we localize         Llama 3 405B is trained with 16K NVIDIA H100 GPUs, lasting for
+the problematic network component(s) through optimistic overlay-           over three months [37]. This unprecedented demand for compu-
+underlay disentanglement, which separately examines the network            tational power has created a significant barrier for ordinary users
+components along the path between the two endpoints at each layer,         and developers, due to the high cost of acquiring and maintaining
+assuming that the other layer is healthy. The optimism comes from          such vast computing and networking infrastructure.
+our observation that the root causes at overlay and underlay layers
+SkeletonHunter: Diagnosing and Localizing Network Failures in Containerized Large Model Training  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+          Host A                                             Host B               During the three-year operation, we observe that ensuring the
+                                                                               network reliability is challenged by the aforementioned multiplica-
+Container Runtime                                  Container Runtime           tive effect: the number of network components to be examined is
+                                                                               the multiplication of the numbers of containers, RNICs, and virtual
+Tenant A          Tenant B                         Tenant A          Tenant B  network components involved in a training task. In production, this
+                                                                               number can reach up to 128K (e.g., 1K containers × 8 RNICs per
+                                     Overlay                                   container × 16 virtual network components per container, as we
+                                                                               have mentioned in §1). This compels us to make efforts to scrutinize
+                             vPorts     Virtual                      vPorts    the whole network stack to understand and enhance reliability.
+                                     Connections
+      Virtual Switch (VXLAN)                       Virtual Switch (VXLAN)      3.1 Observations and Challenges
+
+                             vPorts                                  vPorts    To understand the fundamental challenges in accurately and effi-
+                                                                               ciently capturing connectivity issues of the container network for
+NIC                                  Underlay NIC                              large model training, we perform a comprehensive analysis on the
+                                                                               production data. Our analysis shows that 1) the high dynamics of
+                          Physical Switches (Data Center Topologies)           containers, 2) the endpoint-induced complexity, and 3) the interplay
+                                                                               between the overlay and underlay networks are the major obstacles
+Figure 1: Architectural overview of our in-production multi-                   that make existing solutions inapplicable.
+tenant large model training infrastructure built on top of the
+RDMA NIC- and VXLAN-based container network.                                   High Dynamics of Containers. The high flexibility and multi-
+                                                                               tenancy of our containerized training infrastructure lead to ex-
+   To facilitate users' rapid deployment and evolution of models,              tremely frequent training task initializations and thus container
+today's CSPs all provide containerized large model training ser-               creations. Our data show that at peak hours, we need to handle
+vices [10, 11, 15]. This allows users to submit and run their training         the creation of 2,000 containers every minute. Even in non-peak
+tasks on shared infrastructure with a high degree of flexibility and           hours, there are hundreds of containers created every minute.
+cost-effectiveness. The specific number and configuration of con-
+tainers, as well as the number of bound RNICs, can all be determined              In addition to the large number of container creations in a short
+by the users based on their training requirements, although CSPs               time, we observe a skewed distribution in the lifetime of containers.
+will also provide a recommendation for their reference. In practice,           Figure 2 shows the lifetime of containers in different training tasks
+containerized large model training has become a popular paradigm               with different sizes in production (we measure the size of a task by
+for common users to deploy training tasks on the cloud. As a major             its utilized number of containers). A large portion of the containers
+CSP, we have been operating a large-scale containerized model                  have a short lifetime of less than 60 minutes (e.g., 50% containers
+training cloud for over three years. It is equipped with 40K+ RNICs            for training tasks whose size is 256), while the vast majority (70%)
+and 40K+ GPUs, and has served 5M+ model training tasks.                        of the training containers have a lifetime of less than 100 minutes.
+                                                                               The lifecycle of a container network is much shorter than that of
+   Figure 1 shows the architectural overview of our containerized              traditional bare metal or virtual machine (VM) networks.
+large model training infrastructure. Each host is connected to the
+underlay network [9] and is equipped with one to eight GPUs for                   Besides, we notice that containers with a higher-end configu-
+training, along with RNICs for high-performance RDMA commu-                    ration (typically in terms of the number and type of GPUs) tend
+nication. Also, the host runs a container runtime for managing                 to have a longer lifetime, as illustrated in Figure 3. This is because
+multiple containers from different users. When a user creates a                containers with lower-end hardware configurations are usually
+training task, the control plane initializes the corresponding con-            used for debugging or testing during the training process, which
+tainers (i.e., the training nodes) on one or more hosts, and binds             are more likely to be short-lived. After the debugging or testing,
+the RNICs and GPUs requested by the user to the training nodes.                users will use higher-end containers for actual training tasks.
+
+   An RDMA-based container network provides high-performance                      Moreover, although all containers in the same training task are
+data communications among containers within the same tenant                    supposed to have the same lifetime, the state transitions of different
+while isolating the traffic from different tenants [57]. As shown in           containers are highly uncoordinated in practice. This is due to the
+Figure 1, our RDMA-based container network is built as an overlay              inherent differences between the host environments of different
+network through the VXLAN [1] technique. A software-based vir-                 containers (recall that containers in the same training task are
+tual switch (i.e., Open vSwitch [66], or OVS for short) is employed            distributed across different physical hosts). Different hosts can have
+to control the packet forwarding across the overlay and underlay.              different workloads and caching states, which makes the container
+Note that most of the packet en-/de-capsulation and forwarding                 orchestration system create/destroy containers with distinct time
+tasks are offloaded to RNICs, which significantly reduces the CPU              durations. Figure 4 profiles the different container startup time of
+overhead and improves the network performance.                                 different training tasks. Most training tasks require a couple of
+                                                                               minutes to initialize all the containers, which presents a phased
+3 Motivation                                                                   pattern. Also, larger tasks bear a higher tail delay, where the longest
+                                                                               delay can reach up to 10 minutes. The deletion time of containers
+Reliable networking among containers is crucial for containerized              exhibits a similar situation (and thus is not depicted).
+large model training. Unlike traditional public cloud services (e.g.,
+web services) that are stateless and can tolerate a certain degree of
+packet loss, large model training is stateful and highly synchronized,
+where training containers iteratively exchange the parameters of
+the model [13]. A single-point connectivity failure can fail the entire
+training procedure, leading to significant financial loss to end users.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                       Wei Liu et al.
+
+     1.0        16      Max=20896.52                                         /RZHQG                                                
+     0.8                Mean=226.92
+                32      Median=41.68                                         0LGGOHHQG                         6WDUWXS7LPH0LQXWH
+                64
+                                                                             +LJKHQG
+                128     Min=0.00                                                                      0D[ 
+                                                                                                      0HDQ 
+                256  Max=20382.63       Max=12618.05                                                  0HGLDQ 
+                     Mean=284.78        Mean=849.17                                                   0LQ 
+     0.6        512                     Median=159.17                                                                              
+                                        Min=0.05
+CDF                  Median=42.38                                  &')
+                     Min=0.02
+                                                                                              0D[ 
+     0.4                                      Max=27482.67                                    0HDQ 
+          Max=27482.67                        Mean=582.53                                     0HGLDQ                                                                     7DVN$1RGHV
+          Mean=460.97                         Median=58.06                                    0LQ                                                                        7DVN%1RGHV
+          Median=49.82                        Min=0.00                                                                                                                   7DVN&1RGHV
+     0.2 Min=0.00                     Max=25453.77                                                                                                                       7DVN'1RGHV
+                                      Mean=292.70                                       0D[                                                                              7DVN(1RGHV
+                                      Median=29.58                                      0HDQ                                                                             7DVN)1RGHV
+                                      Min=0.00                                          0HGLDQ 
+                                                                                        0LQ                                                 
+     0.0                                                                                                                                 ,QLWLDOL]HG&RQWDLQHUV
+     10 2 10 1 100 101 102 103 104                                               
+                Container Lifetime (Minute)                                  &RQWDLQHU/LIHWLPH0LQXWH
+
+Figure 2: Lifetime distribution of dif-                            Figure 3: Lifetime distribution of dif-     Figure 4: Startup time of the containers
+ferent sizes of training tasks.                                    ferent container configurations.            in six different training tasks.
+
+                                                                        1.0                                                              NIC1  NIC2  NIC3  NIC4
+
+     0.8                                                    83.1%                                                                  15
+
+                                                                        0.8                                    Throughput (Gbps)
+
+PDF  0.6                                                           CDF  0.6                                                        10
+
+     0.4                                                                0.4             Max=9355.00
+
+                                                                                        Mean=40.86                                 5
+                                                                                        Median=24.00
+     0.2                       8.9%                                     0.2             Min=1.00
+
+     0.0  0.8%  2.3%  0.3%         4  0.9% 2.7% 1.0%        8           0.00 50 100 150 200                        0 0 200 400 600 800
+                                                                                   # Flow Table Items                              Time (s)
+           1     2     3               567
+                      # RNICs Attached                                                                         Figure 7: Traffic burst cycles of RNICs
+                                                                                                               in a typical training container.
+Figure 5: Number distribution of allo-                             Figure 6: Distribution of the number of
+cated RNICs to each container.                                     flow table items on each host.
+
+    Challenge 1: Requiring fast connectivity probing on the highly                          Challenge 2: Requiring efficient coverage of the endpoint-induced
+dynamic network topologies. The containerized large model train-                        complexity. The multiple RNICs attached to each container addi-
+ing scenario brings short lifetimes to most containers, as well as                      tionally introduce a large number of source-destination pairs (cor-
+asynchronous running states to grouped containers (that belong to                       responding to a wider variety of network paths) that need to be
+the same task). Both are different from the situations in traditional                   monitored in real time.
+long-existing and stable physical networks, rendering existing solu-
+tions based on comprehensive or opportunistic monitoring (c.f. §9)                      Interplay between Overlay and Underlay Networks. To pro-
+inefficient or inaccurate. This makes it even harder for failure detec-                 vide the multi-tenancy support, CSPs must isolate the resources
+tion of problematic short-lived training tasks, where the containers                    and performance for each training task. To this end, an overlay
+also present short lifetimes like the ones in normal tasks.                             network is constructed to separate the network traffic of different
+                                                                                        training tasks. However, this introduces a significant number of
+Endpoint-Induced Complexity. We note that the multiple RNIC                             virtual network components in the network stack compared with
+endpoints attached to each container further complicate connectiv-                      the traditional physical network or the VM overlay network. For
+ity monitoring. In our production environment, each container is                        example, each RNIC should enable SR-IOV [40] and eSwitch [73]
+allowed to be bound to at most eight RNICs in hopes of maximizing                       to support packet en-/de-capsulation. Also, a virtual switch is de-
+the GPU utilization. Figure 5 shows the distribution of the number                      ployed on each host to determine how packets should be forwarded
+of RNICs allocated to each container in different training tasks. The                   in the data plane. This results in a great number of flow tables on
+vast majority of containers are each bound to eight RNICs, while                        each host, making the network stack more error-prone.
+a nontrivial portion of containers are each bound to four RNICs.
+This is easy to understand since these numbers are the most com-                           Figure 6 illustrates the distribution of the number of flow table
+mon configurations for mainstream model training frameworks to                          items on each host in production, which is in fact only one kind
+enable efficient data exchange among the GPUs within a training                         of virtual components in the network stack. As shown, the aver-
+node (e.g., through NVLink [55] and NVSwitch [90]).                                     age number of flow table items on each host is over 40, and the
+                                                                                        maximum number can reach as large as 9.3K on a host.
+   In detail, today's data center architectures tailored for LLM work-
+loads typically assign a dedicated RNIC for each GPU [45, 67], so                           Challenge 3: Requiring effective disentanglement of the overlay-
+that each GPU can fully utilize the throughput of the RDMA net-                         underlay interplay. The interplay between the overlay and underlay
+work. As a result, the number of RNICs bound to each container is                       networks incurs a large number of virtual components in the net-
+generally equal to the number of GPUs requested by the container,                       work stack, leading to essentially more difficulty in locating the
+which is usually the aforementioned four or eight.                                      root causes of connectivity failures compared with the traditional
+                                                                                        physical network or the VM overlay network.
+SkeletonHunter: Diagnosing and Localizing Network Failures in Containerized Large Model Training                   SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+      PP=1 PP=2                      ...        PP=8                     1                        No Connectivity  Connectivity Required  1    No Connectivity  Connectivity Required
+
+TP=1                                                                     128                                                              128
+TP=2
+                                                                         256                                                              256
+
+...                                                                      384                                                              384
+
+                                                DP=8                     5121 128 256 384 512 5121                                             128 256 384 512
+                                                                                   (a) Dense model.                                            (b) MoE model.
+TP=8                                      DP=2
+
+                 DP=1
+
+Figure 8: Parallelisms in a dense model training task, where                   Figure 9: RNIC traffic patterns of a 512-GPU task.
+
+each cell represents a GPU along with its bound RNIC, and
+
+each column represents a container.
+
+                                                                         NVLink                   Host A                                       NVLink           Host B
+                                                                                                                                                                  
+
+3.2 Opportunities                                                        GPU 1 2 3 4                                                           GPU 1 2 3 4
+
+Sparse Spatial Distribution. To address the above-described chal-        PCIe                                                                  PCIe
+lenges, our first insight is that today's large model training traffic
+exhibits a sparse yet regular spatial distribution, where the majority   RNIC 1 2 3 4                                                          RNIC 1 2 3 4
+of network traffic is exchanged only between the RNICs of contain-
+ers that have data dependencies. This phenomenon comes from the                                     Physical Switches (Data Center Topologies)
+intrinsic characteristics of mainstream model training frameworks
+(e.g., TensorFlow [26], Megatron [61], DeepSpeed [68]): various          Figure 10: GPU communications in a rail-optimized data
+parallelism strategies, such as data parallelisms (DP), tensor paral-    center topology.
+lelisms (TP), and pipeline parallelisms (PP), are used to coordinate
+multiple GPUs to efficiently train a single large model. Thus, the       Figure 10, in a rail-optimized topology, different RNICs on the same
+entire training task is divided into multiple parts according to the     host belong to different rails and connect to different top-of-rack
+employed parallelism strategies assigned to different GPUs. As a         (ToR) switches, making in-rail transmission the best choice for any
+result, each GPU only needs to communicate with others in the            inter-host communications. Second, collective communication li-
+same parallelism group [45, 67].                                         braries like UCC [21], NCCL [20], MSCCL [18], and MPI [44], will
+                                                                         automatically transform any cross-rail transmissions to a combi-
+   Figure 8 shows the three types of parallelisms in a typical train-    nation of intra-host NVLink transmission and inter-host in-rail
+ing process of a dense model [80] using 512 GPUs. This task is           transmission to maximize the performance. Thus, traffic patterns
+configured with TP=8, PP=8, and DP=8. Each DP takes a different          are shaped to be sparse as in Figure 9.
+batch of data for training. Within a DP, the involved tensors are        Temporal Burst Cycles. Apart from the traffic sparsity in the spa-
+split into eight GPUs, and the entire model is divided into eight        tial dimension, the training traffic also presents a strong periodic
+levels of pipelines for forward and backward propagation. The in-        and seasonal pattern in the temporal dimension. Figure 7 shows
+termediate training results are exchanged among GPUs in the same         the throughput of RNICs in a typical training container. As shown,
+stage or neighboring stages of the pipelines. After each training iter-  during the 900-second period, there are multiple periodic traffic
+ation is finished, the parameters across different DPs are exchanged     peaks, where the throughput reaches up to 15 Gbps1. Between two
+among the counterpart GPUs in the same stage of the pipeline. In         adjacent peaks, the throughput of the RNICs is low (even idle). Such
+particular, within each host (and its hosted containers), the commu-     burst cycles are brought by the collective communications of differ-
+nication among GPUs is conducted by high-bandwidth intra-host            ent phases in model training, where each training task is divided
+links like NVLink, while the inter-host communications are over          into multiple iterations. In each iteration, network transmission
+RNICs. Thus, network transmission only happens in certain RNICs.         is trivial across model layers (i.e., the idle period). However, after
+                                                                         the gradients are calculated at the end of an iteration, the network
+   Figure 9a shows the corresponding traffic matrix among the            traffic thus becomes bursty as all the DPs need to exchange a large
+RNICs of the example training task, which is highly sparse. This         number of parameters to synchronize the model (usually with an
+offers us the opportunity to efficiently monitor the network con-        all-reduce operation [43]).
+nectivity by focusing on source-destination pairs that actually have
+the connectivity (rather than all pairs). Besides dense models, other       The burst cycles of the model training traffic provide the oppor-
+emerging models such as Multiple-of-Expert (MoE) models [19]             tunity to distinguish the "role" of each container. Specifically, by
+introduce new parallelism strategies like expert parallelism (EP). As    comparing the time series of the traffic throughput of the RNICs
+shown in Figure 9b, new parallelism strategies may have different        of the training containers, we can determine in which parallelism
+traffic patterns, but the sparse spatial distribution still holds.       group the current training container is working. Therefore, we can
+
+   This sparse traffic distribution is caused by the combination of      1
+two factors. First, today's model training in data centers widely
+uses rail-optimized topology [5, 67], which can fully utilize high-       The actual peak value is much higher (close to the line rate). However, due to limited
+bandwidth NVLink for maximizing the cluster scale. As shown in           monitoring granularity in production (1 second), we can only present the average
+                                                                         value in each second.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                        Wei Liu et al.
+
+               Controller                            Suspicious    Analyzer                                 · Optimistic Overlay-Underlay Disentanglement (§5.3). Once detect-
+                                                   Components                                                  ing a connectivity issue, SkeletonHunter localizes it by eliminat-
+               Skeleton-Optimized                                   Overlay-Underlay                           ing the interplay between the overlay and underlay networks. It
+               Ping List Generation                     Traffic      Disentanglement                           examines the root causes at the overlay and underlay layers sep-
+                                                      Skeletons                                                arately with an optimistic (and reasonable) assumption that the
+Control-Plane   Underlay     Overlay                                  Traffic Skeleton  Anomaly    Network     root causes at the two layers are mostly software- and hardware-
+ Cluster Info  Instructions  Ping List  Frontend Network                  Inference     Detection   Issues     related respectively, so they will not propagate to each other. If
+                                                                                                               the root cause is not found at either layer, SkeletonHunter will
+               Reactive Underlay Task                              Probing/Telemetry                           validate the RNICs that connect the two layers.
+                    Diagnosis Offloading                                   Data
+                                                                                                            5 Component Design
+Physical        Ping List                 Overlay Containers                            Physical            5.1 Traffic Skeleton Inference
+ Hosts         Activation                                                                Hosts
+                                           Network Virtualization                                           The frequent container creation and state transitions require ex-
+   ...                                           Underlay Agent                            ...              tremely efficient ping list generation and connectivity probing. To
+                                                                                                            achieve this, SkeletonHunter generates the ping list for the agents in
+                             Host                                                                           a phased manner, which adapts the ping task in  (1) time complex-
+                                                                                                            ity on scaling. First, considering pervasive sparse traffic patterns,
+                                                                                        Backend Network     SkeletonHunter constructs the basic pruned ping list with 87.5%
+                                                                                                            scale reduction. Second, to conquer false probing incurred by differ-
+Figure 11: Architectural overview of SkeletonHunter.                                                        ent startup times of containers on training task initialization, the
+                                                                                                            above ping list is incrementally activated in the data plane. Finally,
+precisely calculate the minimal source-destination pairs that are                                           at the runtime of the training task, the ping list is further optimized
+necessary for connectivity monitoring, and remove the unnecessary                                           based on deduced traffic skeletons.
+ones to significantly reduce the monitoring cost.                                                           Preload: Basic Ping List Generation. For a real-world training
+                                                                                                            task, as shown in Figure 10, commutations only occur in the same
+4 System Overview                                                                                           rail. When the training data in GPU 1 of Host A are transmitted
+                                                                                                            to GPU 2 of Host B, the data are first transmitted to the GPU 2 of
+We present SkeletonHunter, a system that enables efficient and                                              the Host A through the intra-host NVLink, and then forwarded to
+accurate detection of network issues for our in-production con-                                             the GPU 2 of the Host B through network links. This leaves the
+tainerized large model training services. Our key idea is to use the                                        opportunity for the basic pruned ping list generation. Specifically,
+unique sparse traffic patterns of large model training to reduce                                            cross-rail communications would be automatically optimized to
+the overhead of network monitoring and improve the accuracy of                                              the combination of intra-host NVLink transmission and same-rail
+problematic network component localization. As a CSP, however,                                              inter-host transmission [4]. Therefore, the network communication
+we have very limited visibility into the tenants' model composition                                         is only conducted within the same rail of the network topology (i.e.,
+for privacy reasons and thus we cannot directly exploit the sparsity.                                       the same rank of the RNICs among different hosts).
+
+   To address this, we propose a more pragmatic approach by in-                                                Based on the above property, SkeletonHunter first removes source-
+ferring the traffic skeleton that essentially connects all the active                                       destination pairs from a full-mesh ping list (i.e., all RNICs should
+endpoints in a training task. As shown in Figure 11, SkeletonHunter                                         ping the other RNICs in the same training task) that are not in the
+follows the traditional Pingmesh [47] architecture and consists of                                          same rail. For typical training-oriented hosts in production, the
+three major components including the controller, the agent, and the                                         number of equipped GPUs and RNICs on each host is eight [45, 59,
+analyzer to realize the methodology. The controller is responsible                                          67]. Therefore, we can reduce the scale of the basic ping list by 8×.
+for generating probing tasks (a.k.a., ping lists) and instructing the                                       This process is done immediately at the controller when the user
+agents for each container to perform actual probing. The agents                                             submits the training task (even before the container initialization),
+report the probing results (including end-to-end latency and packet                                         so we call it as the preload phase.
+loss rate) to the analyzer for failure detection and localization. It                                       Initialization: Incremental Ping List Activation. If the con-
+employs the following techniques to meet our goals.                                                         tainers directly execute the basic ping list after it is created, we
+· Traffic Skeleton Inference (§5.1). To enable fast ping task execu-                                        may encounter a large number of false positives on connectivity
+                                                                                                            issues derived from container state transitions. This is because the
+   tion, SkeletonHunter infers the sparsity of the training traffic (i.e.,                                  containers that are under initialization may not have finished their
+   the traffic skeleton) by exploiting the traffic bursts of the RNICs.                                     network stack initialization, and thus are reachable from the already
+   In particular, SkeletonHunter distinguishes parallelism configu-                                         created containers, causing packet loss or high latency.
+   rations such as DPs, TPs, and PPs for constructing the concrete
+   traffic skeleton and the corresponding RDMA probing matrix.                                                 To avoid false positives, we choose to incrementally activate
+   Besides, to accommodate the high dynamics of container state                                             the basic ping list on agents based on the container status (only
+   transitions, the agents execute probings in a phased manner.                                             running containers are selected as destinations). However, if these
+· Connectivity Anomaly Detection (§5.2). After collecting probing                                           updates are all done by the controller as in traditional Pingmesh [47]
+   results from agents, the analyzer applies temporal windows (i.e.,                                        solutions, the controller will become the bottleneck (recall that the
+   a 30-second short-term window and a 30-minute long-term win-
+   dow) over these data to differentiate the latency patterns among
+   endpoints. It then identifies abnormal patterns that are prone to
+   have connectivity issues through statistical distribution testing.
+   In this way, the analyzer discovers anomalous end-to-end latency
+   increase and packet loss, as well as the corresponding suspicious
+   network components that lead to the anomalies.
+SkeletonHunter: Diagnosing and Localizing Network Failures in Containerized Large Model Training            SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+                                                             A             B                                                         T                     T+0.5h
+                                               0.2
+0.10              1024                                                                            1010                                  Reference          Normal
+                                                                                                                    0.02                Est. Distribution  Est. Distribution
+
+      512                   1600
+
+                                               0.1
+PDF                                                                                               109                      0.01
+
+                                                        Frequency (Hz)
+                                                                                                           STFT Magnitude
+
+                                                                                                                   PDF
+         256 640                         2000  0.0                                                                         0.00
+      128
+                        1280
+0.05       720                      1800 2048       C                      D                      108                                T+1h                  T+1.5h
+
+                                               0.2                                                                         0.02         Anomaly A                  Anomaly B
+                                                                                                                                        Est. Distribution          Est. Distribution
+
+                                               0.1                                                107                      0.01
+
+0.00 512 1024 1536 2048                        0.00 500 1000 1500 0 500 1000 1500                                          0.00 100  200   300 100         200     300
+             # Allocated GPUs                                                                                                              Latency (us)
+                                                                  Time (s)
+
+Figure 12: Distribution of the number Figure 13: Frequency-domain features of Figure 14: Long-term latency distribu-
+
+of GPUs in a training job.                     two kinds of burst cycles.                                   tion tracking.
+
+state transitions of containers are highly frequent). Instead, our       processes for these chunks are the same. With the above two key
+key insight is that the high dynamics of the data plane should be        observations, we devise traffic skeleton inference as follows.
+handled by the data plane itself. In SkeletonHunter, the controller
+offloads the ping list activation to data-plane containers.                 We extract the frequency-domain features of the throughput
+                                                                         burst cycles of containers' RNICs to describe traffic periodicity.
+   Concretely, when a container is created, its agent will first get     We use Short-Time Fourier Transform (STFT) [28] to convert the
+the basic ping list from the controller but does not start the actual    time-domain throughput burst cycles into the frequency domain.
+connectivity probing until other containers register themselves          We have tried other feature extraction methods like Wavelet Trans-
+to activate the corresponding ping target recorded in the already        form [42] and Discrete Fourier Transform [82], while STFT can
+created source container. This registration process is done once a       capture the time-varying characteristics with the lowest computa-
+container is created and ready to be pinged. In this way, we avoid       tional complexity, which is crucial for runtime analysis. As shown
+false alarms on container initialization.                                in Figure 13, after the conversion, the throughput burst cycles of the
+Runtime: Optimization with Inferred Traffic Skeletons. Even              RNICs A, B, C, and D present two kinds of frequency components,
+with the optimized basic ping list, there are still many inactive        where A and B share similar STFT features, and C and D share
+source-destination pairs in it. As exemplified in Figure 9a, the basic   similar ones. This similarity indicates that the RNICs A and B (C
+ping list for a single GPU in a 512-GPU task should have 64 desti-       and D) are in the same position across different DPs.
+nations. Actually, only nine destinations are connected in practice,
+leaving 85.9% space for further optimization. However, achieving            By applying state-of-the-art clustering algorithms on the ex-
+this optimization requires a deep understanding of users' model          tracted STFT features, we can cluster RNICs into different groups,
+parallelism strategies, which is impossible for a CSP like us. Existing  where RNICs in the same group are highly likely to be in the same
+solutions [56] that capture detailed five-tuple information of the       position across different DPs. In particular, we use the hierarchical
+network connections of the service links are also not applicable to      clustering algorithm [60] for grouping by measuring the similarity
+the containerized training scenario, as we cannot modify relevant        of the traffic burst's STFT features on the RNICs. We further ap-
+RDMA APIs of the network stacks inside the users' containers for         ply the following constraints to the grouping process so that the
+privacy, security, and stability reasons.                                grouping results are more interpretable based on the number GPUs
+                                                                         allocated to the training task:
+   To address this, we propose a more pragmatic yet effective ap-
+proach: inferring the traffic skeletons (i.e., a crucial set of network                                                    
+paths that the training traffic consistently traverses) through the
+easy-to-obtained throughput burst cycles (cf. §3.2) over contain-                                        2  =  1           
+ers' RNICs, together with the common parallelism patterns used                                                                 (  - ¯)2 ,
+in production. In detail, Figure 12 illustrates the scale of training                             min                                                                                 (1)
+tasks in production. First, the number of requested GPUs (and the
+corresponding RNICs) in a training task is only confined to a limited                                                       =1
+set of values (e.g., 128, 512, and 1,024), which are often multiples of
+eight. This is easy to understand since if the users want to fully uti-                           s.t.  mod ¯ = 0,                                                                    (2)
+lize GPUs' computation capacity, they must request a fixed number
+of GPUs so that the GPUs can be divided into different groups for                                      1, 2, · · ·     ,      1,                                                      (3)
+efficient parallelism (e.g., #  =   ×  × ).
+                                                                         where  is the total number of RNIC groups in a training task, 
+   Next, we notice that the temporal throughput burst cycles are         represents the -th group, ¯ is the nearest integer of the average
+similar for RNICs (and GPUs) in the same position across different       number of the RNICs in each group,  is the total number of the
+parallelism groups. For example, in Figure 8, the upper left allocated   RNICs,  is the -th RNIC in host  .
+RNICs in the same position across the eight different DP groups
+have the same burst cycles. This is because the DP only divides             The objective function in Equation (1) minimizes the variance
+the input training data into different chunks, while the training        of the number of the RNICs in each group. This is particularly
+                                                                         important since each individual model training pipeline in a training
+                                                                         task should have the same scale, which is   × . Similarly, we
+                                                                         add the constraint in Equation (2) to ensure that the number of the
+                                                                         RNICs in each group can be evenly divided by the number of DPs.
+                                                                         Finally, the constraint in Equation (3) ensures that the RNICs in the
+                                                                         same host are not in the same group, since in this case, the RNICs
+                                                                         are in the same DP for NVLink acceleration within the host.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                           Wei Liu et al.
+
+   The above process helps us infer the DP groups of the training        + 1,  + 1.5, we apply Z-test [62] on the collected latency data
+task, whose value is equivalent to ¯. We next infer the TPs and PPs     respectively to test whether the data still follow the estimated log-
+of the training jobs based on   ×  =  /¯. We further leverage           normal distribution. In the example, latency data at  + 0.5 still
+the time shift of the throughput burst cycles to distinguish the level  follow the estimated distribution, while those at  + 1 and  + 1.5
+of PPs. For example, the PP in the first layer always experiences       deviate from the estimated distribution. For  + 1 and  + 1.5, we
+the same traffic burst earlier than the PP in the second layer.         determine that a latency anomaly occurs.
+
+   As a result, we finally infer the parallelism patterns of training   Algorithm 1 Failure Disentanglement and Localization
+tasks, and we can determine the traffic skeleton (i.e., which pairs
+of endpoints have the actual connectivity) for each task. The latest    1: global  : map[int]
+new models may introduce extra parallelism strategies (e.g., EP),
+but can be classified using the same method. At the runtime of the      2:  ,   Separate( )       Overlay/underlay links
+training, SkeletonHunter removes unnecessary targets from the
+ping list for further optimization. By only enabling the probing        3: procedure Separate()
+along the traffic skeleton in the probing matrix for each container,
+the ping list can be further reduced by >95% (cf. §7.1).                4: for    do
+
+                                                                        5:   if packets in  encapsulated then     
+
+                                                                        6:   else     
+
+                                                                        7: procedure OverlayReachability( )
+
+5.2 Connectivity Anomaly Detection                                      8:    [0]
+
+                                                                        9:    set()
+
+While a high packet loss rate can be easily classified as a network     10: for    [1 :] do
+issue, a sudden high latency can be caused by transient congestion
+or network resource contention. It is necessary to perform data         11:    Forward(, )
+analysis to filter out these transient latency spikes. To this end,
+our key idea is to leverage state-of-the-art sequential analysis tech-  12:  if  = null or     then
+niques [79, 86] to coherently evaluate whether the communication
+patterns have changed over time. Concretely, the analyzer of Skele-     13:  return               Overlay failure point
+tonHunter aggregates the collected data, and performs short-term
+and long-term latency anomaly detections through a statistical test-    14:        
+ing. The rationale behind this is the law of large numbers [49, 86],
+which indicates that the average measured data will be closer to        15: return null                         No overlay failure
+the true value if we have sufficient data samples.
+                                                                        16: procedure PhysicalIntersection( )
+
+                                                                        17: for    do
+
+                                                                        18:   []++
+
+                                                                        19: if    ,  []  1 then
+
+                                                                        20:  return null                      No underlay failure
+
+Short-term Latency Anomaly Detection. We aggregate the la-              21: return MaxCount( )    Underlay failure point(s)
+tency data at a fine granularity (30s) for each pair of RNIC endpoints
+for short-term analysis. In each temporal window, we describe the       5.3 Optimistic Overlay-Underlay
+latency distribution using the 25th percentile, 50th percentile, 75th         Disentanglement
+percentile, minimum, mean, standard deviation, and maximum val-
+ues. Then, we perform latency anomaly detection based on the local      After detecting high packet loss or latency distribution anomalies,
+outlier factor (LOF) [33] on the latency distributions on each time     SkeletonHunter can only determine there is a network issue be-
+window. LOF is a density-based score to measure the local deviation     tween two containers, but cannot pinpoint which network compo-
+of a data point with respect to its neighbors. We set a look-back       nent causes this issue so far. To address this, we devise an optimistic
+window of five minutes to calculate LOF for each time window so         overlay-underlay disentanglement mechanism (as shown in Algo-
+as to cover probable burst cycles. If a new five-minute window has      rithm 1) to locate the network issues under the assumption that
+a high LOF that cannot be clustered into previous windows, we           the root causes of the overlay and the underlay layers are software-
+determine that an anomaly occurs.                                       and hardware-related respectively, which will not propagate to the
+                                                                        other layer. It first separates the paths between the two containers
+Long-term Latency Anomaly Detection. For the long-term anal-            into distinct overlay and underlay links (lines 1-6). Then, it per-
+                                                                        forms the overlay logical reachability analysis (lines 7-15) and the
+ysis, we aggregate and analyze the latency every 30 minutes. This       underlay physical intersection analysis (lines 16-21) to locate the
+                                                                        network issues in the two layers, respectively.
+design is to prevent gradual degradation of network performance,        Overlay Network Failures. As shown in Algorithm 1, the analyzer
+                                                                        of SkeletonHunter examines the logical forwarding chain across
+which is not easy to detect in the short-term analysis since the        the problematic endpoints in the overlay network. It relays the
+                                                                        packet forwarding process and checks if the packets are correctly
+gradual anomaly may be cumulatively clustered into the previous         forwarded to the destination or whether there is a loop. Once it
+                                                                        detects unreachability (i.e.,  is null in Algorithm 1), it can
+short-term windows. As we can gather a huge number of latency           pinpoint the problematic overlay link at the broken point. If the
+                                                                        packet is forwarded to a visited component, it determines that
+data in the long-term analysis, we apply statistical tests to detect    overlay forwarding rules are incorrect and a loop exists.
+
+the latency anomalies. We find that the latency data in the long
+
+term of two RNICs that work properly always follows a log-normal
+
+distribution [2], i.e., the logarithm  of the latency data  follows
+
+a normal distribution  = ln ( )         2  .
+
+                                   , 
+
+As shown in Figure 14, we perform parameter estimation [31]
+
+on the latency data for each source-destination RNIC pair at time 
+and derive the estimated log-normal distribution. At time  + 0.5,
+SkeletonHunter: Diagnosing and Localizing Network Failures in Containerized Large Model Training  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+Physical Network Failures. Due to path multiplexing induced                of the underlay agent, it is deployed as a standalone container in
+by ECMP routing in the underlay network [45], SkeletonHunter               the host, which is accessible to all the host's resources. Both agents
+leverages the network tomography [65] technique to vote for the            are highly configurable by the controller.
+physical links that are most likely to be faulty. Besides, we further      Analyzer. We use the available services in our cloud environment
+deploy an agent on each physical host to enable traceroute probing         to construct the analyzer, including log services [24] and real-time
+for underlay path intersection, which is similar to the scheme used        computing services [23]. The log service stores both stateless and
+in R-Pingmesh [56] and 007 [29].                                           stateful measurement data from agents, which are then indexed
+Validating RNICs. If the above two processes cannot locate any             and aggregated based on the training tasks, containers, RNICs, as
+problematic network components while the issue does exist, Skele-          well as uplink switches. The real-time computing service analyzes
+tonHunter further validates the RNICs that connect the overlay             the logs and generates analyzing results to inform the controller
+and underlay, which involves some manual operations. The host              and trigger alarms in a feedback-loop manner.
+agent dumps the flow tables offloaded from the OVS to RNICs for
+preliminary detection of the inconsistency between the two layers.         7 Evaluation
+This process can cause temporary network performance degrada-
+tion, but it is necessary to ensure the correctness of the network         We have deployed SkeletonHunter in production for over 10 months.
+configurations. If no inconsistency is detected, we manually check         We utilize online statistics from one large-scale production cluster
+the configurations of the RNICs and OVS to locate network issues.          with 4K+ physical hosts to evaluate SkeletonHunter. Each host is
+With all of the above designs, SkeletonHunter can effectively locate       equipped with eight commodity RNICs (either 200 Gbps or 400 Gbps
+network issues at both overlay and underlay, and classify them into        throughput), 128-core CPUs, and 2 TB memory. Each RNIC runs in
+physical switches, RNICs, virtual switches, host configurations, etc.      SR-IOV mode with 128 virtual functions (VFs)2. Users can specify
+Rationale behind the Optimism. In practice, the optimistic dis-            the number of GPUs and training nodes (i.e., containers) on de-
+entanglement may not persistently work well in all cases, and we           mand. The information of all training tasks is synchronized with
+have encountered the cases where the issues of the overlay and             the SkeletonHunter controller, so that SkeletonHunter can monitor
+underlay layers occur at the same time. For example, the underlay          the connectivity for each task. The evaluation involves six-month
+RNIC's unexpected behaviors can cause the misconfiguration of              (Mar.­Aug. 2024) data with 2M+ tasks.
+the overlay virtual switch [57], which further exacerbated network
+issues. In this case, we can only manually resolve the problem based       7.1 Efficiency and Effectiveness
+on our domain knowledge and experience.
+                                                                           The Scale of Probing Targets. SkeletonHunter significantly re-
+   Nevertheless, it should be noted such a situation is rare in our        duces the scale of the probing matrix with the help of the traffic
+production environment, and designing a system that can handle             skeleton. Figure 15 shows the scale of probing tasks on different
+all possible issues happening in containerized model training is not       numbers of allocated RNICs. At all the RNIC configurations, the
+practical. The optimistic disentanglement can handle most of the           number of probing targets (SkeletonHunter-Basic denotes the basic
+cases we have seen in production since it effectively verifies the         ping list) is always an order of magnitude smaller than that in the
+overlay's logical correctness and the underlay's physical link states.     full-mesh solution. For example, with 2,048 RNICs, the full-mesh
+                                                                           solution requires an average of 60,430.32 probings for each itera-
+6 Implementation                                                           tion round among all the training containers, while SkeletonHunter
+                                                                           only involves 2,593.03 probings. Note that although some of the ex-
+Controller. The controller is implemented with 6,350 lines of code         isting network monitoring solutions like deTector [64] also reduce
+in Java. It is responsible for inferring traffic skeletons (with the help  the scale of probing, they still require a large number of probes
+of the analyzer) and managing probing tasks for agents, which is           in practice (e.g., 15K+ probes for each training iteration round in
+deployed on two servers in our frontend network for load balancing         deTector). This is because these solutions only simplify the probing
+and fault tolerance. All the communications between the controller         matrix by considering common data center topologies without the
+and agents are encrypted so that users cannot "forge" the requests         awareness of the training workloads that have a high sparsity and
+to obtain the information of the training tasks of other users. The        symmetry in their traffic patterns.
+controller connects to the database to synchronize the states of           Time Cost of Each Probing Round. Given the significantly
+the training containers. It receives the analysis results from the         smaller probing matrix, we evaluate the actual time cost of a probing
+analyzer so that it can update the instructions to the agents (e.g.,       round in SkeletonHunter. As shown in Figure 16, the full-mesh so-
+dump RNICs' flow tables).                                                  lution bears a significantly longer probing time on all RNICs. When
+Agent. We implement the overlay and underlay agents with 5,400             the number of RNICs in a training cluster is 512, 1,024, and 2,048,
+lines of code in golang [36]. For the overlay agent, it is launched        the full-mesh solution consumes 560.25, 1,123.43, and 2,034.12 sec-
+through sidecar containers [72] along with training containers.            onds, respectively. In contrast, under the same probing frequency
+In this way, an agent is isolated from the training container at           and cluster configuration, a basic ping list in SkeletonHunter only
+the process level, while sharing the network namespace with the            consumes 64.85, 122.54, and 240.54 seconds respectively, while the
+training container that it monitors. When a training container is          final ping list with the inferred traffic skeleton consumes 8.23, 16.91,
+launched, the agent automatically queries the controller to get the        and 25.09 seconds for probing. These results show that the two
+ping list and then incrementally activates the probings after the
+registrations of other containers in the same training task. In terms      2
+
+                                                                            We enable 128 VFs per RNIC for faster VF allocation and deallocation across different
+                                                                           containers, as well as supporting RNIC sharing in the future.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                                                  Wei Liu et al.
+
+                   10.00 ×104  Full-mesh                                    ×103  Full-mesh                                                         1.0                                  32
+                    1.00       SkeletonHunter-Basic                               SkeletonHunter-Basic
+# Probing Targets              SkeletonHunter                        1.00         SkeletonHunter                                                    0.9
+
+                                                      Time Cost (s)                                                                                                                      30Memory (MB)
+
+                                                                     0.10                                                                  CPU (%)  0.8                                  28
+
+                                                                                                                                                    0.7                                  26
+                                                                                                                                                    0.6
+                   0.10                                              0.01                                                                           0.5                                  24
+
+                                                                                                                                                        0                        CPU 22
+                                                                                                                                                                                 Memory
+    0.01 32 64 128 256 512 10242048                              32 64 128 256 512 1024 2048                                                                      50   100               20
+                                                                                                                                                                                  150
+                # Allocated RNICs                                     # Allocated RNICs                                                                           Time (minute)
+
+Figure 15: Comparing probing task                     Figure 16: Time cost of probing all end-                                             Figure 17: Resource consumptions of
+sizes of different schemes.                           points.
+                                                                                                                                           SkeletonHunter in production.
+
+phases of probing in SkeletonHunter all significantly reduce the                                        Queue Len. Loss Latency (us)104             Anomalous          Offline Recovery
+time cost under the same probing frequency. The final ping list                                                                                     Connectivity
+can further reduce the probing time by 87.3%, 86.2%, and 89.6%                                                                      102
+respectively compared with the basic ping list.
+Agent Overhead. The containerized environment imposes a con-                                                                           1
+straint that the agent should have trivial resource consumption, or                                                                   0.5
+the overall overhead will be unacceptable due to the large number
+of training containers. In practice, the agent of SkeletonHunter                                                                       0
+incurs negligible overhead on the training containers. As shown in
+Figure 17, the CPU and memory consumptions of the agent always                                                                        4K
+converge to 1% and 35 MB respectively over the entire lifetime of a
+container. This is easy to understand since we utilize the unique                                                                     2K
+traffic patterns of the training jobs to minimize the probing matrix,
+so that redundant probing tasks are largely eliminated.                                                                               00   100                    200            300
+Detection Accuracy. SkeletonHunter achieves a high accuracy                                                                                                Time (s)
+in detecting network reliability issues in production. By manually
+checking all the detection results, we note that SkeletonHunter                                         Figure 18: A case study for SkeletonHunter, where the anoma-
+achieves a high precision of 98.2% and a high recall3 of 99.3% in                                       lous connectivity behaviors are caused by the flow table in-
+discovering network failures during the operation of our services.                                      consistency between the overlay and underlay components.
+In total, it helps us detect 4,816 network failures and correctly
+localize them to 1,302 problematic components with an accuracy of                                       it to trigger subsequent repairing procedures according to different
+95.7%, which significantly accelerates the diagnosis and recovery of                                    root causes (e.g., fiber module cleaning for CRC error/port flapping,
+network reliability issues for containerized large model training in                                    and fiber module replacement for port down).
+production. We have fixed 98% of the issues, while the remaining
+cannot be fixed due to the limited visibility into the hardware                                         Host-related Anomalies. According to our experience, a variety
+of commodity switches and RNICs [57, 87]. After the fixes since                                         of factors (Issue 5­13) may lead to host-side anomalies. When these
+Oct. 2024, the monthly network failure rate has reduced by 99.1%                                        issues occur, we immediately isolate problematic hosts/modules to
+compared with the previous period.                                                                      eliminate their effects on model training.
+
+7.2 Network Failure Localization                                                                           Figure 18 shows a typical case encountered in production. Before
+                                                                                                        the 90th second, the latency between two RNICs of containers is
+We summarize representative network issues detected by Skeleton-                                        stable at around 16µs. However, after the 90th second, the latency
+Hunter in Table 1. All these issues can be categorized to 19 different                                  increases to 120µs, and the ping packets bear a small packet loss
+types, which are mainly related to six components in our model                                          (<0.1%). With statistical testing, SkeletonHunter determines that
+training services (i.e., physical switches, RNICs, host boards, virtual                                 such a latency is problematic since it deviates significantly from
+switches, container runtime, and configurations).                                                       the history latency distribution. This can be validated through the
+Link/Switch Anomalies. For network issues occurring in the                                              switch queue length, which hardly increases during the period of
+inter-host network (Issue 1­4), SkeletonHunter can filter all abnor-                                    anomalous latency spikes and indicates that the actual throughput
+mal probing results and leverage the network tomography to locate                                       does not reach the bottleneck. SkeletonHunter in fact did not find
+the anomalous devices (either links or switches). Most link/switch                                      any overlay/underlay issues at first, and thus dumps the RNIC flow
+anomalies can be immediately verified by warning logs on the corre-                                     tables. It then detects an inconsistency in the flow tables for the
+sponding switches to quickly determine the root causes. Therefore,                                      overlay virtualization, and isolates the RNIC immediately. After
+we deploy an automatic diagnosis and repairing pipeline based on                                        that, the RNIC recovers in 60 seconds, and all metrics return to
+                                                                                                        normal. Our further investigation reveals that this issue is because
+3We obtain false negatives based on users' feedback.                                                    the RNIC did not update flow counters timely, which makes the
+                                                                                                        control plane regard the flow as inactive and invalidates it from the
+                                                                                                        RNIC. As a result, relevant packets are processed at the software
+                                                                                                        stack with a significantly higher latency. With SkeletonHunter, we
+                                                                                                        immediately get alerts and take actions to mitigate this issue.
+                                                                                                        Virtual Switch/Container Anomalies. In addition to physical
+                                                                                                        links, switches, and hosts, software components (such as virtual
+                                                                                                        switches, containers, and their related configurations) can also be-
+                                                                                                        come the culprit of reliability issues (Issue 14­19). Nevertheless,
+SkeletonHunter: Diagnosing and Localizing Network Failures in Containerized Large Model Training  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+                               Table 1: Network issues detected by SkeletonHunter in production.
+
+No. Issues                      Components  Symptoms Detailed Reasons
+
+1 CRC error                     Inter-host Network Packet Loss Physical fabric causes packet corruption.
+
+2 Switch port down              Inter-host Network Unconnectivity The switch port is unreachable.
+
+3 Switch port flapping          Inter-host Network Packet Loss The switch port is flapping.
+
+4 Switch offline                Inter-host Network Unconnectivity The switch crashes or is manually set to offline for upgrade.
+
+5 RNIC hardware failure         RNIC        Unconnectivity Hardware components of the RNIC are not working normally.
+
+6 RNIC firmware not responding  RNIC        High Latency RNIC firmware bugs result in high latency of specific flows.
+
+7 RNIC port down                RNIC        Unconnectivity The RNIC port is consistently down.
+
+8 RNIC port flapping            RNIC        Packet Loss The RNIC port is periodically down.
+
+9 Offloading failure            RNIC        High Latency Packet en-/de-capsulation cannot be offloaded to the RNIC.
+
+10 Bond error                   Kernel/RNIC Unconnectivity Unable to bond the ports of the RNIC.
+
+11 RNIC GID change              Kernel      Unconnectivity The network service of the OS is restarted unexpectedly.
+
+12 PCIe-NIC error               Host Board  High Latency The RNICs in the same host cannot communicate with each other.
+
+13 GPU direct RDMA error        Host Board  High Latency The GPU cannot directly communicate with the RNIC in the container.
+
+14 Not using RDMA               Virtual Switch High Latency Flows that should be transmitted over RDMA are actually using TCP/UDP.
+
+15 Repetitive flow offloading   Virtual Switch High Latency Offloaded flows are frequently invalidated in the RNIC.
+
+16 Suboptimal flow offloading   Virtual Switch High Latency Flows are offloaded with incorrect orders with high latency of some flows.
+
+17 Container crash              Container Runtime Unconnectivity Containers crash shortly after creation due to container runtime defects.
+
+18 Hugepage misconfiguration    Configuration High Latency The host's hugepage configuration is not consistent with the RNIC.
+
+19 Congestion control issue     Configuration High Latency The congestion control of a specific queue in the switch is not enabled.
+
+these issues can be resolved quickly by restarting or reinitializing    connectivity issues, while the connectivity of the intra-host compo-
+the corresponding software components. In this way, Skeleton-           nents for model training is only partially covered. As we have men-
+Hunter can truncate usually hours of complete testing and directly      tioned in Table 1, SkeletonHunter can detect PCIe-to-NIC errors,
+perform the recovery procedure in minutes, which significantly          which manifest as the unconnectivity of a container to any other
+reduces our operational costs.                                          containers in the training task. However, it cannot detect the GPU-
+                                                                        to-GPU and GPU-to-PCIe connectivity issues. This is because such
+7.3 Limitations                                                         connectivity is not network-related but hardware-related. These
+                                                                        issues can only be covered by other hardware monitoring tools,
+Users' Uncertain Workloads. SkeletonHunter is built based on            which are orthogonal to SkeletonHunter.
+a key observation that today's large model training workloads ex-
+hibit sparse traffic patterns due to the wide usage of the collective      Some of the false detections are caused by the defects of Skele-
+communication primitives. Although this holds true for most of          tonHunter itself. In order to accurately measure end-to-end latency,
+users' workloads, there can still be some users who do not follow       SkeletonHunter leverages the precision time protocol [3] to elimi-
+this pattern. If the user simply starts up a container cluster for      nate clock drifts. This requires the agent to respond to the probing
+debugging the model or the collective communication libraries, the      requests in a timely manner, while we have encountered some cases
+inferred traffic skeleton might be inaccurate. Moreover, the paral-     where the agent crashes and cannot respond to the probing. As
+lelism strategies of model training is constantly evolving, which       a result, SkeletonHunter regards the corresponding links as prob-
+brings new traffic patterns that are unknown to SkeletonHunter.         lematic by mistake and triggers the alarms. Such issues reveal the
+In these cases, SkeletonHunter may fail to cluster the containers'      importance of improving the reliability of the monitoring system
+RNICs into the same group, or generate a larger probing matrix          before using it to monitor the reliability of the production system.
+than necessary, leading to a higher probing overhead.
+                                                                           It should be noted that SkeletonHunter is only one of the crucial
+   To address these issues, we can further make efforts from two        components for failure detections and recovery in our container-
+aspects. First, SkeletonHunter can evaluate the fidelity of the in-     ized modeling training service. The above false detection caused
+ferred traffic skeleton before the actual probing. For example, it can  by SkeletonHunter can still be resolved by our other monitoring
+validate whether the traffic skeleton persistently aligns with the      systems like error log analyzers.
+actual traffic bursts. Second, on the user interface of our container
+services, we can provide an option for users to manually disable        8 Experience
+the probing if the users are aware that their workloads use the
+parallelism strategies beyond standard collective communication         Using Pings for Connectivity Monitoring. Choosing to use
+primitives. We can also provide some degrees of flexibility for users   pings for probing is actually a trade-off between the monitoring
+to add hooks to their intra-host software components (e.g., RDMA        overhead and the monitoring accuracy. Of course, one can choose
+and collective communication libraries), so as to further validate the  to examine all packets and all real-time connections to get the
+traffic skeleton. Besides, our engineering team is also working on a    most accurate traffic skeleton and the corresponding connectivity
+more generic traffic skeleton inference algorithm that can adapt to     information. However, this would incur a very high overhead and
+the evolving parallelism strategies.                                    may also induce privacy issues in the multi-tenant environment.
+False Detections. We did encounter some false detections with
+SkeletonHunter in production. Specifically, one of the main rea-        Deployment Experience of Existing Methods. Before we devel-
+sons is that SkeletonHunter mostly focuses on detecting end-to-end      oped and deployed SkeletonHunter, we had tried several existing
+                                                                        solutions, in particular Pingmesh and its variants [47, 56]. We found
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                     Wei Liu et al.
+
+that these solutions are not fully suitable for our production environ-  development of our multi-tenant containerized model training ser-
+ment because they are not designed for multi-tenant containerized        vices. A number of RDMA-related components (such as monitoring,
+model training whose network topology is constantly changing.            probing, configuration, and management) require modifications
+Also, some of the existing methods require special hardware fea-         in both deployments and implementations. While SkeletonHunter
+tures like IP-in-IP techniques of the switches [78], which induce        only shares the same network environment with the training con-
+additional operational costs and stability risks.                        tainers through the sidecar mechanism, the refactoring of other
+                                                                         functionalities is much more complicated.
+Handling Detected Failures. Although SkeletonHunter mainly
+focuses on failure detection, it also provides some basic failure           Although this paper focuses on particular issues related to net-
+handling capabilities by integrating with our existing network man-      work monitoring and diagnosis, containerized training services
+agement systems. When SkeletonHunter detects an anomaly, it will         need a collaborative effort of nearly all network components to ad-
+first trigger an alert to notify our network operation team. Also,       dress emerging challenges and ensure optimal user experience. This
+it will automatically add the corresponding hosts or RNICs to the        creates considerable potential for further research and innovations.
+blacklist, so that no new training tasks will be scheduled on them
+until the issue is fully resolved. Besides, we are now developing        9 Related Work
+a more comprehensive live migration mechanism for the quick
+recovery of training containers, which aims to minimize the impact       Data Center Network Diagnosis. Over the past decade, there
+of network failures on training tasks.                                   have been plenty of systems and solutions for diagnosing the data
+                                                                         center network through comprehensive monitoring [30, 48, 52, 53,
+Accelerating Agent Evolution. Due to the rapid development               70, 71, 75­77, 81, 83, 85, 89] or opportunistic probing [29, 32, 34,
+of large-scale model training scenarios, the infrastructure (e.g.,       38, 41, 47, 56, 78, 88]. For example, EverFlow [89] performs fine-
+GPUs, RNICs, and data center topologies) and the trained models          grained packet matching to identify the root cause of network
+are constantly evolving, which requires the continuous upgrade of        issues, while PINT [32] probabilistically samples packets to achieve
+SkeletonHunter. In the ten months of operation, we have conducted        in-band telemetry. However, so far there is no method for efficient
+over 20 online updates, and each is fully deployed across all our        and effective monitoring and diagnosing of the reliability of the
+physical clusters. To achieve such rapid updates, we employ a series     containerized model training. SkeletonHunter is the first-of-its-kind
+of optimizations in our implementation.                                  work to achieve the goal by leveraging the inherent characteristics
+                                                                         of containerized model training to enable fine-grained, accurate
+   For the deployment of the SkeletonHunter agent, the utilization       monitoring and diagnosis while minimizing overhead.
+of sidecar containers (cf. §6) decouples the deployment and updates
+of the agent from the updates of the training tasks. With sidecar        Troubleshooting Large Model Training. Developing efficient
+containers, we designed monthly routine releases (to support sig-        and effective diagnosis systems for large-scale model training is now
+nificant upgrades) and weekly emergency releases (to support hot         an important research area in the community. Some of the existing
+fixes). After a new agent release, new training tasks automatically      approaches gather customized monitoring data during training pro-
+run with the latest version of the sidecar container. As old training    cess from mainstream training frameworks (e.g., MegaScale [50],
+tasks are gradually finished, the agent will then complete the full      TorchProfiler [27], and Dynolog [7]) or collective communication
+updates across all physical clusters and thier hosted containers.        processes (e.g., C4 [39] and Holmes [63]). However, these meth-
+                                                                         ods often require considerable user intervention or training frame-
+   Although using sidecar containers may introduce some over-            work modifications, and sometimes can even lead to performance
+head, it is still cost-efficient because we have deployed other ser-     degradation. On the other hand, SuperBench [84] proposes a com-
+vices over sidecar containers besides SkeletonHunter's agents, such      prehensive benchmark but is limited to offline diagnosis. In con-
+as VF statistic monitoring and container health checks. Therefore,       trast, SkeletonHunter is designed to diagnose network anomalies
+using sidecar containers is in fact a unified solution for monitor-      at runtime without the modifications to the RDMA and collective
+ing and managing our services with minimal operational costs. In         communication libraries, which operates transparently to users.
+addition, we have also designed a suite of strategies to enable con-
+sistently high-performance execution of serverless applications for      10 Conclusion
+SkeletonHunter agents and sidecar containers, such as data-driven
+scheduling, resource optimizations based on workload distributions,      Despite the great benefits of containerized large model training,
+as well as adaptive resource allocation for load balancing.              it is challenging for CSPs to ensure the reliability of the network
+                                                                         infrastructure for it. Existing monitoring and diagnosing tools for
+Coordinating All Systems for Containerized Model Train-                  data centers are inefficient or inaccurate in such a new scenario. In
+ing. The containerized model training scenario differs significantly     this paper, we present SkeletonHunter, a monitoring and diagnosis
+from traditional bare-metal deployments, especially when provid-         system for containerized large model training. It infers traffic skele-
+ing multi-tenant services that require strict security isolation. For    tons to reduce monitoring overhead while achieving high accuracy
+example, the use of SR-IOV techniques for network virtualization         in network failure detection and localization. After its deployment,
+to achieve secure containers with kernel isolation [12, 25] intro-       SkeletonHunter has uncovered thousands of network failures, sig-
+duces an essential drawback--after enabling VFs on RNICs, RDMA           nificantly improving the network reliability and reducing opera-
+capability cannot be enabled on the physical function (PF). This         tional costs. In a broader sense, our work provides a promising
+makes it impossible to monitor and diagnose the RDMA network             direction to infer the traffic patterns of the users' workloads for
+directly on the host, and presents a significant challenge during the    efficient management of large-scale data center networks.
+SkeletonHunter: Diagnosing and Localizing Network Failures in Containerized Large Model Training  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+Acknowledgments                                                                        [33] Markus M. Breunig, Hans-Peter Kriegel, Raymond T. Ng, and Jörg Sander. 2000.
+                                                                                             LOF: Identifying Density-Based Local Outliers. In Proc. of ACM SIGMOD. 93­104.
+We acknowledge Container Network, High-Performance Network,
+and PAI teams in Alibaba Cloud that contributed to the success of                      [34] Tobias Bühler, Romain Jacob, Ingmar Poese, and Laurent Vanbever. 2023. En-
+SkeletonHunter. We thank our shepherd, Sujata Banerjee, and the                              hancing Global Network Monitoring with Magnifier. In Proc. of USENIX NSDI.
+anonymous reviewers for their valuable comments and suggestions.
+This work is supported in part by the National Key R&D Program                         [35] Matthew Burke, Sowmya Dharanipragada, Shannon Joyner, Adriana Szekeres,
+of China under grant 2022YFB4500703, the NSFC under grants                                   Jacob Nelson, Irene Zhang, and Dan R. K. Ports. 2021. PRISM: Rethinking the
+62332012 and 62472245, and the Alibaba Research Intern Program.                              RDMA Interface for Distributed Systems. In Proc. of ACM SOSP. 228­242.
+
+References                                                                             [36] Milind Chabbi and Murali Krishna Ramanathan. 2022. A Study of Real-World
+                                                                                             Data Races in Golang. In Proc. of ACM PLDI. 474­489.
+[1] 2014. Virtual eXtensible Local Area Network (VXLAN): A Framework for Over-
+                                                                                       [37] Weiwei Chu, Xinfeng Xie, Jiecao Yu, Jie Wang, Amar Phanishayee, Chunqiang
+laying Virtualized Layer 2 Networks over Layer 3 Networks. https://datatracker.              Tang, Yuchen Hao, Jianyu Huang, Mustafa Ozdal, Jun Wang, Vedanuj Goswami,
+                                                                                             Naman Goyal, Abhishek Kadian, Andrew Gu, Chris Cai, Feng Tian, Xiaodong
+ietf.org/doc/html/rfc7348. (2014).                                                           Wang, Min Si, Pavan Balaji, Ching-Hsiang Chu, and Jongsoo Park. 2025. Scaling
+                                                                                             Llama 3 Training with Efficient Parallelism Strategies. In Proc. of ACM ISCA.
+[2] 2018. Lognormal Distribution. https://www.sciencedirect.com/topics/engineeri             1703­1716.
+
+ng/lognormal-distribution. (2018).                                                     [38] Rui Ding, Xunpeng Liu, Shibo Yang, Qun Huang, Baoshu Xie, Ronghua Sun, Zhi
+                                                                                             Zhang, and Bolong Cui. 2024. RD-Probe: Scalable Monitoring with Sufficient
+[3] 2020. IEEE Standard for a Precision Clock Synchronization Protocol for Net-              Coverage in Complex Datacenter Networks. In Proc. of ACM SIGCOMM. 258­273.
+     worked Measurement and Control Systems. IEEE Std 1588-2019 (2020), 1­499.
+                                                                                       [39] Jianbo Dong, Bin Luo, Jun Zhang, Pengcheng Zhang, Fei Feng, Yikai Zhu, Ang Liu,
+[4] 2022. Doubling All2all Performance with NVIDIA Collective Communication                  Zian Chen, Yi Shi, Hairong Jiao, Gang Lu, Yu Guan, Ennan Zhai, Wencong Xiao,
+                                                                                             Hanyu Zhao, Man Yuan, Siran Yang, Xiang Li, Jiamang Wang, Rui Men, Jianwei
+Library 2.12. https://developer.nvidia.com/blog/doubling-all2all-performance-                Zhang, Chang Zhou, Dennis Cai, Yuan Xie, and Binzhang Fu. 2025. Enhancing
+                                                                                             Large-Scale AI Training Efficiency: The C4 Solution for Real-Time Anomaly
+with-nvidia-collective-communication-library-2-12/. (2022).                                  Detection and Communication Optimization. (2025). arXiv:cs/2406.04594 https:
+                                                                                             //arxiv.org/abs/2406.04594
+[5] 2023. NVIDIA DGX SuperPOD: Next Generation Scalable Infrastructure for
+                                                                                       [40] Yaozu Dong, Yu Chen, Zhenhao Pan, Jinquan Dai, and Yunhong Jiang. 2012.
+AI Leadership. https://docs.nvidia.com/https:/docs.nvidia.com/dgx-superpod-                  ReNIC: Architectural Extension to SR-IOV I/O Virtualization for Efficient Repli-
+                                                                                             cation. ACM Transactions on Architecture and Code Optimization 8, 4, Article 40
+reference-architecture-dgx-h100.pdf. (2023).                                                 (2012).
+
+[6] 2024. Container Network Interface (CNI). https://kubernetes.io/docs/concepts/      [41] Chongrong Fang, Haoyu Liu, Mao Miao, Jie Ye, Lei Wang, Wansheng Zhang,
+                                                                                             Daxiang Kang, Biao Lyv, Peng Cheng, and Jiming Chen. 2020. VTrace: Automatic
+extend-kubernetes/compute-storage-net/network-plugins/. (2024).                              Diagnostic System for Persistent Packet Loss in Cloud-Scale Overlay Network.
+                                                                                             In Proc. of ACM SIGCOMM. 31­43.
+[7] 2024. Dynolog: A Performance Monitoring Daemon for Heterogeneous CPU-GPU
+                                                                                       [42] Marie Farge. 1992. Wavelet Transforms and Their Applications to Turbulence.
+Systems. https://github.com/facebookincubator/dynolog. (2024).                               Annual Review of Fluid Mechanics 24, 1 (1992), 395­458.
+
+[8] 2024. GPT-3 Powers the Next Generation of Apps. https://openai.com/index/gpt-      [43] Jiawei Fei, Chen-Yu Ho, Atal N. Sahu, Marco Canini, and Amedeo Sapio. 2021.
+                                                                                             Efficient Sparse Collective Communication and Its Application to Accelerate
+3-apps/. (2024).                                                                             Distributed Deep Learning. In Proc. of ACM SIGCOMM. 676­691.
+
+[9] 2024. Networking Overview. https://docs.docker.com/engine/network/. (2024).        [44] Edgar Gabriel, Graham E. Fagg, George Bosilca, Thara Angskun, Jack J. Dongarra,
+                                                                                             Jeffrey M. Squyres, Vishal Sahay, Prabhanjan Kambadur, Brian Barrett, Andrew
+[10] 2025. Azure Machine Learning Documentation. https://learn.microsoft.com/en-             Lumsdaine, Ralph H. Castain, David J. Daniel, Richard L. Graham, and Timothy S.
+                                                                                             Woodall. 2004. Open MPI: Goals, Concept, and Design of a Next Generation MPI
+us/azure/machine-learning/?view=azureml-api-1. (2025).                                       Implementation. In Proc. of Springer PVM/MPI. 97­104.
+
+[11] 2025. Configuring Distributed Training for PyTorch. https://cloud.google.com/ai-  [45] Adithya Gangidi, Rui Miao, Shengbao Zheng, Sai Jayesh Bondu, Guilherme Goes,
+                                                                                             Hany Morsy, Rohit Puri, Mohammad Riftadi, Ashmitha Jeevaraj Shetty, Jingyi
+platform/training/docs/distributed-pytorch. (2025).                                          Yang, Shuqiang Zhang, Mikel Jimenez Fernandez, Shashidhar Gandham, and
+                                                                                             Hongyi Zeng. 2024. RDMA Over Ethernet for Distributed Training at Meta Scale.
+[12] 2025. The Container Security Platform. https://gvisor.dev/. (2025).                     In Proc. of ACM SIGCOMM. 57­70.
+
+[13] 2025.        DataParallel -- PyTorch 2.7 Documentation.                           [46] Chuanxiong Guo, Haitao Wu, Zhong Deng, Gaurav Soni, Jianxi Ye, Jitu Padhye,
+                                                                                             and Marina Lipshteyn. 2016. RDMA Over Commodity Ethernet at Scale. In Proc.
+https://docs.pytorch.org/docs/stable/generated/torch.nn.DataParallel.html.                   of ACM SIGCOMM. 202­215.
+
+(2025).                                                                                [47] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave
+                                                                                             Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, Hua Chen, Zhi-Wei Lin, Varugis Kurien,
+[14] 2025. DeepSeek-V3. https://github.com/deepseek-ai/DeepSeek-V3. (2025).                  and Midfin Systems. 2015. Pingmesh: A Large-Scale System for Data Center
+                                                                                             Network Latency Measurement and Analysis. In Proc. of ACM SIGCOMM. 139­
+[15] 2025. Docker Containers for Training and Deploying Models. https://docs.aws.a           152.
+
+mazon.com/sagemaker/latest/dg/docker-containers.html. (2025).                          [48] Vipul Harsh, Wenxuan Zhou, Sachin Ashok, Radhika Niranjan Mysore, Brighten
+                                                                                             Godfrey, and Sujata Banerjee. 2023. Murphy: Performance Diagnosis of Dis-
+[16] 2025. Environment Variables -- NCCL 2.25.1 Documentation. https://docs.nvidia.          tributed Cloud Applications. In Proc. of ACM SIGCOMM. 438­451.
+
+com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-timeout. (2025).                [49] Pao-Lu Hsu and Herbert Robbins. 1947. Complete Convergence and the Law
+                                                                                             of Large Numbers. Proceedings of the National Academy of Sciences 33, 2 (1947),
+[17] 2025. Industry Leading, Open-Source AI | Llama by Meta. https://www.llama.com/.         25­31.
+
+(2025).                                                                                [50] Ziheng Jiang, Haibin Lin, Yinmin Zhong, Qi Huang, Yangrui Chen, Zhi Zhang,
+                                                                                             Yanghua Peng, Xiang Li, Cong Xie, Shibiao Nong, Yulu Jia, Sun He, Hongmin
+[18] 2025. Microsoft/Msccl: Microsoft Collective Communication Library. https:               Chen, Zhihao Bai, Qi Hou, Shipeng Yan, Ding Zhou, Yiyao Sheng, Zhuo Jiang,
+                                                                                             Haohan Xu, Haoran Wei, Zhang Zhang, Pengfei Nie, Leqi Zou, Sida Zhao, Liang
+//github.com/microsoft/msccl. (2025).                                                        Xiang, Zherui Liu, Zhe Li, Xiaoying Jia, Jianxi Ye, Xin Jin, and Xin Liu. 2024.
+                                                                                             MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs.
+[19] 2025. Mixtral of Experts a High Quality Sparse Mixture-of-Experts. https:               In Proc. of USENIX NSDI. 745­760.
+
+//mistral.ai/news/mixtral-of-experts/. (2025).                                         [51] Anuj Kalia, Michael Kaminsky, and David G. Andersen. 2016. Design Guidelines
+                                                                                             for High Performance RDMA Systems. In Proc. of USENIX ATC. 437­450.
+[20] 2025. NVIDIA Collective Communications Library (NCCL). https://developer.nv
+                                                                                       [52] Pravein Govindan Kannan, Nishant Budhdev, Raj Joshi, and Mun Choon Chan.
+idia.com/nccl. (2025).                                                                       2021. Debugging Transient Faults in Data Centers Using Synchronized Network-
+                                                                                             Wide Packet Histories. In Proc. of USENIX NSDI. 253­268.
+[21] 2025. Openucx/Ucc. UCX. (2025).
+                                                                                       [53] Anurag Khandelwal, Rachit Agarwal, and Ion Stoica. 2019. Confluo: Distributed
+[22] 2025. Qwen3. https://github.com/QwenLM/Qwen3. (2025).                                   Monitoring and Diagnosis Stack for High-Speed Networks. In Proc. of USENIX
+                                                                                             NSDI. 421­436.
+[23] 2025.  Realtime Compute for Apache Flink - Alibaba Cloud.
+
+https://www.alibabacloud.com/product/realtime-compute. (2025).
+
+[24] 2025. Simple Log Service. https://www.alibabacloud.com/help/en/sls/. (2025).
+
+[25] 2025. The Speed of Containers, the Security of VMs. https://katacontainers.io/.
+
+(2025).
+
+[26] 2025. TensorFlow. https://www.tensorflow.org/. (2025).
+
+[27] 2025.        Torch.Profiler -- PyTorch 2.7 Documentation.
+
+https://docs.pytorch.org/docs/stable/profiler.html. (2025).
+
+[28] Jont B Allen and Lawrence R Rabiner. 1977. A Unified Approach to Short-Time
+      Fourier Analysis and Synthesis. Proc. IEEE 65, 11 (1977), 1558­1564.
+
+[29] Behnaz Arzani, Selim Ciraci, Luiz Chamon, Yibo Zhu, Hongqiang (Harry) Liu, Jitu
+
+Padhye, Boon Thau Loo, and Geoff Outhred. 2018. 007: Democratically Finding
+the Cause of Packet Drops. In Proc. of USENIX NSDI. 419­435.
+
+[30] Behnaz Arzani, Selim Ciraci, Boon Thau Loo, Assaf Schuster, and Geoff Outhred.
+
+      2016. Taking the Blame Game Out of Data Centers Operations with NetPoirot.
+
+      In Proc. of ACM SIGCOMM. 440­453.
+[31] Richard C Aster, Brian Borchers, and Clifford H Thurber. 2018. Parameter Esti-
+
+      mation and Inverse Problems. Elsevier.
+
+[32] Ran Ben Basat, Sivaramakrishnan Ramanathan, Yuliang Li, Gianni Antichi,
+
+Minian Yu, and Michael Mitzenmacher. 2020. PINT: Probabilistic In-Band Net-
+work Telemetry. In Proc. of ACM SIGCOMM. 662­680.
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                    Wei Liu et al.
+
+[54] Jiaxin Lin, Kiran Patel, Brent E. Stephens, Anirudh Sivaraman, and Aditya Akella.  [75] Haifeng Sun, Jiaheng Li, Jintao He, Jie Gui, and Qun Huang. 2023. OmniWindow:
+      2020. PANIC: A High-Performance Programmable NIC for Multi-Tenant Net-
+      works. In Proc. of USENIX OSDI. 243­259.                                                A General and Efficient Window Mechanism Framework for Network Telemetry.
+                                                                                              In Proc. of ACM SIGCOMM. 867­880.
+[55] Juncai Liu, Jessie Hui Wang, and Yimin Jiang. 2023. Janus: A Unified Distributed   [76] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2016. Simplifying Data-
+      Training Framework for Sparse Mixture-of-Experts Models. In Proc. of ACM                center Network Debugging with Pathdump. In Proc. of USENIX OSDI. 233­248.
+      SIGCOMM. 486­498.                                                                 [77] Praveen Tammana, Rachit Agarwal, and Myungjin Lee. 2018. Distributed Network
+                                                                                              Monitoring and Debugging with SwitchPointer. In Proc. of USENIX NSDI. 453­
+[56] Kefei Liu, Zhuo Jiang, Jiao Zhang, Shixian Guo, Xuan Zhang, Yangyang Bai,                456.
+      Yongbin Dong, Feng Luo, Zhang Zhang, Lei Wang, Xiang Shi, Haohan Xu, Yang
+      Bai, Dongyang Song, Haoran Wei, Bo Li, Yongchen Pan, Tian Pan, and Tao Huang.     [78] Cheng Tan, Ze Jin, Chuanxiong Guo, Tianrong Zhang, Haitao Wu, Karl Deng,
+      2024. R-Pingmesh: A Service-Aware RoCE Network Monitoring and Diagnostic
+      System. In Proc. of ACM SIGCOMM. 554­567.                                               Dongming Bi, and Dong Xiang. 2019. NetBouncer: Active Device and Link Failure
+                                                                                              Localization in Data Center Networks. In Proc. of USENIX NSDI. 599­614.
+[57] Wei Liu, Kun Qian, Zhenhua Li, Feng Qian, Tianyin Xu, Yunhao Liu, Yu Guan,         [79] Abraham Wald. 2004. Sequential Analysis. Courier Corporation.
+      Shuhong Zhu, Hongfei Xu, Lanlan Xi, Chao Qin, and Ennan Zhai. 2025. Mitigating    [80] Siqi Wang, Zhengyu Chen, Bei Li, Keqing He, Min Zhang, and Jingang Wang.
+      Scalability Walls of RDMA-based Container Networks. In Proc. of USENIX NSDI.
+                                                                                              2024. Scaling Laws Across Model Architectures: A Comparative Analysis of
+[58] Zaoxing Liu, Antonis Manousis, Gregory Vorsanger, Vyas Sekar, and Vladimir               Dense and MoE Models in Large Language Models. In Proc. of ACL EMNLP.
+      Braverman. 2016. One Sketch to Rule Them All: Rethinking Network Flow                   5583­5595.
+      Monitoring with UnivMon. In Proc. of ACM SIGCOMM. 101­114.
+                                                                                        [81] Weitao Wang, Xinyu Crystal Wu, Praveen Tammana, Ang Chen, and T S Eugene
+[59] Dheevatsa Mudigere, Yuchen Hao, Jianyu Huang, Zhihao Jia, Andrew Tulloch,
+      Srinivas Sridharan, Xing Liu, Mustafa Ozdal, Jade Nie, Jongsoo Park, Liang Luo,         Ng. 2022. Closed-Loop Network Performance Monitoring and Diagnosis with
+      Jie (Amy) Yang, Leon Gao, Dmytro Ivchenko, Aarti Basant, Yuxi Hu, Jiyan Yang,           SpiderMon. In Proc. of USENIX NSDI. 267­285.
+      Ehsan K. Ardestani, Xiaodong Wang, Rakesh Komuravelli, Ching-Hsiang Chu,          [82] Shmuel Winograd. 1978. On Computing the Discrete Fourier Transform. Math.
+      Serhat Yilmaz, Huayu Li, Jiyuan Qian, Zhuobo Feng, Yinbin Ma, Junjie Yang, Ellie        Comp. 32, 141 (1978), 175­199.
+      Wen, Hong Li, Lin Yang, Chonglin Sun, Whitney Zhao, Dimitry Melts, Krishna        [83] Yang Wu, Ang Chen, and Linh Thi Xuan Phan. 2019. Zeno: Diagnosing Perfor-
+      Dhulipala, KR Kishore, Tyler Graf, Assaf Eisenman, Kiran Kumar Matam, Adi               mance Problems with Temporal Provenance. In Proc. of USENIX NSDI. 395­420.
+      Gangidi, Guoqiang Jerry Chen, Manoj Krishnan, Avinash Nayak, Krishnaku-           [84] Yifan Xiong, Yuting Jiang, Ziyue Yang, Lei Qu, Guoshuai Zhao, Shuguang Liu,
+      mar Nair, Bharath Muthiah, Mahmoud khorashadi, Pallab Bhattacharya, Petr
+      Lapukhov, Maxim Naumov, Ajit Mathews, Lin Qiao, Mikhail Smelyanskiy, Bill               Dong Zhong, Boris Pinzur, Jie Zhang, Yang Wang, Jithin Jose, Hossein Pourreza,
+      Jia, and Vijay Rao. 2022. Software-Hardware Co-Design for Fast and Scalable
+      Training of Deep Learning Recommendation Models. In Proc. of ACM ISCA.                  Jeff Baxter, Kushal Datta, Prabhat Ram, Luke Melton, Joe Chau, Peng Cheng,
+      993­1011.
+                                                                                              Yongqiang Xiong, and Lidong Zhou. 2024. SuperBench: Improving Cloud AI
+[60] Fionn Murtagh and Pedro Contreras. 2012. Algorithms for Hierarchical Clus-               Infrastructure Reliability with Proactive Validation. In Proc. of USENIX ATC.
+      tering: An Overview. WIREs Data Mining and Knowledge Discovery 2, 1 (2012),             835­850.
+      86­97.
+                                                                                        [85] Kaicheng Yang, Yuhan Wu, Ruijie Miao, Tong Yang, Zirui Liu, Zicang Xu, Rui
+[61] Deepak Narayanan, Mohammad Shoeybi, Jared Casper, Patrick LeGresley,
+      Mostofa Patwary, Vijay Korthikanti, Dmitri Vainbrand, Prethvi Kashinkunti,              Qiu, Yikai Zhao, Hanglong Lv, Zhigang Ji, and Gaogang Xie. 2023. ChameleMon:
+      Julie Bernauer, Bryan Catanzaro, Amar Phanishayee, and Matei Zaharia. 2021.             Shifting Measurement Attention as Network State Changes. In Proc. of ACM
+      Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-           SIGCOMM. 881­903.
+      LM. In Proc. of ACM SC.                                                           [86] Dong Young Yoon, Yang Wang, Miao Yu, Elvis Huang, Juan Ignacio Jones, Abhinay
+
+[62] Whitney K Newey and Daniel McFadden. 1994. Large Sample Estimation and                   Kukkadapu, Osman Kocas, Jonathan Wiepert, Kapil Goenka, Sherry Chen, Yanjun
+      Hypothesis Testing. Handbook of Econometrics 4 (1994), 2111­2245.
+                                                                                              Lin, Zhihui Huang, Jocelyn Kong, Michael Chow, and Chunqiang Tang. 2024.
+[63] Pranoy Panda, Ankush Agarwal, Chaitanya Devaguptapu, Manohar Kaul, and
+      Prathosh A P. 2024. HOLMES: Hyper-Relational Knowledge Graphs for Multi-                FBDetect: Catching Tiny Performance Regressions at Hyperscale through In-
+      hop Question Answering using LLMs. (2024). arXiv:cs.CL/2406.06027 https:                Production Monitoring. In Proc. of ACM SOSP. 522­540.
+      //arxiv.org/abs/2406.06027                                                        [87] Zhuolong Yu, Bowen Su, Wei Bai, Shachar Raindel, Vladimir Braverman, and Xin
+
+[64] Yanghua Peng, Ji Yang, and Chuan Wu. 2017. deTector: A Topology-aware                    Jin. 2023. Understanding the Micro-Behaviors of Hardware Offloaded Network
+      Monitoring System for Data Center Networks. In Proc. of USENIX ATC.                     Stacks with Lumina. In Proc. of ACM SIGCOMM. 1074­1087.
+                                                                                        [88] Yu Zhou, Chen Sun, Hongqiang Harry Liu, Rui Miao, Shi Bai, Bo Li, Zhilong
+[65] Teresa Pepe and Marzio Puleri. 2015. Network Tomography: A Novel Algorithm
+      for Probing Path Selection. In Proc. of IEEE ICC. 5337­5341.                            Zheng, Lingjun Zhu, Zhen Shen, Yongqing Xi, Pengcheng Zhang, Dennis Cai,
+
+[66] Ben Pfaff, Justin Pettit, Teemu Koponen, Ethan J Jackson, Andy Zhou, Jarno Raja-         Ming Zhang, and Mingwei Xu. 2020. Flow Event Telemetry on Programmable
+      halme, Jesse Gross, Alex Wang, Jonathan Stringer, Pravin Shelar, Keith Amidon,          Data Plane. In Proc. of ACM SIGCOMM. 76­89.
+      and Martin Casado. 2015. The Design and Implementation of Open vSwitch. In        [89] Yibo Zhu, Nanxi Kang, Jiaxin Cao, Albert Greenberg, Guohan Lu, Ratul Mahajan,
+      Proc. of USENIX NSDI.
+                                                                                              Dave Maltz, Lihua Yuan, Ming Zhang, Ben Y Zhao, Haitao Zheng, and U C Santa
+[67] Kun Qian, Yongqing Xi, Jiamin Cao, Jiaqi Gao, Yichi Xu, Yu Guan, Binzhang Fu,            Barbara. 2015. Packet-Level Telemetry in Large Datacenter Networks. In Proc. of
+      Xuemei Shi, Fangbo Zhu, Rui Miao, Chao Wang, Peng Wang, Pengcheng Zhang,                ACM SIGCOMM. 479­491.
+      Xianlong Zeng, Eddie Ruan, Zhiping Yao, Ennan Zhai, and Dennis Cai. 2024.         [90] Yazhou Zu, Alireza Ghaffarkhah, Hoang-Vu Dang, Brian Towles, Steven Hand,
+      Alibaba HPN: A Data Center Network for Large Language Model Training. In
+      Proc. of ACM SIGCOMM. 691­706.                                                          Safeen Huda, Adekunle Bello, Alexander Kolbasov, Arash Rezaei, Dayou Du,
+
+[68] Jeff Rasley, Samyam Rajbhandari, Olatunji Ruwase, and Yuxiong He. 2020. Deep-            Steve Lacy, Hang Wang, Aaron Wisner, Chris Lewis, and Henri Bahini. 2024.
+      Speed: System Optimizations Enable Training Deep Learning Models with Over
+      100 Billion Parameters. In Proc. of ACM SIGKDD. 3505­3506.                              Resiliency at Scale: Managing Google's TPUv4 Machine Learning Supercomputer.
+                                                                                              In Proc. of USENIX NSDI. 761­774.
+[69] Jeff Rasley, Brent Stephens, Colin Dixon, Eric Rozner, Wes Felter, Kanak Agarwal,
+      John Carter, and Rodrigo Fonseca. 2014. Planck: Millisecond-Scale Monitoring
+      and Control for Commodity Networks. In Proc. of ACM SIGCOMM. 407­418.
+
+[70] Arjun Roy, Hongyi Zeng, Jasmeet Bagga, and Alex C. Snoeren. 2017. Passive
+      Realtime Datacenter Fault Detection and Localization. In Proc. of USENIX NSDI.
+      595­612.
+
+[71] Satadal Sengupta, Hyojoon Kim, and Jennifer Rexford. 2022. Continuous In-
+      Network Round-Trip Time Monitoring. In Proc. of ACM SIGCOMM. 473­485.
+
+[72] Enge Song, Yang Song, Chengyun Lu, Tian Pan, Shaokai Zhang, Jianyuan Lu,
+      Jiangu Zhao, Xining Wang, Xiaomin Wu, Minglan Gao, Zongquan Li, Ziyang
+      Fang, Biao Lyu, Pengyu Zhang, Rong Wen, Li Yi, Zhigang Zong, and Shunmin
+      Zhu. 2024. Canal Mesh: A Cloud-Scale Sidecar-Free Multi-Tenant Service Mesh
+      Architecture. In Proc. of ACM SIGCOMM. 860­875.
+
+[73] Brent Stephens, Aditya Akella, and Michael M. Swift. 2018. Your Programmable
+      NIC Should Be a Programmable Switch. In Proc. of ACM HotNets. 36­42.
+
+[74] Jovan Stojkovic, Tianyin Xu, Hubertus Franke, and Josep Torrellas. 2023. MXFaaS:
+      Resource Sharing in Serverless Environments for Parallelism and Efficiency. In
+      Proc. of ACM ISCA. 1­15.
+

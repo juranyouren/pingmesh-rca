@@ -1,0 +1,320 @@
+          
+
+Intelligent Network 
+
+
+
+  High-dimensional Intelligent Approach to Network Alarm Association Analysis
+
+ 1  2  3  21.   4300732. 
+
+1000483.   210029
+Kuang Liwei1Zhao Liang2Yang Tao3Zhang He21. FiberHome Telecommunication Technologies Co.Ltd.Wuhan 430073China
+2. China Unicom Network Technology Research InstituteBeijing 100048China3. China Unicom Jiangsu BranchNanjing 210029China
+
+                      
+
+                      
+                      
+                      doi10.12045/j.issn.1007-3043.2018.12.003
+                      TP181
+                      A
+                      1007-3043201812-0012-05
+
+Abstract
+
+Association analysis of network alarm is one of the fundamental process for telecommunication network management and
+maintenance. As the traditional rule-based method can not efficiently extract the association rules from network alarmmany
+researchers has been performing studies on artificial intelligence based association analysis of network alarm. According to the
+three features of network alarmnamely varietyvolumeand low intelligenceit proposes a novel high-dimensional intelligent
+approach that can appropriately extract the root alarm and find the associated fault point of the network equipment. The appli-
+cation scenario of intelligent association analysis method is analyzedand the development trend of intelligent association
+analysis of network alarm is prospected.
+
+Keywords
+
+Association analysis of network alarmArtificial intelligence technologyHigh-dimensional space modelTensor model
+
+ . J. 20181212-16.
+
+0                     
+                            
+      
+                      
+                      
+                      
+                      
+                      
+                      
+--------------------  
+                      
+2018-11-22            
+
+12 2018/12/DTPT
+                     
+
+             Intelligent Network
+
+            1.2 
+                  5Artificial Intelligence
+
+            
+            
+                                
+            67
+            
+             2013 
+            
+       1    
+            
+2           
+ 3          
+            
+            
+ 4          
+            8-11
+ 5          12
+            
+                                
+            131415
+1           
+
+1.1               
+                                
+            
+            
+            
+            
+            
+            
+            
+1           
+ ARM-ACAS   
+            
+2           
+
+            2 
+3
+4           2.1 
+                  
+
+            
+            
+             3 
+
+            /2018/12 13
+          
+
+Intelligent Network 
+
+       1                                                           3 
+
+                                                                   3.1 
+
+                                                                                     
+ 1 
+                                                                   
+       2
+                                                                   
+
+                                                                   
+ 2 
+                                                                   
+       3
+                                                                                 T  RI1 × I2 × I3 × ... × IN     1
+
+                                                                   
+
+ 3                                                                 T----
+2.2 
+                                                                   R----
+      
+                                                                         I1I2I3...IN---- 1 2 3 N
+                                                                   
+
+                                                                    1  I1 2  I2 3
+ 1                                                                  I3 
+                                                                   
+
+                                                                   
+
+                                                                   
+
+                                                                   
+
+                                                                   
+
+                                                                   3.2 
+
+                                                                   
+
+                                                                   12
+
+                                                                     S  =  T  ×  UT  ×  2U 2T ...  ×  PU  T   ,  2
+                                                                                                          P
+                                                                                 11
+
+                                                                     T = S × 1U1 × 2U2... × PUP.
+
+                 I2                                                
+                                                                 
+                                                                   S----
+
+                     I1                                            U1U2...UP----
+                                                                   T ----
+
+I3               I4                                                
+
+                                                                    2 
+
+                                                                    2 
+
+       1                                                            3 
+
+       1                                                           
+ 1 
+                                                                    3 
+ 1 
+                                                                   
+
+                                                                    2 
+
+                                                                    S
+
+                                                                    T 
+
+                                                                   3.3 
+
+                                                                   
+
+14 2018/12/DTPT
+                                                                      
+
+                                                              Intelligent Network
+
+                                                             
+                                                             
+    I2                                                       
+                                                             
+I3           I1                                              
+                                                             
+                                                             
+
+     2                                                                               
+                                                             
+ p                                                           
+                                                             
+ Tp                                                          
+                                                             
+        T  RIP × ( IP + I1 P + 2...IP I1 I2...IP - 1 )  3
+           ( p)                                              4 
+
+ 3             12                                                  
+                                                             
+                                                             
+                                                             
+                                                              3 
+
+                                                                    3 
+                                                             
+                                                             
+                                                             
+                                                             
+                                                             
+                                                             
+                                                             
+                                                             
+                                                             
+                                                             
+
+                                                             5 
+
+                                                                   
+                                                             
+                                                             
+                                                             
+ A1A2  A1                                                    
+A2  F1A2                                                     
+ F1A2                                                        
+                                                             
+                                                             
+
+
+
+
+
+
+
+        e = ( v1, v2, v3, ..., vr, vf )                   4
+
+
+
+e----
+
+      v1v2v3----
+      vr vf----
+3.4 
+
+
+
+
+
+
+
+
+
+                                                             /2018/12 15
+          
+
+Intelligent Network 
+
+                                                                             
+
+                                                                             
+                               
+
+                                                                               
+                                                                               
+
+                  3 
+
+                                                                           8 LATHAUWER L DMOOR B DVANDEWALLE J. A Multilinear
+                                                                                   Singular Value DecompositionM. Society for Industrial and Ap
+                                                                                   plied Mathematics20001253­1278.
+       
+                                                                           9 KOLDA T GBADER B W. Tensor Decompositions and Applications
+                                                                                  J. Siam Review2009513455-500.
+
+                                                                           10 BRAZELL MLI NNAVASCA Cet al. Solving Multilinear Systems
+                                                                                   via Tensor InversionJ. SIAM Journalon Matrix Analysis and Appli
+                                                                                   cations2013342542­570.
+
+                                                                           11 KUANG LYANG L TWANG Xet al. A tensor-based big data
+                                                                                   model for QoS improvement in software defined networksJ. IEEE
+                                                                                   Network201630130-35.
+1 LI TLI X . Novel alarm correlation analysis system based on associa
+        tion rules mining in telecommunication networksJ. Information Sci  12 KUANG LHAO FYANG L Tet al. A Tensor-Based Approach for
+        ences2010180162960-2978.                                                   Big Data Representation and Dimensionality ReductionJ. IEEE
+                                                                                   Transactions on Emerging Topics in Computing201423280-
+2 LI J FWANG H B. Network Fault Alarm Correlation Analysis Based                   291.
+        on Association RuleJ. Computer Engineering201238544-46.
+                                                                           13 DANNAEUS A. Big Data and Cloud ComputingCurrent State and
+3  .                                                                               Future OpportunitiesC// International Conference on Extending Da
+        J. 20185.                                                                  tabase Technology. ACM2011.
+
+4  .                                                                       14 WANG XYANG L TXIE Xet al. A Cloud-Edge Computing
+       J. 201629418-23.                                                            Framework for Cyber-Physical-Social ServicesJ. IEEE Communi
+                                                                                   cations Magazine2017551180-85.
+5  . J. 
+        2012253456-461.                                                    15 ZHANG QZHU CYANG L Tet al. An Incremental CFS Algorithm
+                                                                                   for Clustering Large Data in Industrial Internet of ThingsJ. IEEE
+6 HOPFIELD J J. Neural Networks and Physical Systems with Emer                     Transactions on Industrial Informatics20171-1.
+        gent Collective Computational AbilitiesJ. Proc of the National
+        Academy of Sciences of the USA19827982554-2558.                       
+                                                                               
+7  .                                                                           
+        J. 20135091799-1804.                                                   
+                                                                               
+
+16 2018/12/DTPT
+

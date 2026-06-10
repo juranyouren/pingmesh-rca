@@ -1,0 +1,1189 @@
+Intent-Driven Network Management with Multi-Agent LLMs: The
+                             Confucius Framework
+
+Zhaodong Wang Samuel Lin Guanqing Yan Soudeh Ghorbani Minlan Yu Jiawei Zhou§
+     Nathan Hu Lopa Baruah Sam Peters Srikanth Kamath Jerry Yang Ying Zhang
+
+                 Meta Johns Hopkins University Harvard University §Stony Brook University
+
+Abstract                                                                                    [12, 18, 47, 53] have emerged as a promising solution to enhance
+                                                                                            network management.
+Advancements in Large Language Models (LLMs) are significantly
+transforming network management practices. In this paper, we                                   Network management in production environments involves in-
+present our experience developing Confucius, a multi-agent frame-                           tricate, multi-step tasks that require diverse tools and expertise to
+work for network management at Meta. We model network man-                                  navigate complex solution spaces. For instance, diagnosing a failed
+agement workflows as directed acyclic graphs (DAGs) to aid plan-                            service request demands a meticulous process of troubleshooting
+ning. Our framework integrates LLMs with existing management                                networking issues, analyzing routing paths, and narrowing down
+tools to achieve seamless operational integration, employs retrieval-                       potential causes. Similarly, evaluating the impact of a topology
+augmented generation (RAG) to improve long-term memory, and es-                             expansion plan requires multiple steps, involving traffic forecast
+tablishes a set of primitives to systematically support human/model                         generation, topology augmentation, failure simulation, and result
+interaction. To ensure the accuracy of critical network operations,                         analysis. Given their complexity and domain-specific nature, simply
+Confucius closely integrates with existing network validation meth-                         relying on LLMs to handle them in a single step is not effective.
+ods and incorporates its own validation framework to prevent re-                            Instead, a more nuanced approach is needed, one that incorporates
+gressions. Remarkably, Confucius is a production-ready LLM devel-                           domain expertise and iterative refinement.
+opment framework that has been operational for two years, with
+over 60 applications onboarded. To our knowledge, this is the first                            To address these challenges, we introduce Confucius, a novel
+report on employing multi-agent LLMs for hyper-scale networks.                              multi-agent LLM framework. Confucius decomposes intricate man-
+                                                                                            agement tasks into smaller, structured subtasks, each of which can
+CCS Concepts                                                                                be executed using specialized domain-specific tools and databases.
+                                                                                            Confucius introduces three key components that effectively incor-
+· Networks  Data center networks; Network management;                                       porate domain-specific knowledge into the general multi-agent
+Network monitoring; · Computing methodologies  Multi-                                       LLM framework:
+agent systems.
+                                                                                               Enhancing planning with structured network procedures:
+Keywords                                                                                    Confucius integrates existing structured network procedures, such
+                                                                                            as codified Methods of Processes (MOPs) or workflows [51], with
+Large Language Models (LLMs), RAG, Network Planning                                         LLM reasoning. These programs are often written in Domain-
+                                                                                            Specific Languages (DSLs), which use predefined functions to en-
+ACM Reference Format:                                                                       code smaller operations. Confucius introduces programming primi-
+Zhaodong Wang Samuel Lin Guanqing Yan Soudeh Ghorbani Min-                                  tives that bridge the gap between human-friendly structured data
+lan Yu Jiawei Zhou§ Nathan Hu Lopa Baruah Sam Peters Srikanth                               and foundational models. This integration aids the LLM in breaking
+Kamath Jerry Yang Ying Zhang. 2025. Intent-Driven Network Man-                              down complex network management tasks into multiple smaller
+agement with Multi-Agent LLMs: The Confucius Framework. In ACM SIG-                         tasks. It also combines multiple agents' outputs to achieve better
+COMM 2025 Conference (SIGCOMM '25), September 8­11, 2025, Coimbra, Por-                     planning outcomes.
+tugal. ACM, New York, NY, USA, 16 pages. https://doi.org/10.1145/3718958.
+3750537                                                                                        Connecting tools with Domain-Specific Languages: Our
+                                                                                            key idea is to leverage the numerous existing network management
+1 Introduction                                                                              tools, rather than developing new ones. However, utilizing these
+                                                                                            tools effectively requires deep domain expertise in formatting the
+Network management is a vital component of large-scale services'                            right input and commands. We propose a set of primitives that
+networks, playing a pivotal role in ensuring reliability, performance,                      convert human-friendly instructions into DSL-compliant inputs
+and scalability across vast numbers of interconnected servers. De-                          for each tool. Based on our experience, we have identified three
+spite significant research efforts in traffic engineering [19, 44], net-                    widely used DSLs in network management: topology graph, net-
+work provisioning [16, 38, 46], and automated diagnosis [30, 52],                           work time series data, and network data model [46]. Confucius
+enterprises still require substantial engineering resources to man-                         has built-in modules that provide translation to these three DSLs,
+age their networks effectively. Large Language Models (LLMs)                                enabling seamless interaction between the Confucius agent and
+                                                                                            many existing network management tools.
+This work is licensed under a Creative Commons Attribution 4.0 International License.
+SIGCOMM '25, Coimbra, Portugal                                                                 Enhancing long-term and short-term memory with domain-
+© 2025 Copyright held by the owner/author(s).                                               specific retrievals: Confucius develops advanced memory manage-
+ACM ISBN 979-8-4007-1524-2/25/09                                                            ment mechanisms to effectively handle conversation context, utiliz-
+https://doi.org/10.1145/3718958.3750537                                                     ing a hierarchical tree structure for short-term memory. For cases
+
+                                                                                       347
+Category Use Cases                    Example Requests to LLM                                                 example queries. We broadly categorize the use cases into four
+                                                                                                              categories of the life cycle of network management.
+Network  Topology                     Update max capacity for all fibers in NA to X
+Design   Design                       Double the num of FSWs in each POD.                                        Network Design involves generating designs of topology that
+                                                                                                              meet capacity and performance requirements. This task requires
+         Configuration Generation     Generate configuration to remove a BGP peer for switch X.               balancing optimal decisions against evolving technology, complex
+                                                                                                              requirements, and limited resources. While traditional approaches
+         Understanding Capacity       What is the total deployed power per rack type in one DC?               create abstract diagrams that are manually translated into concrete
+         Situation                    What is the EBB planned capacity in six months in region A?             data models [46], LLMs can assist in automatically converting ab-
+                                                                                                              stract designs to concrete data models, reducing both time and
+         Capacity What-if             Update layer 3 router's max capacity to a value from                    errors. Among different choices of models and network products,
+         Analysis                     "node_cap_manager", use "hose" demand type with p90 percentile          LLMs can assist the selection based on high-level intent and re-
+                                      run "cap_planner", compare result with latest gold version.             quirement. In §2.2, we provide more details into capacity planning
+                                                                                                              as an example of network design.
+Network Create Operations             Write a workflow that upgrades switch role X software version.
+Operations Workflows                  Which building block can I use to create a new device in FBNet?            Network Operations involve executing tasks like configuration
+                                                                                                              updates, software installations, and hardware replacements, follow-
+         Generate Migration Command Generate soft drain command for switch X.                                 ing established MOPs. These tasks are critical to network reliability
+                                                                                                              and performance, but manual execution can be time-consuming
+         Monitor Operations Status    Show operations that took the longest to complete in last 3 days.       and error-prone. LLMs can improve these processes by suggesting
+                                                                                                              existing MOPs, generating new ones, executing complex instruc-
+Monitoring Monitoring Network Health  Can you show me gold traffic from region A to B on May 20               tions, monitoring operation status, and lowering the barrier for
+& Diagnosis                           for Ads storage service?                                                in-house tools. LLMs can transform new product introduction and
+                                                                                                              deployment into a more efficient process.
+         Anomaly Detection            How many distinct source IPs were observed in 1.1.1.1 on Mar 8th?
+                                                                                                                 Network Monitoring involves collecting data from various ven-
+Knowledge Sharing                     Where can I find data about production network performance?             dors' APIs, but managing these APIs can be challenging due to
+                                                                                                              vendor heterogeneity. Even with standardized APIs like Thrift [16],
+                     Table 1: Use Case Examples.                                                              navigating complex structures and parsing retrieved data can be
+                                                                                                              difficult. LLMs offer a promising solution by suggesting and writing
+requiring a large volume of context, Confucius employs Retrieval-                                             APIs, as well as automatically parsing retrieved data. LLMs can not
+Augmented Generation (RAG) [11, 27, 31, 32] as a form of long-                                                only significantly improve efficiency but also develop new trou-
+term memory. For instance, Confucius leverages RAG in a separate                                              bleshooting processes through self-learning. We provide a detailed
+database to index hundreds of thousands of network data models,                                               example of fault diagnosis in §2.3.
+enabling efficient searching and retrieval by LLMs. Furthermore, it
+allows developers to configure the level of detail to store in memory                                            Knowledge Base and Onboarding involve network domain-specific
+and extract related information based on specific queries.                                                    terminologies and tools, which can overwhelm new engineers with
+                                                                                                              complex concepts like EBB [19] and FA [9]. Network data requires
+   Ensuring correctness systematically: To guarantee the safety                                               specific context for proper usage. LLMs can provide this context by
+and reliability of management tasks, Confucius is designed to tightly                                         serving as a knowledge management platform.
+integrate with existing verification and validation systems. Ad-
+ditionally, Confucius provides a set of primitives that facilitate                                            2.2 Capacity What-if Analysis
+frequent human feedback. Moreover, Confucius includes a bench-
+marking system that enables developers to easily evaluate their                                               Next, we dive into two concrete apps in the category of network
+application under different configurations, prompting algorithms,                                             design and network monitoring. In each example, we point out how
+and foundation models.                                                                                        Confucius, built on top of LLMs, provides the specific help.
+
+   Confucius has been successfully deployed in production for two                                                Capacity planning at Meta involves determining where and when
+years, serving thousands of users and supporting over 60 network                                              to increase network capacity to ensure long-term network health.
+management applications. Notably, Confucius has resulted in sig-                                              This process relies on what-if analysis and optimizations [6, 7]. For
+nificant time savings for developers, reducing the average develop-                                           example, to meet AI training demands, Meta has deployed new data
+ment time by 17 engineer-hours per week, while maintaining high                                               centers [4] and augmented existing ones with new technology. A
+accuracy. Our evaluation demonstrates that Confucius improves                                                 key challenge is determining how the backbone topology should
+accuracy by up to 21% compared to solutions that rely solely on                                               change to interconnect these new regions with the right amount of
+foundation models. We share our experience developing Confu-                                                  capacity. Confucius answers this question through various subtasks.
+cius and onboarding applications, providing valuable insights into
+the challenges and opportunities of using LLMs for production                                                    Planning the subtasks. Figure 1 illustrates an example of a what-if
+networks. To the best of our knowledge, this paper presents a pio-                                            analysis aimed at increasing backbone network capacity in response
+neering comprehensive framework for developing and deploying                                                  to a new data center deployment. Before conducting the analysis,
+LLM-assisted network management applications. We hope that this                                               the user must first gather the current network topology and in-
+paper inspires future research in this exciting new domain, driving                                           formation about upcoming fiber availability. Next, the user poses
+innovation towards truly intent-based network management.                                                     what-if questions, such as, "What if I enable more channels on a
+                                                                                                              specific path?" To address these questions, the user creates an execu-
+2 Motivation                                                                                                  tion plan with several steps: updating traffic forecasts, augmenting
+
+We have successfully developed and deployed multiple applications
+using Confucius over the past two years. This section provides an
+overview of our production use cases, highlighting key challenges
+encountered. We illustrate these challenges with two examples,
+discuss the benefits of LLMs, and outline adoption challenges.
+
+2.1 Network Management Use Cases
+
+Network management involves complex tasks that require manual
+steps and deep domain knowledge. Table 1 shows the categories
+of network management apps supported by Confucius, along with
+
+                                                                                                         348
+                 DC Capacity Change                                                             Failure incident    Failed requests for IG-Training service between 7-8pm on 12/31/2024
+                                                                                                    detected
+
+Gather Current   Production steady-state  Production real-time   Including capacity added       Isolate the domain  Group hosts by region Group hosts by prefix                   Group hosts by
+   Topology                topology              topology           in the next 30 days?            of the issue                                                                    pod/cluster
+
+Forecast Demand  50th percentile forecast                        90th percentile forecast         Check network                                                               NO      Not a network
+                              Daily basis                        Hourly basis                          metrics                                                                           problem
+Generate Future                                                                                                     Is there anomalous spike
+     Topology                                                                                     Active probing    in TCP retransmissions?
+
+    Run failure                                                                                 Topology analysis   YES
+    simulations
+                                                                                                                       Is there high latency  Is there high packet loss           NO  Application-
+                                                                                                                    in the same time window   in the same time window
+                 Existing fiber           Turn on more channels  Include upcoming fiber                                                                                               layer error
+                      only                                             deployments                                          and regions?              and regions?
+
+                                                                                                                    YES
+
+                 Single-fiber cut                       Multi-fiber cut                                                  Identify LSP paths that carry the traffic
+                     Shortest-path                Max-flow
+
+                                                                                                Network change        Examine network change logs                   Examine controller alerts
+                                                                                                        logs        associated with routers along the
+
+                                                                                                                                      paths
+
+Analyze Results  Node availability        Demand  Link capacity          Latency
+
+               Figure 1: Capacity What-if Example.                                                                                                                 Possible root cause identified
+
+the topology with upcoming fiber deployments, running failure                                                    Figure 2: Fault Diagnosis Example.
+simulations, and analyzing the results to support A/B testing.
+                                                                                                question. For example, Figure 2 involves four steps: (1) identifying
+   Complexity of Subtasks. Each subtask can have multiple variants,                             hosts by region and prefix, (2) examining TCP retransmission for
+such as different percentiles for demand forecasting or various                                 anomalies, (3) analyzing NetNORAD [30] data for packet loss, and
+network resilience policies for failure simulation, as illustrated in                           (4) examining network change logs linked to affected LSP paths.
+Figure 1. Traditionally, network planners manually configured and
+chained these tools, resulting in time-consuming processes and                                     Complexity of Subtasks. Each subtask requires querying specific
+suboptimal parallelization. Confucius streamlines this workflow by                              datasets, which can be challenging due to the numerous datasets
+automatically generating a directed acyclic graph (DAG) of opera-                               and domain knowledge required. For example, filtering and aggre-
+tions and orchestrating remote execution according to the what-if                               gating raw data such as SNMP logs is necessary to identify patterns,
+scenario defined by the planner. Additionally, Confucius reduces                                and anomaly detection for performance degradation requires pick-
+the domain expertise and manual effort needed to query real-time                                ing the algorithm and setting different parameters [17]. Currently,
+topology data, which can be noisy and may not accurately reflect                                network engineers must manually create and manage workflows of
+planned changes. Users interact with capacity-related information                               tens of steps, which is tedious and time-consuming, taking hours
+through a natural language interface, enabling them to ask ques-                                to days. Confucius automates this process by auto-generating tem-
+tions like, "What's the total capacity added in the past 90 days?"                              plates, suggesting reusable building blocks, performing queries,
+without needing to understand table schemas or query syntax.                                    and identifying correlations. It improves diagnostic efficiency by
+                                                                                                reducing the man-hours required for triage and root-cause analysis.
+   Given many subtask variants, manually analyzing dozens of
+outputs is impractical. Confucius summarizes results based on key                               2.4 Observations and Challenges
+metrics such as total dropped flows and SLO misses. It also provides
+a visual analysis of differences using its multimodal feature, helping                          We summarize the key observations from the examples and use
+users quickly interpret and compare outcomes.                                                   cases presented above.
+
+2.3 Network Performance Diagnosis                                                                  Multi-step Complex Tasks: Network management tasks are com-
+                                                                                                plex, involving multiple steps that require domain-specific knowl-
+Fault diagnosis is critical for resolving network issues, but com-                              edge. For example, what-if analysis decomposes a task into subtasks
+plexity and diverse potential causes present significant challenges.                            like demand forecasting, topology modeling, and policy definition.
+Network engineers must sift through extensive monitoring data
+and consider numerous potential causes. Confucius assists with                                     Specialized Tools: Despite the complexity, numerous specialized
+fault diagnosis by analyzing thousands of counters and metrics. In                              tools have been developed to address specific aspects of network
+the example shown in Figure 2, we need to diagnose a case where                                 management, including network modeling, intent-based routing,
+Instagram inference requests failed during a specific time period.                              capacity planning, topology design, monitoring, and diagnosis. At
+This involves analyzing network issues, dominant regions, routing                               Meta, we have hundreds of tools and APIs spanning backbone, data
+paths, affected prefixes, and determining if any network changes                                center, and edge networks, and this number is rapidly growing to
+are associated with these factors.                                                              support new use cases.
+
+   Planning the Subtasks. The first step in diagnosing network issues                              Large Search Space: The scale and heterogeneity of modern net-
+is planning the execution of complex diagnosis tasks. In production,                            works result in a large search space for network management tasks.
+we use workflows or runbooks [51] that consist of sub-workflows                                 For instance, designing a new data model requires navigating hun-
+or steps, each invoking different tools. With hundreds of workflows,                            dreds of thousands of existing models.
+it is challenging to determine which to use for a specific diagnosis
+                                                                                                   High Safety Requirements: Network management demands ex-
+                                                                                                tremely high reliability, making it impractical to rely solely on AI.
+
+                                                                                           349
+             Human                                                             A Multi-Agent Framework: In network management, complex
+             Interface                                                      tasks must be decomposed into multiple interconnected subtasks,
+                                                                            each requiring different specialized tools and domain knowledge. A
+             Agent                                                          naive solution uses a single LLM to handle an entire task from start
+                                                                            to finish, but this falls short with sufficiently complex tasks, leading
+  Planning         Memory                            Tooling                to excessive prompts and unreliable performance. By adopting a
+(Workflows)          (RAG)                            (DSLs)                multi-agent framework, Confucius decomposes complex workflows
+                                                                            into distinct subtasks that can be tackled by multiple specialized
+ Runbooks       Network logs                      Time series               agents. Figure 3 shows the LLM agent interacting with four parts:
+    MOPs     Topology database                       Graphs                 planning, memory, tools, and human. We build network-specific
+                                                                            primitives to facilitate interaction among them.
+                                                  Data models
+                                                                               Leverage Existing MOPs and Workflows for Planning: MOPs
+             Figure 3: Multi-agent architecture.                            and runbooks are predefined workflows for network tasks, available
+                                                                            in structured format [51]. To have LLMs learn from these workflows,
+For example, device draining operations must be carefully exam-             we must overcome three challenges: 1) bridge the gap between
+ined to prevent introducing packet loss. Similarly, changing routing        structural language (e.g., Python or DSL) and natural language; 2)
+configurations requires close scrutiny to avoid creating blackholes         incorporate deep domain knowledge, such as BGP routing priorities;
+that disrupt existing traffic.                                              3) manage numerous workflows. Confucius provides programming
+                                                                            primitives to bridge the gap between structural data and LLMs. It
+   Privacy Concerns: Network data is highly proprietary, and sen-           also combines multiple agents' outputs to achieve better planning.
+sitive information must be protected to prevent malicious attacks.
+Users may inadvertently input sensitive details such as names, email           Structured Data to Connect with Tools: Network engineers
+addresses, and IP addresses. Therefore, careful redaction of input          rely on sophisticated tools that operate with structured data. Ex-
+data is essential before sending it to LLMs.                                pertise lies in selecting the right tool and formatting commands
+                                                                            to achieve desired actions. We design Confucius agent to interact
+3 Overview                                                                  with multiple domain-specific tools using a set of primitives that
+                                                                            convert natural language inputs into DSL-compliant outputs.
+In this section, we introduce the principles, key design ideas, and
+programming framework in Confucius.                                            Domain-Specific Retrievals for Long-Term and Short-Term
+                                                                            Memory: In a multi-agent LLM framework, each agent focuses
+3.1 Principles                                                              on a specific subtask. To coordinate agents, Confucius provides
+                                                                            memory functionality that tracks interactions with humans and
+Over the past two years, we have explored leveraging LLMs for               tools. It offers short-term memory management, where users can
+networking, ranging from chatbot-style Q&A interfaces to deeper             control the level of memory for each session. For long-term memory,
+integration with systems and tools. Based on our experiences, we            Confucius leverages RAG to handle large volumes of context.
+summarize the following guiding principles for Confucius:
+· Separate Reasoning from Factual Knowledge: We leverage LLMs                  Ensure Correctness through Validations and Human In-
+                                                                            put: Confucius integrates with existing validation frameworks,
+   for reasoning tasks, which they are well-suited for, while we rely       including dry-run and configuration validation systems, to ensure
+   on existing runbooks, tools, and databases for retrieving factual        correctness of mission-critical tasks. Outputs are validated before
+   information.                                                             presentation to the user, and human approval is enforced for highly
+· Leverage Existing Expertise: We utilize established tools and             sensitive tasks. To support human oversight, Confucius employs
+   expert knowledge in network management, similar to existing              a primitive called Collector to systematically gather user inputs
+   approaches for incorporating domain knowledge [3].                       through structured human interaction.
+· Orchestrate with Carefully Engineered Prompts: Inspired by
+   "cognitive architectures" [1], we decompose management tasks             3.3 Confucius Programming Framework
+   into individual components and use carefully engineered prompts
+   to guide LLM reasoning. This allows us to maintain control over          Confucius is a programming framework that simplifies application
+   the reasoning process.                                                   development with primitives and abstractions, shown in Figure 4.
+· Prioritize Iterative Improvement: We prioritize basic implementa-         It offers an interactive chat-like interface for user interaction.
+   tion to develop a functional system quickly and refine iteratively
+   over time.                                                                  Programming Abstraction: At its core, Confucius is built on Pydan-
+· Not Depend on Fine-tuning: We design our approach to work                 tic, a Python schema language for defining custom data structures.
+   effectively with foundation models that do not require fine-tuning       The core abstraction class is the Analect, which holds reusable
+   as a prerequisite. This allows us to leverage the latest advances        logic and data for inputs, outputs, and runtime. It is similar to a
+   in LLMs while minimizing the dependency on costly and time-              function but provides logging for execution, streamlining reuse
+   consuming fine-tuning.                                                   throughout the system. Several basic operators are shared among
+                                                                            all Analects. These operators implement basic functionalities, in-
+3.2 Key Design Ideas                                                        cluding a JSON Parser, a Tracer that automatically collects and logs
+                                                                            the execution trace in an internal database, and an I/O function
+We align our design choices with the challenges outlined in §2.4.           that enables human-in-the-loop interaction.
+The functional block overview is shown in Figure 3.
+
+                                                                       350
+                                        User Questions                                                              Human: "I want to patch several supply scenarios onto a given topology using Topology
+                                                                                                                    Modification Language, then scale the demand by 1.5 and 0.8, run NAPT for both scenarios,
+                                                                                                                    and finally generate a comparison report."
+
+Dispatching                                      Entry                                Confucius
+  Analect
+                                                                                                                    Base Topology                                  Desired Topology
+Applications                                                                                                                                                         Modifications
+
+                FBNet           CLI       Drainer       Capacity         TML               ...
+                 ODS        Generator   CLI Helper      Delivery      Generator
+                Helper                                                                           Validation
+                                                                                                 Simulators
+                                                                                                                    Patched Topology  Topology Modifier            Patched Topology
+                                                                                                 Verification
+ Network        Time Series            Topology         Network Data             ...
+Tool DSLs           Data                 Graph               Model                                Dry Runs
+                                                                                                     State
+Primitives      Translator   Selector            Evaluator        Ensemble            ...                           Scale demand by 1.5x                                                    Scale demand by 0.8x
+                                                                                                 Validators                                                                                    Scaled Topology
+   Basic        Parser       Tracer                 IO            Retriever           ...              ...            Scaled Topology
+Operators                                                                                                                                      Topology Optimizer  Topology Optimizer
+
+Programming                                      Analect                                                            Failure Analysis                               Cost Analysis
+Abstract Class
+
+External        MetaGen         FAISS   Embedding           LangChain            NLTK                                                 Report Visualization
+Systems                      Laser KNN  (InstructOR)
+
+                        Figure 4: Programming Framework.                                                                             Figure 5: Planning DAG Illustration.
+
+   Confucius Primitives: These are specialized Analects that imple-                                                 devices and workflows) written in various programming languages
+ment one particular action. They can be applied across various use                                                  or as binaries. This approach is widely adopted [34].
+cases. The Analect is the abstract class of all primitives. One exam-
+ple is the Translator primitive, which converts natural language                                                    4.1.2 Leverage Workflows for LLM Planning: We design a prompt
+inputs into structured outputs, such as translating a user's query                                                  engineering method to teach LLMs workflows.
+from English to a command line. Users focus on writing examples
+without worrying about formatting inputs and parsing results. The                                                      DAG Representation: We represent the planning logic of net-
+Translator also facilitates the translation of commands, queries, and                                               work tasks as a directed acyclic graph (DAG), implemented using
+configurations from one language to another.                                                                        a Python-based DSL. Each node in the DAG represents a subtask,
+                                                                                                                    which is the same as a building block. The output of each node
+   Tooling DSLs: Confucius supports three DSLs commonly used                                                        is parsed by the LLM and used as input for subsequent nodes. In-
+in network management applications, which will be discussed in                                                      dependent subtasks can be executed in parallel, and the runtime
+more detail later in §4.2. This layer can be extended to accommodate                                                environment automatically determines the optimal execution plan
+additional DSLs as new use cases are onboarded.                                                                     based on input/output dependencies. Figure 5 illustrates an example
+                                                                                                                    DAG for capacity what-if analysis. A user-defined scenario, which
+   Applications: Analogous to SDN Apps, different teams have de-                                                    involves modifying network topology, scaling demand, and eval-
+veloped various LLM-based network management applications to                                                        uating outcomes under multiple conditions, is broken down into
+address specific domains. For example, a data center design engineer                                                discrete, composable subtasks. Each operation is encapsulated as a
+creates an app to design new AI data center networks.                                                               node in a DAG to enable modular execution and clear data flow.
+
+   External Systems: Confucius leverages several external systems                                                      Suggesting Existing Workflows: In our production environment,
+to enhance its capabilities, including LangChain [13], MetaGen                                                      we face challenges with workflow and BB discovery. With hundreds
+API [23] for AI model access, FAISS [21] for efficient similarity                                                   of workflows and thousands of BBs, it is difficult for engineers to
+search, Instructor [45] for embedding, and NLTK [10] for natural                                                    identify the right ones for specific tasks. To address this, we have
+language processing.                                                                                                developed a RAG-based approach to efficiently search and recom-
+                                                                                                                    mend workflows and BBs. Figure 16 shows the design. The system
+4 Confucius' Design                                                                                                 architecture consists of two main components: the Indexer and the
+                                                                                                                    Retriever. The Indexer utilizes LLMs to analyze each workflow and
+This section dives into design details from four perspectives: plan-                                                BB, extracting key information to compute semantic embeddings,
+ning, tools, memory and validation.                                                                                 which are then stored in a database. The Retriever operates in two
+                                                                                                                    stages: a coarse-grained similarity search to select around 10 candi-
+4.1 Planning Phase                                                                                                  date workflows/BBs, followed by a fine-grained selection to refine
+                                                                                                                    the options to fewer than three.
+We now present the planning methodology and primitives.
+                                                                                                                    4.1.3 Confucius Primitives for Planning:
+4.1.1 Network Workflows: Historically, companies like Meta have                                                        Ensemble calls multiple LLMs in parallel on a single task and
+relied on MOPs (step-by-step procedures in natural languages) [14,
+15] for network management tasks. However, their ambiguity and                                                      combines their results into a single output. This maintains the orig-
+loose documentation made execution challenging. To address this,                                                    inal string-to-string interface, allowing it to replace standard LLM
+Meta developed a workflow system [51] that codifies and breaks                                                      calls seamlessly. Figure 15 shows an example of its programming
+down MOPs into smaller, modular building blocks (BBs), facilitating                                                 construct. To activate Ensemble, users provide a list of LLMParams
+better modularity and code reuse. BBs are flexible scripts or con-                                                  to supported APIs. Our system supports four composition modes:
+figlets (modular "configuration snippets" designed for reuse across                                                 1) First-mode selects the fastest agent's result; 2) Merge-mode com-
+                                                                                                                    bines all agents' results for human review; 3) Filter-with-Validation
+
+                                                                                                               351
+class Collector(LLMAnalect[CollectorInput, Output]):     class CollectorTask(BaseModel):                                                                    tm.add(
+  prompt: ChatPromptTemplate                                                                                                                                              what="l3_nodes",
+  validator: Callable[[Output], Output]                  instruction: str                     # system prompt                                                               add="""
+  output_parser: OutputParser                                                                                                                                                        name="<name>",
+                                                         description: str                 # description of task                                                                      l1_node_name="<l1_node_name>",
+  def get_task(cls) -> CollectorTask:                                                                                                                                                is_hose_entity=True,
+     ...                                                 examples: List[CollectorExample]                                              "I want to add a                              lat=<lat>,                                            TML
+                                                                                                                                       new hose L3                                   lon=<lon>,
+  async def impl(self, inp: CollectorInput,              class CollectorExample(BaseModel):                                            node."                                        node_role=NodeRole.DC,
+             context: AnalectRunContext)                   user_input: str                                                                                                           ...
+                                                           assistant_response: List[Union[CollectorThinking, CollectorArtifact]]       "Calculate the                                """
+          -> CollectorOutput:                                                                                                          average CPU
+    ...                                                  class CollectorThinking(BaseModel):                                           utilization for                )
+                                                                                                                                       asw01.mia1 over
+         await self.invoke_llm(context, prompt, inputs)  content: str      # thought process of the collector                          the last 10          "key": {
+                                                                                                                                       minutes, then add           "values": ["FBNet:device.cpu_util"]
+                                                         class CollectorArtifact(BaseModel):                                           5, and finally take                                                                                 ODS
+                                                                                                                                       the P95."            },
+                                                         content: str      # expected response to user_input                                                "query": {
+                                                                                                                                       "Create a BGP
+                                                                                                                                       session with                "time_range": "start = -600, end = 0",
+                                                                                                                                       AT&T using peer             "reduction": ["percentile(95)"],
+                                                                                                                                       IP 10.0.0.1,                "transformation": ["avg(10m)", "formula(+ $1 5)"],
+                                                                                                                                       reachable via
+                                                                                                                                       interface eth0/1               ...
+                                                                                                                                       on Switch 1."        },
+                                                                                                                                                            "entity": {
+
+                                                                                                                                                                   "values": ["fbnet_device(DEVICE_NAME=asw01.mia1)"]
+                                                                                                                                                            }
+
+Figure 6: Collector implementation.
+
+                                                                                                                                                            NetworkDeviceV4Prefix                                      NetworkSwitch
+                                                                                                                                                            id = ·
+filters out erroneous results using a validation framework; and 4)                                                                                          prefix = 10.0.0.1/24              BgpPeer              ipv4 = ·                Robotron
+Return-all returns all answers as a set. Ensemble also accepts cus-                                                                                                                                                ipv6 = ·
+tom composition functions, enabling flexible strategies for ensuring                                                                                        NetworkDeviceV6Prefix  id = ·                          mgmt_ipv4 = ·
+reliable results from potentially unreliable building blocks.                                                                                                              ...     name = ·                        mgmt_ipv6 = ·
+                                                                                                                                                                                   as_no = ·                       desired_interfaces = ·
+   Orchestrator is a novel AI framework that enables LLMs to                                                                                                       BgpV4Session
+autonomously create workflows by calling building blocks in a                                                                                               bgp_peer = ·           Interface
+step-by-step manner, similar to [42]. This approach involves pro-                                                                                           desired_interface = ·
+viding detailed examples and instructions within the prompt, which                                                                                                                 name = eth0/1
+inform the LLM about which building blocks to utilize and when.                                                                                                                    interfaceaddressv4prefixes = ·
+The Orchestrator strikes a careful balance between autonomous                                                                                                                      interfaceaddressv6prefixes = ·
+operation and controlled execution; this allows us to fully harness
+the enhanced reasoning and planning abilities of modern LLMs,                                                                                               Figure 7: Examples of Three DSLs.
+while maintaining the reliability demanded by our applications.
+                                                                                                                                       the user to provide few-shot CollectorExample objects. A Collec-
+4.2 Tools: Network Management Abstraction                                                                                              torExample contains an example of a user input, paired with the
+                                                                                                                                       correct response encapsulated in CollectorArtifact, as well a Collec-
+To integrate with existing network management tools, we have to                                                                        torThinking object that contains the step-by-step logic to arrive at
+translate natural language into structural data (DSLs) that these                                                                      the answer. An example of the concrete objects created based on
+tools can process.                                                                                                                     these classes is provided in Figure 18.
+
+4.2.1 Confucius Primitives for Tools. To facilitate translation, Con-                                                                  4.2.2 Foundational Network Management DSLs. While the Trans-
+fucius introduces three primitives that systematically define the                                                                      lator primitive is used to convert natural language into structured
+translation logic and collect additional information needed to com-                                                                    data, it remains necessary to determine which structured data for-
+plete the translation.                                                                                                                 mat to translate into. Existing network tools rely on a variety of
+                                                                                                                                       structured data formats. Based on our production experience, we
+   Translator converts natural language into structured output                                                                         have identified three widely used DSL classes in network manage-
+(e.g., command lines or configurations), allowing users to focus on                                                                    ment. Supporting these three DSLs enables easier onboarding of a
+writing examples without worrying about formatting and parsing.                                                                        large number of tools.
+It can handle multiple languages and translate between different
+CLI commands, queries, and vendor-specific configurations.                                                                                Network Graph. The network topology graph is a fundamental
+                                                                                                                                       element in various applications, such as capacity planning, risk
+   Selector uses customizable logic (e.g., language models or simi-                                                                    analysis, routing, and traffic engineering. We represent the topology
+larity search methods) to select a subset of relevant options based                                                                    using a Thrift-defined graph, which includes regions, layer-1 nodes,
+on the user's query. It is widely used to select from a large dataset                                                                  layer-3 nodes, layer-1 optical edges, layer-3 IP edges, and flows.
+or database. The rationale behind using a Selector is that while                                                                       One insight is that the naming conventions of nodes are crucial
+LLMs can often narrow down to a subset of structured data, they                                                                        for understanding the topology. For example, regions are typically
+require additional information to generate precise outputs.                                                                            named after airport codes (e.g., ATN), while L1 nodes represent
+                                                                                                                                       groups of layer-1 devices within regions, often named by combining
+   Collector gathers and processes data from various sources, in-                                                                      the region's code with a digit (ATN1). These naming conventions
+cluding the user, to clarify intent and identify relevant entities. This                                                               provide valuable information about the topology's properties and
+primitive is designed based on the observation that natural lan-                                                                       roles. It exemplifies the type of specific domain knowledge that
+guage often contains ambiguity. It can also ask follow-up questions                                                                    we explicitly embed into the LLM prompt, so that the LLMs can
+to refine the user's instructions. By mitigating ambiguity in natu-                                                                    recognize and interpret these patterns in the DSL. We use a DSL
+ral language, the Collector improves performance on downstream                                                                         called TML (Topology Modification Language), a Python-based
+tasks. Due to limited space, we only discuss the details of Collector,                                                                 language, to facilitate modifications to the graph. This DSL enables
+which are shown in Figure 6. The user instantiates the Collector                                                                       systematic updates, transformations, and selections of topology
+class by defining a CollectorTask that is specific to their use case. In                                                               objects. Figure 7(a) shows one such example.
+addition to providing direct instruction, the CollectorTask allows
+                                                                                                                                          Time Series Network Data. Time series network data is a fun-
+                                                                                                                                       damental construct in network management, with applications
+                                                                                                                                       ranging from traffic analysis and network health monitoring to
+
+                                                                                                                                  352
+anomaly detection. At Meta, time series data is stored in a key-            User  Collector  Translator         Entity   Translator     Entity   ODS
+value store known as ODS (Operations Data Store) [41]. The basic             I/O                                Intent   Translator      Key    Query
+unit of data is an entity, which can represent any object under mea-                                                     Translator
+surement, such as interface loss or CPU utilization. The data for           Human: What is the average       Key Intent  Translator  Transform
+each entity consists of a series of <time, value> snapshots, as shown       CPU utilization of ToR switches              Translator  Reduction
+in Figure 7(b). For LLMs to become familiar with time series data,          in data center X?                Transform
+we embed the prompts with specific domain knowledge. In other                                                   Intent                  Time
+words, we explicitly instruct the LLMs how to handle this type of           AI: Do you want any                                        Range
+data; this includes methods for aggregating time series data, such          transformations?                 Reduction
+as calculating the average or 90th percentile, as well as conventions                                           Intent
+for generating mathematical formulas to manipulate this data.                                                   Time
+                                                                                                               Range
+   Network Data Model. It is common practice to store network                                                   Intent
+management data in a structured model [38, 46]. Modern produc-
+tion networks typically maintain their source-of-truth data in a            Figure 8: The composition of Analects for an ODS use case.
+management database and provide an Object-Relational Mapping
+(ORM) layer on top for easier access. At Meta, the Robotron data               in ODS translation, we can create a counterexample about not
+model [46] is a fundamental component of nearly all management                 including any switches in a region named "prn2".
+tools. Figure 7(c) illustrates an example of how to translate the in-       · Tool calling: We provide the model with access to APIs, CLIs,
+tent of creating a BGP session to a set of network objects modeled.            libraries, and databases to enable agentic planning. In ODS, we
+An interface is composed of multiple components, each linking to               directly invoke the ODS Query API and, if necessary, include the
+other objects in a relational database, such as IP addresses, BGP              returned messages along with the original query in subsequent
+sessions, and neighboring ports.                                               iterations to allow LLMs to perform self-correction.
+                                                                            · Reason and act: It uses an orchestrator to let LLMs plan them-
+   We find that Robotron is a powerful DSL that connects LLMs with             selves for complex tasks in network investigations. By allowing
+a variety of existing network management tools. It captures high-              the model to plan its own actions, we can help it generate more
+level network design intent as relational data objects, which are              coherent and effective translations. This approach can be par-
+then translated into low-level, vendor-specific device configurations          ticularly effective in cases where the model needs to perform
+and network operations. LLMs further elevate this abstraction by               multiple tasks or respond to changing circumstances. As elabo-
+mapping users' natural language intents into Robotron, which in                rated below, the ODS query is decomposed into 5 subtasks.
+turn maps to the low-level configurations. The main challenge               · Code as reasoning: We let LLMs write code to answer data re-
+in this translation lies in the vast volume of models involved. To             trieval questions. For example, we do not ask LLMs to modify the
+address this, we have developed a Retrieval-Augmented Generation               topology struct directly; instead, we have LLMs write TML code,
+(RAG) approach, which is described in more detail later.                       which goes through the compiler and TML engine to modify the
+                                                                               topology. Primarily, this approach allows the generated code to
+   In summary, we identify three common DSLs frequently used                   be easily validated by a compiler or a human. Additionally, a
+across many management tasks, illustrate them with concrete trans-             human can modify the code or merge multiple code snippets,
+lations from natural language in Figure 7, and highlight the as-               facilitating more manageable and tractable task breakdowns.
+sociated challenges. We next dive into techniques to make these
+translations both accurate and efficient.                                   ODS Prompting Example: Figure 8 illustrates the use of the Trans-
+                                                                            lator to convert user queries into sub-questions.
+4.2.3 Prompt Engineering Techniques. One effective way to im-               · Key: narrowing down relevant keys using the Selector
+prove translation accuracy is to design appropriate prompt engi-            · Entity: identifying specific entities involved in the query
+neering techniques. We carefully select the optimal combination             · Reduction: providing built-in prompts for common reduction
+of prompts tailored to each DSL translation task. Below, we sum-
+marize these techniques and relate them to their respective DSL                operators (e.g. groupby, top, avg)
+translation tasks.                                                          · Time Range: converting time range into start and end values
+                                                                            · Transformation: applying complex functions like smoothing and
+· Zero-shot chain of thought asks the model to think before
+   translating. For example, in ODS (time series DSL), we use a                calculating differences between samples
+   "Thought" field in the request to teach the LLM to leverage regex
+   matching when it encounters a string like "rsw1aa.*prn1". This              As shown in Figure 8, the ODS prompting example uses the
+   forces the model to first consider the networking context of the         Translator to convert user queries into sub-questions, including
+   input text, rather than directly generating a literal translation.       narrowing down relevant keys with the Selector, identifying spe-
+                                                                            cific entities in the query, providing built-in prompts for common
+· Few-shot chain of thought provides the model with relevant                reduction operators (e.g. groupby, top, avg), converting time range
+   examples for translations. For instance, we give an example to           descriptions into start and end values, and applying complex func-
+   teach LLM to understand the "entity" field in the ODS example.           tions like smoothing or computing differences between samples.
+
+· Contrastive chain of thought involves giving the model wrong              4.2.4 Built-in Validation. Network use cases have stringent safety
+   examples and telling them that they were incorrect. For example,         requirements, making it essential for Confucius to incorporate a
+                                                                            variety of validations. We emphasize built-in validations, which
+
+                                                                       353
+reduce the manual effort needed for human verification while en-             each model to the LLM one at a time. This enables efficient simi-
+abling error messages to be automatically fed back to LLMs for auto-         larity searches during query processing, effectively managing the
+correction. Specifically, Confucius employs three built-in methods           scale and complexity of our database. When a user submits a query,
+to validate the correctness of generated DSLs.                               it is broken down into sub-queries for more efficient and accurate
+· Built-in Parser: For some specialized DSLs (e.g., TML), we use a           processing. Each sub-query is compared against the embeddings in
+                                                                             our store using a similarity search algorithm, which identifies the
+   custom parser to check the syntax. If the parser fails, it provides       most similar embeddings. The retrieved embeddings are then fed
+   a clear error message that is fed back to the LLM, allowing it to         back into the LLMs along with the user's original query. Figure 16
+   learn from its mistakes and adjust its next attempt. This iterative       shows an example. We apply different RAGs based on different use
+   process continues until the output parses successfully or the             cases below.
+   maximum number of allowed trials is reached.
+· External API: We rely on the API that consumes the DSLs to check           · Naive RAG: It builds a vector store for various data sources and
+   their correctness. For example, Robotron Model are validated                 performs similarity searches. Suitable for small datasets.
+   through both read and write operations. The database's ORM
+   layer detects errors during read operations, while a "dry run"            · Hybrid RAG: We use a two-stage filtering approach to retrieve
+   mode simulates write operations without committing changes                   relevant information: first fetch similarity search results and
+   to the database.                                                             rank them by relevance, then we apply additional filters such as
+· External Tools: We utilize separate validation systems to guar-               staleness, rating, and usage frequency. The pre-filtered results
+   antee operation safety. For instance, for TML-generated graphs,              are sent to an LLM for secondary filtering based on semantics.
+   we use a graph validator to check the topology against prede-                It is applied to Wiki, Workflow and Robotron Model.
+   fined invariants, such as full connectivity and minimum path
+   requirements. Detected errors are fed back to the LLMs.                   · Query Transformations: We use LLMs to refine user queries, gen-
+                                                                                erating more accurate and relevant search results. This involves
+4.3 Memory Management                                                           two steps: refining questions based on user input and employing
+                                                                                collector mode to gather additional context through conversa-
+Confucius uses memory management to maintain conversational                     tions with users. This approach is useful in cases where network
+continuity and enable contextual search. Confucius maintains both               tasks can be described in multiple ambiguous ways.
+short-term memory, which consists of conversational history within
+a single user session, and long-term memory, which includes exter-           4.3.3 Privacy. To prevent the sharing of sensitive information with
+nal domain knowledge that is relevant across different sessions for          third-party LLM models, we implement a preprocessing step that
+the same use case.                                                           anonymizes sensitive data. Users may inadvertently input PII data
+                                                                             when interacting with LLMs; examples include IP addresses from
+4.3.1 Short-Term Memory. Short-term memory stores the context                clients, device identifiers, names, emails, and user locations. We use
+for one user across different Analects. For instance, if a user asked        the Identifier Redaction Service, developed by a different team, to
+for the total egress of region A and then asked about region B,              identify and replace 40 types of sensitive information with fictitious
+the context from the first question should be efficiently reused             placeholders. After processing the content and receiving a response
+for the second query. To support context sharing across Analects,            from the LLM, we reverse the anonymization process, replacing
+we develop a dedicated memory manager component that uses                    the placeholders with the original sensitive data. This ensures the
+a tree of messages as the abstraction for memory. Each Analect               integrity and confidentiality of user information in all interactions.
+has its own memory manager, which maintains a private list of
+messages and pointers to parent memories, session memories, and              4.4 Benchmarking Framework
+other relevant contexts. This hierarchical structure allows Analects
+to access and manage messages from their parents, grandparents,              We created Confucius to enable network engineers to rapidly on-
+entries, and sessions, providing a comprehensive understanding               board and prototype different applications across a variety of net-
+of the conversation history. Analects can independently control              work use cases. However, optimizing a Confucius application can
+access to their messages, ensuring the integrity and isolation of            be a complex task, and users often want to consider performance
+message histories. The system also efficiently manages concurrent            between different models and prompting techniques on a specific
+child Analect calls by grouping and handling messages atomically             dataset. To streamline this process, we developed a benchmarking
+at the parent level, enhancing the system's efficiency and accuracy.         framework with three capabilities: 1) testing with data provided by
+                                                                             developers for their specific use case, 2) evaluating the impact of
+4.3.2 RAG. We find that many network management use cases                    different prompting techniques and base models, and 3) optimizing
+require external indexing to improve the efficiency of LLM queries.          end-to-end performance and tuning trade-offs between accuracy
+For instance, with hundreds of thousands of network data models,             and computational cost. This standardizes the scoring process, elim-
+many sharing similarities, it is challenging to differentiate between        inates the need for manual ad-hoc testing, and ensures consistency
+them without domain-specific knowledge. To address this com-                 across evaluations.
+plexity, we developed a novel RAG approach specifically designed
+for network data models. Our method involves pre-computing an                   Workflow. The evaluation pipeline consists of three key compo-
+embedding store by grouping similar models together and feeding              nents: a user-provided dataset, a Confucius application, and a set
+                                                                             of evaluation criteria. The evaluator first reads the dataset of input-
+                                                                             output pairs and invokes the application on these inputs. Then it
+                                                                             collects the actual outputs and scores them against the expected
+
+                                                                        354
+                 I want to do a set of capacity planning experiments  Confucius  I need additional information to run the first node       Confucius Human            Scribe read operations are experiencing long tail                                                                P99 RTT Heatmap Between Datacenters (ms)
+   Human with several supply and demand scenarios, then                          "tml_topology_patch_supply":                                                         latency. Investigate whether this issue is caused
+                                                                                                                                                                      by a network problem. If a network issue is
+                 run optimizer NAPT                                                 - Input topology name                                                             identified, determine which region pair is affected.
+                                                                                    - Input topology time frame
+              Please select which tools you want to use.                                                                                                              Thinking...                                                    Tool: Python Compiler
+                                                                                 For the inputTopology, you can specify a single                                                                                                                 Source DC
+   Confucius  Search...                                                          value, a range or list of values, a dependent                                           I will write a SQL query for the rtt_p99 column
+                                                                                 output, or leave empty and fill out later.                                              and calculate average RTT between DC pairs.
+
+              tml_topology_patcher                                    Human      Topology name is "netgram_cpor_                                                      Invoke Tool Use: Scuba Engine
+              napt_optimizer                                                     napt_2024_12_31" and time phase is 2024H2
+              dc_risk_analysis_report_generator                                                                                                                          SELECT
+                                                                                                     ...                                                                        (SUBSTR(Sdc, 1, 3)) AS `src_dc`,
+                                     Confirm                                                                                                                                    (SUBSTR(Ddc, 1, 3)) AS `dst_dc`,
+                                                                      Confucius  I need additional information to run the second           Confucius                            AVG(`rtt_p99`, `weight`) / 1000 AS
+                                                                                 node "tml_topology_patch_demand":
+   Human Yes                                                                                                                                                             `rtt_p99_avg_ms` FROM `network_latency`                                                                                 Destination DC
+                                                                                    - Input topology name                                                                WHERE
+                                                                                    - Input topology time frame
+                                                                                                                                                                                `time` BETWEEN (NOW() - 86400) AND
+                                                                                 For the inputTopology, you can specify a single                                         NOW()
+                                                                                 value, a range or list of values, a dependent
+                                                                                 output, or leave empty and fill out later.                                                     AND ((`Ssiterole`) IN ('DC'))
+                                                                                                                                                                                AND ((`Dsiterole`) IN ('DC'))
+                                                                                                                                                                         GROUP BY `src_dc`,`dst_dc`
+
+              From your input, I've identified the following tasks               The input to the second node depends on the               Tool:                           src_dc dst_dc rtt_p99_avg_ms                              Tool:                                             Thinking...
+              and matched them to a suitable workload:                                                                                        Confucius Scuba Engine                                                                    Confucius Python Compiler Confucius Confucius     Let's analyze the key patterns from the heatmap and find the
+                                                                      Human      output of the first node.                                                                                                                                                                                datacenter pairs with highest and lowest RTTs for Scribe reads.
+                                                                                                                                                                      0    DC2  DC2             0.542145
+                    1. Patch several                                                                 ...                                                                                       24.811065                                                                               Invoke Tool Use: Python Compiler
+   Confucius supply scenarios         tml_topology_                                                                                                                   1    DC2  DC3                                                                                                      top_5_highest = df.nlargest(5, 'rtt_p99_avg_ms')[[src_dc,
+                                      patch_supply                                                                                                                                                       ...                                                                             dst_dc, 'rtt_p99_avg_ms']]
+                                                                                                                                                                      ...  ...  ...             0.146312                                                                                 print(top_5_highest.to_string(index=False))
+
+                                                                                                                                                                      1153 DC4  DC4
+
+              2. Using the output,                                    Confucius  What would you like to do next?                                                      [1154 rows x 3 columns]
+                 patch several                                                        Generate Code Snippet
+                 demand scenarios     tml_topology_p                                                                                                                  Thinking...
+                                       atch_demand
+                                                                                                                                                                         Let's visualize RTT patterns between DCs
+              3. Run napt                                                             Launch Experiment Directly From Confucius                                          using a heatmap. I'll write a Python script.
+                                                                                                             Confirm
+              Please edit and         napt_planning                                                                                                                   Invoke Tool Use: Python Compiler                                                                                 src_dc    dst_dc    rtt_p99_avg_ms
+              confirm the                                                        Ok, here is a link to the code.                                                      InmvaotkreixT_odofl U= sdef:.Spicvuobta(iEndnegxin='esrc_dc',                                                         DC1       DC5         168.057024
+              following DAG.                                                                                                                                                                                                                                                                DC1       DC6         167.457915
+                                                                                                                                                                         columns='dst_dc', values='rtt_p99_avg_ms')                                                                         DC1       DC7         166.755838
+                                                                                                                                                                                                                                                                                            DC7       DC1         166.654504
+                                                                                                                                                                                                                                                                                            DC1       DC8         162.874577
+
+   Human Looks good                                                                                                                        Confucius                     fig = go.Figure(data=go.Heatmap(
+                                                                                                                                                                              z=matrix_df.values,
+              Figure 9: Capacity What-Ifs Session Illustration.                                                                                                               x=matrix_df.columns,                                                                                     We observe these highest latency pairs: (1) DC1  DC5: ~168ms,
+                                                                                                                                                                              y=matrix_df.index,                                                                                       (2) DC1  DC6: ~167ms, (3) DC1  DC7: ~167ms
+                                                                                                                                                                              colorbar=dict(title='RTT (ms)'),
+                                                                                                                                                                                                                                                                                       DC1 appears in most of the highest latency connections. Most
+                                                                                                                                                                         ))                                                                                                            high-latency pairs show RTTs ~165ms.
+                                                                                                                                                                         fig.show()
+
+n
+
+   ones using a predefined criteria. Users can visualize the scores to                                                                                 Figure 10: Fault Diagnosis Session Illustration
+   compare performance across different evaluations.
+                                                                                                                                           leading to inefficiency. Third, tracking and recording experiment re-
+      Evaluation Criteria. We provide three built-in evaluation criteria:                                                                  sults was cumbersome. Lastly, there was low interoperability across
+   1) Exact Match: for deterministic and numerical outputs, such as                                                                        workloads. For example, a planner might know how to generate
+   verifying device counts in a cluster; 2) Regex Match: suitable for set                                                                  a demand forecast but struggle to integrate it with NAPT, adding
+   or string outputs to verify specific keywords; 3) LLM-as-a-Judge:                                                                       friction to the workflow.
+   for complex outputs, it judges the closeness of the meanings. We
+   implement LLM-as-a-Judge by invoking the LLM with the actual                                                                               To mitigate these difficulties, we build a what-if analysis on Con-
+   and expected outputs and prompting the LLM to assign a score                                                                            fucius, with a planning agent to create the DAG workflow, a tool
+   based on accuracy. This method enables complex reasoning and                                                                            agent to translate topology changes into TML, and short-term mem-
+   provides holistic scoring. Our evaluation framework has been suc-                                                                       ory to record the results of each run. This is used by novice planners
+   cessfully implemented in production, significantly reducing time                                                                        to describe and execute experiments. Figure 9 shows an example
+   spent on prompt engineering and identifying regressions. It is used                                                                     workflow. First, the user describes an intent: generate TML to patch
+   to generate the evaluations in §7.                                                                                                      a few supply scenarios, then generate TML to patch a few demand
+                                                                                                                                           scenarios, and finally run NAPT. This process involves several key
+      Note that the benchmarking framework is an integral part of a                                                                        steps, beginning with DAG creation, where Confucius assists in
+   production system, much like how a testing framework is indis-                                                                          workload selection based on user intent. Users select from a list
+   pensable to the software development process. Our benchmarking                                                                          of real-time registered workloads using Selector, after which the
+   framework adopts concepts from software testing while leveraging                                                                        planning agent creates a corresponding DAG. For each node, the
+   LLMs extensively to handle fuzzy match cases.                                                                                           system provides input preselection, input/output passing using nat-
+                                                                                                                                           ural language, and visualization of the node information collection
+   5 Application Case Study                                                                                                                process, along with input-specific tips to ensure interoperability
+                                                                                                                                           between nodes. Finally, Confucius uses Translator to generate a
+   In this section, we share two applications for capacity planning and                                                                    TML code snippet. At every step, Confucius ensures flexibility and
+   troubleshooting.                                                                                                                        accuracy by using Collector to support human intervention.
+
+   5.1 Capacity What-Ifs                                                                                                                   5.2 Fault Diagnosis
+
+   Meta has developed various tools to facilitate analysis for differ-                                                                     Network troubleshooting has traditionally been challenging, even
+   ent topology planning scenarios. However, running experiments                                                                           for experienced engineers. This section presents an example using
+   is still challenging. Before Confucius, generating an experiment                                                                        Code Assist, an AI coding assistant that utilizes the Orchestrator
+   plan was complex and involved several steps: identifying input                                                                          for advanced planning. Figure 10 illustrates a troubleshooting work-
+   workloads, understanding input/output structures, and scripting                                                                         flow. The user requests a diagnosis of network latency issues related
+   sequential tool calls. Users faced multiple challenges. First, exper-                                                                   to read operations in the Scribe pub/sub system [26]. Confucius
+   iments could quickly become complex, with multiple workloads                                                                            Code Assist then performs a series of interleaved thinking and tool-
+   and scenarios. Some workflows required running the planning soft-                                                                       use steps, such as querying Scuba [5] logs with SQL and writing
+   ware NAPT [8] multiple times, each taking hours. Second, many                                                                           Python code for data analysis and visualization. It even generates
+   tasks were repetitive. Capacity planners often had to clone and
+   initiate workflows repeatedly to modify a single input parameter,
+
+                                                                                                                                      355
+                                                                                                                                                                                                                                         1
+
+a heatmap of RTT data to provide insights, demonstrating its ad-             1LLM-as-a-Judge Score (Mean)0.87                                                                               1    0.93  0.94       0.98
+vanced multimodal capabilities. Ultimately, Confucius identifies                                                                                               LLM-as-a-Judge Score (Mean)
+that the highest-latency region pairs involve the "DC1" datacenter                0.75  0.77
+and presents these findings to the user.
+                                                                             0.5                                                                                                            0.5
+   Many troubleshooting scenarios can be resolved by querying and
+analyzing common monitoring data and runtime metrics. These                  0                                                                                                              0
+data can be filtered and aggregated in various ways, leading to work-
+flows tailored to specific scenarios. Instead of predefined workflows,            llama3.1-70b llama3.1-70b multi-model-                                                                         llama3.1-70b llama3.1-70b multi-model-
+users provide a list of tool-use functions to the Confucius Orches-                     (T=0.5)x3  ensemble                                                                                            (T=0.5)x3  ensemble
+trator, such as executing Python or SQL code on specific databases.
+These tools are represented as customizable agents. Leveraging ad-           Figure 11: Single-model vs. ensemble performance for ODS
+vanced models like Claude 3.7 Sonnet, the Confucius Orchestrator             reductions (left) and transformations (right).
+acts as an intelligent supervisor, performing "thinking" steps to de-
+termine which agent tools to call and what arguments to pass. This           Metrics. To evaluate Netgram, we use "regex match," which awards
+architecture offers flexibility, allowing the Orchestrator to decide         a score of 1 if the LLM output contains the name of the ground-truth
+the next step based on conversation history and available tools,             Netgram block as well as the correct URL link to the block's source
+rather than following a fixed workflow.                                      code, and a score of 0.5 if only one of these is correctly identified.
+                                                                             For all other datasets, we use LLM-as-a-Judge to give a holistic
+6 Implementation                                                             score between 0 and 1.
+                                                                             Models. Across our experiments, we leverage several general-
+Confucius is developed in Python, allowing it to utilize a wide range        purpose foundation models: Llama 3.1 and 3.3, Claude 3.5 Sonnet,
+of reusable external systems and internal Python-based services.             Gemini 1.5 Pro and 2.0 Flash, and GPT-4o. We also use an internal
+Its engineering components are also shown in Figure 4. The core              model fine-tuned on domain-specific data, including code data, wiki
+abstraction class, the Analect, serves as a lightweight wrapper for          documents, and internal Q&A.
+LangChain's Runnable. Each Analect is strongly typed and requires            Baselines. In §7.2, we evaluate the use of Ensemble against single-
+a Pydantic Input, Pydantic Output, and an impl method. Pydantic [2]          model generation using Llama 3.1. In §7.3, we compare Confucius
+is a Python schema language that offers several essential features           with the fine-tuned model on several DSL translation tasks, illustrat-
+used throughout Confucius, such as type validation, serialization,           ing the advantage of having domain knowledge carefully embedded
+generics, and inheritance. Using the base class Analect, we define all       into prompts, as opposed to having this domain knowledge in a
+other primitives mentioned before, including Translator, Selector,           model's training data. In §7.4, we evaluate Confucius on several use
+Collector, Ensemble, and Orchestrator. For developer convenience,            cases that rely on large amounts of knowledge specific to these use
+we also define a specialized Analect called an Entry. The Entry              cases. Similarly to the DSL evaluations, we compare Confucius with
+ensures that both input and output types are strings, encapsulated           the fine-tuned model to illustrate the advantage of retrieving do-
+within EntryInput and EntryOutput objects, respectively. Short-              main knowledge via RAG, as opposed to having domain knowledge
+term memory is implemented using a built-in AnalectRunContext, a             embedded in a model's training data. We also show the effectiveness
+custom Pydantic object that stores relevant metadata and contex-             of Hybrid RAG and Query Transformations as described in §4.3.2.
+tual data, such as session ID, conversation history, and previously
+generated artifacts. Optionally, the AnalectRunContext can specify           7.2 Ensemble for Multi-Agent Reasoning
+a memory manager for long-term memory, which is implemented
+through access to a MySQL-based database system. Figure 17 in the            Ensemble is a key primitive for improving planning accuracy. We
+Appendix illustrates the use of Pydantic and AnalectRunContext               evaluate its impact on accuracy for translating ODS reductions
+to implement an Analect for ODS translation.                                 and transformations, with the following setups: (1) single-model
+                                                                             generation using Llama 3.1, (2) homogeneous ensemble, which
+7 Evaluation                                                                 combines three Llama 3.1 models with temperature 0.5, and (3)
+                                                                             heterogeneous ensemble, which combines a Llama 3.1, Claude 3.5
+We systematically evaluate Confucius on a range of network man-              Sonnet, and Gemini 2.0 Flash model. For the ensemble experiments,
+agement tasks. First, we show that ensemble-based self-consistency           we use Llama 3.1 to select the best answer based on Confucius'
+improves performance. Next, we demonstrate how Confucius can                 internal knowledge about the task.
+leverage different foundation models to perform DSL translation
+with higher accuracy than a fine-tuned baseline model. Finally, we              Figure 11 shows that all ensemble setups perform strictly better
+evaluate benefit of RAG.                                                     than the single-model setup for both datasets. We observe that the
+                                                                             best performance is achieved by multi-model ensemble, scoring 0.87
+7.1 Methodology                                                              on ODS reductions and 0.98 on transformations. Additionally, en-
+                                                                             sembling reduces variance in scores by aggregating inconsistencies
+Datasets. We curate synthetic datasets for the following use cases:          in the outputs of different agents. Figure 11 shows that multi-model
+TML, ODS transformations, ODS reductions, Robotron, Netgram,                 ensemble reduces the standard error from the baseline by 34% and
+and Wiki Q&A. Each datapoint consists of a natural language query            57.6% for ODS reductions and transformations, respectively.
+paired with its ground-truth answer. The size  of each dataset is
+indicated in Figures 12 and 13.
+
+                                                                        356
+                                                                                                                             1                                                                                                                       1                                                                                                                  1
+
+LLM-as-a-Judge Score (Mean)1                                                                                            1                                                                                                                       1        fine-tuned Confucius w/o CoT Confucius w/ CoT
+                                                                                                  LLM-as-a-Judge Score (Mean)
+                                                                                                                                                                                                        LLM-as-a-Judge Score (Mean)0.50.5       0.5
+
+     0                                                                                                          gpt-4o       0                                                                                                          gpt-4o       0                                                                                                          gpt-4o
+fine-tuned-nlloa-mcfa-3.1l-l7ac0mlabau-d3e.3-3-7.50-bscolnanuedte-v-32.5-sgoenmneint i-1g.e5m-pinroi-2.0-flash          fine-tuned-nlloa-mcfa-3.1l-l7ac0mlabau-d3e.3-3-7.50-bscolnanuedte-v-32.5-sgoenmneint i-1g.e5m-pinroi-2.0-flash          fine-tuned-nlloa-mcfa-3.1l-l7ac0mlabau-d3e.3-3-7.50-bscolnanuedte-v-32.5-sgoenmneint i-1g.e5m-pinroi-2.0-flash
+
+     (a) TML ( = 20)                                                                                                    (b) ODS Transformation ( = 91)                                                                                                   (c) ODS Reduction ( = 48)
+
+                                                                                                                        Figure 12: Evaluation results for DSL translation.
+
+7.3 DSL Translation                                                                                                                  Metric                                                                                                     4.16K    Metric                 Performance                                                                              What-if
+                                                                                                                                                                                                                                                2.63K                               Diagnosis                                                                           Planning
+Experimental Setup. We evaluate DSL translation for the struc-                                                                       Total users                                                                                                241.38K  Total users
+tured data types presented in §4.2: TML for topology graph, Robotron                                                                 Monthly active users                                                                                       31.62M   Total sessions                      121                                                                                605
+for data models, and ODS reductions/transformations for time se-                                                                     Total sessions                                                                                             64       Total time spent (hr)            1.86K                                                                              2.66K
+ries. We compare Confucius against the fine-tuned baseline to un-                                                                    Total messages                                                                                             20.54    Total messages                 835.58K                                                                           207.33K
+derscore the benefits of careful prompt engineering.                                                                                 Use cases onboarded                                                                                                 AI to human msg ratio            4.17M                                                                              2.36M
+Results and Analysis. For the Robotron use case, we evaluate                                                                         AI to human msg ratio
+Confucius with Llama 3.1 on its end-to-end performance, which                                                                                                                                                                                                                               2.46                                                                               7.65
+involves the use of Translator to extract and relate entities from
+the natural language query, as well as the use of retrieval to find                                                                                                                                                                             Table 2: Confucius Usage Statistics.
+the most relevant data models. Figure 13a shows that Confucius
+surpasses the performance of the fine-tuned baseline by 13%. This                                                                    7.4 RAG for Knowledge Retrieval
+underscores the effectiveness of not only its ability to translate nat-
+ural language into Robotron queries, but also its ability to identify                                                                Experimental Setup. We evaluate the use of RAG vs. the use of
+the correct data models via in-context retrieval.                                                                                    domain knowledge in fine-tuning data, as well as the advantages of
+                                                                                                                                     Hybrid RAG and Query Transformations, on 3 network use cases
+   For TML and ODS experiments, we evaluate Confucius across 7                                                                       at Meta: Robotron, Netgram, and Wiki Q&A.
+different foundation models, comparing performance with and with-
+out chain-of-thought (CoT) prompting. As demonstrated in Figure                                                                      · Robotron: Confucius retrieves from over 400 desired models via
+12, Confucius outperforms the baseline by up to 35% for TML, 22.4%                                                                      in-context learning. (See §7.3 for a discussion of this experiment.)
+for ODS transformation, and 23% for ODS reduction. We attribute
+these outcomes to the effectiveness of Confucius's domain-aware                                                                      · Netgram: Confucius retrieves from an embedding store with
+prompting, particularly its use of structured prompts and built-in                                                                      118.6K vectors and 1.24 GB memory footprint.
+validation to generate accurate, well-formatted responses. More-
+over, Confucius performs consistently across different foundation                                                                    · Wiki Q&A: Confucius retrieves from an embedding store of 3.3M
+models. Unlike a fine-tuned model that is constrained by its train-                                                                     vectors with 33.5 GB memory footprint.
+ing data, Confucius provides developers with greater flexibility to
+leverage new LLM models.                                                                                                             Results and Analysis. As shown in Figure 13, Confucius outper-
+                                                                                                                                     forms the fine-tuned baseline on all retrieval tasks. We evaluate
+   Figure 12 also shows that by incorporating CoT prompting, Con-                                                                    RAG for different values of , where  is the number of neighbors
+fucius further improves its performance across most foundation                                                                       retrieved by similarity search. When  > 5, we apply the Hybrid
+models, with a notable 7% increase in accuracy using Gemini 2.0                                                                      RAG technique to filter the top 5 most relevant responses from
+Flash on TML. There are a few cases in which the performance                                                                         the retrieved candidates. Our results show that Hybrid RAG im-
+suffers from the use of CoT; for example, when using GPT-4o for                                                                      proves performance by 3% when we increase  to 15 and  to 10
+ODS transformations, Confucius achieves a mean score of 0.959                                                                        for Netgram and Wiki Q&A, respectively. Nevertheless, while RAG
+without CoT and 0.932 with CoT. In these cases, we find that CoT                                                                     benefits from a larger initial pool of candidates, increasing  beyond
+sometimes encourages the model to overthink and generate overly                                                                      a certain point results in diminishing returns. For Wiki Q&A, to
+complex responses. To illustrate this, consider a request to "count                                                                  reduce noise when matching long documents, we apply the Query
+data points in the last 10 minutes." Whereas the correct ODS trans-                                                                  Transformation technique to extract key terms from the user query
+formation is "count(10m)", CoT prompting causes the model to                                                                         with an LLM before retrieval. Figure 13c shows that this technique
+include unnecessary terms seen in the prompt, resulting in "lat-                                                                     improves Confucius' performance from 0.73 to 0.77 at  = 10.
+est(10m), count(10m)." Nevertheless, CoT prompting still improves
+the accuracy across 92.4% of all translation datapoints, underscoring                                                                7.5 Adoption and Usage Statistics
+the value of intermediate reasoning steps in DSL translation.
+                                                                                                                                     We provide insights into Confucius' usage in real-world production.
+                                                                                                                                     Confucius has seen substantial growth and adoption over the past
+                                                                                                                                     year, with 4.16K total distinct users, 241.38K sessions, and 31.62M
+                                                                                                                                     messages (see Table 2). Since its initial launch, we have onboarded
+                                                                                                                                     over 60 use cases; notable applications include performance diag-
+                                                                                                                                     nosis and what-ifs for capacity planning, which have generated
+
+                                                                                                                                357
+      LLM-as-a-Judge Score (Mean)1               0.83               1                                                                                                                                                                          1
+                                                                                                        Regex Match Score (Mean)
+                0.7                                                                         0.77  0.8                                                                                                                                                              0.7    0.73  0.77
+                                                                                                                                                                                                                  LLM-as-a-Judge Score (Mean)
+          0.5                                                       0.5                                                                                                                                                                                      0.52
+                                                                                                                                                                                                                                               0.5
+
+                                                                          0.11
+
+            0                                                                                                                                                                                                                                  0
+                          fine-tuned-no-cf
+                                            cf-retrieval            0                                                                                                                                                                             fine-tuned-      cf-naive-rag cf-hybrid-rag cf-hybrid-rag-
+                                                                                                                                                                                                                                                     no-cf
+                                                                          fine-tuned-  cf-naive-rag (k=5) cf-hybrid-rag (k=15)                                                                                                                                     (k=5)  (k=10) query-transform
+                                                                             no-cf                                                                                                                                                                                              (k=10)
+
+                (a) Robotron ( = 12)                                      (b) Netgram ( = 226)                                                                                                                                                    (c) Wiki Q&A ( = 250)
+
+                                                                    Figure 13: Evaluation results for RAG.
+
+Apps            Primitives Used Foundational # Usage LoC Per Usage                          Troubleshooting
+                                                                                                  Monitoring
+                                            Analects Used per week        Saved Hours               Workflow
+
+ODS             Time Series                 Collector,    50        1600  0.25              Network Design
+                                                                                                       What-if
+                                            Translator,                                                    ODS
+                                                                                                                   0
+                                            Selector
+
+What-if         Time Series                 Collector,    20        3500  0.5
+
+                Graph                       Translator,
+
+                                            Selector
+
+Network Design  Graph                       Collector     50        1000  0.2                                                   5                                                                                                              10 15 20 25 30 35 40
+
+Workflow        Graph                       Collector,    30        800   0.3                                                                                                                                                                                      Hours
+
+                Data Model                  RAG
+
+Monitoring      Data Model Collector, RAG                 80        600   0.5                     Figure 14: Engineer-hours saved per week.
+
+Troubleshooting Time Series,                Collector,    100 6400        0.2
+
+                Graph                       Ensemble,
+
+                                            Orchestrator                                    to MetaMate, Confucius differs in its purposes, capabilities, and
+                                                                                            target audience:
+                Table 3: Applications summary.
+                                                                                            · Purpose: MetaMate is a general-purpose AI assistant, while Con-
+4.17M and 2.36M messages, respectively. The ease of development                                fucius is designed for specific use cases where MetaMate's results
+design has enabled such rapid growth in both onboarded use cases                               might be sub-optimal.
+as well as the developer community. We also observe a high ratio
+of AI-generated to human messages: 20.54 across all use cases, 2.46                         · Capabilities: MetaMate offers features like chat UI, command
+for performance diagnosis, and 7.65 for what-if planning. This sug-                            execution, and code completion, whereas Confucius relies on
+gests that relatively little human intervention is needed in most                              custom scripts executed in a secure environment.
+interactions, while the lower ratio for performance diagnosis re-
+flects the difficulty of troubleshooting tasks. Table 3 summarizes                          · Target Audience: MetaMate is suitable for general-purpose inter-
+the applications across different categories of network management                             nal data retrieval and assisting users across different platforms
+tasks, detailing the primitives, Analects, and lines of code (LoC)                             within Meta, whereas Confucius is tailored for users who need
+used. Finally, Figure 14 shows the total engineer-hours saved per                              to perform specific tasks that require custom scripts and a higher
+week for each application, as reported in survey data.                                         level of security in execution.
+
+8 Experiences                                                                               8.2 What Worked Well
+
+This section shares our production experiences of developing Con-                              Retrieval and Summarization for Networking Problems. We have
+fucius and onboarding applications.                                                         observed that many network applications share a common pattern:
+                                                                                            leveraging existing content to suggest similar items and generate
+8.1 Evolution of LLM-based network assistants                                               new ones with user modifications. Some examples include writing
+      at Meta                                                                               a new model based on existing models in the database, generating
+                                                                                            device configurations by adapting existing vendor/device configura-
+Initially, we tried to use MetaMate for network management tasks.                           tions, and creating customized workflows by combining steps from
+MetaMate is a general-purpose internal chatbot designed to increase                         multiple existing workflows. Confucius's embedding and retrieval
+productivity across product verticals and job functions. It aimed to                        method enables straightforward integration with RAG prompt en-
+help developers during code creation and knowledge acquisition,                             gineering, often yielding satisfactory results.
+synthesis, and understanding from both code and non-code sources.
+To achieve these goals, we fine-tuned AI models with Meta's in-                                Integration with Existing Management Tools for Quick Adoption.
+ternal context, including our code base in addition to technical                            An initial challenge was attracting consistent users to the app. Users
+and non-technical knowledge. We also leveraged publicly available                           would try it out as a novelty but struggle to incorporate it into their
+knowledge to enhance the model's capabilities. Although MetaMate                            routine. We found that integration with existing automation sys-
+showed promise, we encountered several challenges that led us to                            tems and tools is key to broader adoption. These systems have in-
+design Confucius, a more specialized network assistant. Compared                            puts and outputs with well-defined structures to assist automation.
+                                                                                            By understanding and generating these structured data, LLMs can
+                                                                                            be added to existing automation pipelines, facilitating routine use.
+
+                                                                                       358
+For example, our maintenance event parser, which parses vendor              tasks, rather than relying on conversation-based control flow, which
+emails and generates structured tickets, has been invoked hundreds          may introduce uncertainties for sensitive network tasks.
+of times per day as part of the ticket management system.                   Networking Tasks with LLMs He et al. [25] adopt LLMs to de-
+                                                                            velop adaptive bitrate (ABR) algorithms, a pivotal component for
+8.3 Lessons learned                                                         dynamically adjusting video quality in streaming media delivery.
+                                                                            Sharma et al. [43] propose PROSPER, an LLM-based framework for
+   Importance of Iterative Processes in Networking Problems. We have        extracting Finite State Machines (FSMs) from network protocols
+found that many network management tasks are complex, often                 described in IETF Requests for Comments (RFCs). Mani et al. [35]
+modeled as a workflow that invokes multiple tools. However, writ-           use LLMs to generate graph manipulation code for topology man-
+ing a workflow accurately requires deep domain knowledge of all             agement, and Mondal et al. [39] apply LLMs to synthesize router
+the tools involved. To address this challenge, Confucius' design            configurations. Customized LLMs are also developed [20, 37, 49, 53],
+includes an artifact that demonstrates intermediate steps in the UI,        where networking data such as traffic flows are used to build foun-
+allowing developers to work on the workflow step-by-step. This              dation models beyond natural language, which can be adapted for
+approach enables developers to first sketch the overall steps and           downstream tasks such as traffic classification and attack detection.
+then zoom in on the details for each individual step.                       System-Level Applications Lian et al. [33] develop an LLM-based
+                                                                            framework named Ciri to enhance configuration validation prior
+   Limitations of LLMs in Network Troubleshooting. Among all ap-            to deployment, removing heavy dependence on manual checks and
+plications, we observed that network troubleshooting problems               engineering. Kotaru [28] introduces the Data Intelligence for Oper-
+have the largest variants, and it is challenging to achieve perfor-         ators Copilot (DIO Copilot), a natural language interface utilizing
+mance equivalent to that of a domain expert. In fact, experts are           LLMs for efficient data retrieval and analysis, built on semantic
+also masters of basic models and commands, making it difficult              search and few-shot learning. Other applications besides data re-
+for LLMs to bring significant value as a copilot. This is similar to        trieval and analysis are also explored, such as incident management
+how ChatGPT can help a student with writing improvement but                 and investigation [24, 54], machine-readable protocol grammar
+may not be equally helpful to a professional writer. Network trou-          extraction engine ChatAFL [36], and LLM-based DDoS defense
+bleshooting is also challenging due to its lack of structure. While         framework ShieldGPT [48], among others. Recent works have also
+LLMs can follow a MOP to diagnose easy problems, the hardest                developed agentic frameworks for complex system management,
+problems often cannot be resolved by a MOP and therefore cannot             including LLo11yPop [22], an observability agentic framework for
+be modeled by clear steps, leaving LLMs falling short.                      GPU fleet management, and AssetOpsBench [40], which orches-
+                                                                            trates multi-agent workflows for industrial asset management.
+   Failure Scenarios. We explicitly highlight the issues that we have
+observed with Confucius and LLMs in general. 1) Context prop-               10 Conclusion
+agation can be lost in later parts of a session. For instance, in a
+troubleshooting scenario, a user might start by asking about packet         In this paper, we introduce Confucius, a multi-agent large lan-
+loss during a specific time period of the day. While Confucius fol-         guage model (LLM) framework designed to address the complex
+lows a troubleshooting plan, the specific time constraint may not           challenges of network management at Meta. By decoupling reason-
+consistently apply to all subsequent actions, particularly when the         ing from domain-specific knowledge and tools, Confucius enables
+steps are lengthy. In such cases, employing prompt engineering              effective collaboration with existing foundation models without
+to reiterate important constraints can help mitigate this issue. 2)         requiring fine-tuning. Our framework decomposes management
+Hallucination and failure to fail early. Hallucination remains a sig-       tasks into smaller, structured subtasks, allowing for precise exe-
+nificant issue in networking applications. When LLMs cannot find            cution with domain-specific tools and databases. We have demon-
+answers from the designated data sources, they tend to fabricate re-        strated the effectiveness of Confucius through its deployment in
+sponses. This behavior contradicts the principle of failing early and       production, serving thousands of users and over 60 management
+deterministically, which is fundamental in most computer systems.           tasks. Confucius has the potential to enable and revolutionize true
+These fabricated answers lead to inefficiencies in human investi-           intent-based network management.
+gation. 3) Privacy concerns. Some network investigations require
+access to application and service data, each with varying levels of            This work does not raise any ethical issues.
+privacy. Errors resulting from privacy violations are not clearly
+highlighted by LLMs, posing potential risks.                                11 Acknowledgment
+
+9 Related work                                                              This work is a close collaboration within Meta's Network Infras-
+                                                                            tructure team, especially our interns Rae Wong and Jenny Li. We
+General-Purpose Agentic Frameworks Confucius is built on                    would like to thank leadership support from Steve Politis and Vipul
+top of LangChain [13] and offers several additional advantages,             Deokar, our shepherd Li Chen, and the anonymous reviewers for
+including tracing, reusability of common primitives and runnables,          their constructive and valuable feedback on earlier drafts of this
+and interoperability across tools. Like Confucius, LangGraph [29]           publication. Minlan Yu is supported by National Science Foundation
+decomposes complex tasks into directed graphs, with nodes repre-            grant CCF-2326605 and ACE.
+senting subtasks. AutoGen [50] is another multi-agent framework
+that decomposes tasks into smaller subtasks performed by cus-
+tomized agents. Our work differs by performing retrieval on hun-
+dreds of existing workflows to suggest DAGs for domain-specific
+
+                                                                       359
+References                                                                                          conference/osdi24/presentation/chow
+                                                                                              [18] Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma, Gaurav
+ [1] 2019. Cognitive Architectures: A Way Forward for Intelligent Systems. In Journal
+      of Artificial Intelligence Research.                                                          Mishra, Adam Roberts, Paul Barham, Hyung Won Chung, Charles Sutton, Se-
+                                                                                                    bastian Gehrmann, Parker Schuh, Kensen Shi, Sashank Tsvyashchenko, Joshua
+ [2] 2024. Pydantic. https://docs.pydantic.dev/latest/.                                             Maynez, Abhishek Rao, Parker Barnes, Yi Tay, Noam Shazeer, Vinodkumar Prab-
+ [3] 2025. Knowledge Graph. https://en.wikipedia.org/wiki/Knowledge_graph.                          hakaran, Emily Reif, Nan Du, Ben Hutchinson, Reiner Pope, James Bradbury,
+ [4] 2025. Meta Data Centers. https://datacenters.atmeta.com/.                                      Jacob Austin, Michael Isard, Guy Gur-Ari, Pengcheng Yin, Toju Duke, Anselm
+ [5] Lior Abraham, John Allen, Oleksandr Barykin, Vinayak Borkar, Bhuwan Chopra,                    Levskaya, Sanjay Ghemawat, Sunipa Dev, Henryk Michalewski, Xavier Gar-
+                                                                                                    cia, Vedant Misra, Kevin Robinson, Liam Fedus, Denny Zhou, Daphne Ippolito,
+      Ciprian Gerea, Daniel Merl, Josh Metzler, David Reiss, Subbu Subramanian,                     David Luan, Hyeontaek Lim, Barret Zoph, Alexander Spiridonov, Ryan Sepa-
+      Janet L. Wiener, and Okay Zed. 2013. Scuba: diving into data at facebook. Proc.               ssi, David Dohan, Shivani Agrawal, Mark Omernick, Andrew M. Dai, Thanu-
+      VLDB Endow. 6, 11 (Aug. 2013), 1057­1067.                                                     malayan Sankaranarayana Pillai, Marie Pellat, Aitor Lewkowycz, Erica Moreira,
+ [6] Satyajeet Singh Ahuja, Vinayak Dangui, Kirtesh Patil, Manikandan Somasun-                      Rewon Child, Oleksandr Polozov, Katherine Lee, Zongwei Zhou, Xuezhi Wang,
+      daram, Varun Gupta, Mario Sanchez, Guanqing Yan, Max Noormohammadpour,                        Brennan Saeta, Mark Diaz, Orhan Firat, Michele Catasta, Jason Wei, Kathy Meier-
+      Alaleh Razmjoo, Grace Smith, Hao Zhong, Abhinav Triguna, Soshant Bali, Yuxi-                  Hellstern, Douglas Eck, Jeff Dean, Slav Petrov, and Noah Fiedel. 2023. PaLM:
+      ang Xiang, Yilun Chen, Prabhakaran Ganesan, Mikel Jimenez Fernandez, Petr                     scaling language modeling with pathways. J. Mach. Learn. Res. 24, 1, Article 240
+      Lapukhov, Guyue Liu, and Ying Zhang. 2022. Network entitlement: contract-                     (Jan. 2023), 113 pages.
+      based network sharing with agility and SLO guarantees. In Proceedings of the            [19] Marek Denis, Yuanjun Yao, Ashley Hatch, Qin Zhang, Chiun Lin Lim, Shuqiang
+      ACM SIGCOMM 2022 Conference (Amsterdam, Netherlands) (SIGCOMM '22).                           Zhang, Kyle Sugrue, Henry Kwok, Mikel Jimenez Fernandez, Petr Lapukhov,
+      Association for Computing Machinery, New York, NY, USA, 250­263.                              Sandeep Hebbani, Gaya Nagarajan, Omar Baldonado, Lixin Gao, and Ying Zhang.
+ [7] Satyajeet Singh Ahuja, Varun Gupta, Vinayak Dangui, Soshant Bali, Abishek                      2023. EBB: Reliable and Evolvable Express Backbone Network in Meta. In Pro-
+      Gopalan, Hao Zhong, Petr Lapukhov, Yiting Xia, and Ying Zhang. 2021. Capacity-                ceedings of the ACM SIGCOMM 2023 Conference (New York, NY, USA) (ACM
+      Efficient and Uncertainty-Resilient Backbone Network Planning with Hose. In                   SIGCOMM '23). Association for Computing Machinery, New York, NY, USA,
+      Proceedings of the 2021 ACM SIGCOMM 2021 Conference (SIGCOMM '21). Associa-                   346­359.
+      tion for Computing Machinery, New York, NY, USA, 547­559.                               [20] Alexander Dietmüller, Siddhant Ray, Romain Jacob, and Laurent Vanbever. 2022.
+ [8] Satyajeet Singh Ahuja, Varun Gupta, Vinayak Dangui, Soshant Bali, Abishek                      A new hope for network model generalization. In Proceedings of the 21st ACM
+      Gopalan, Hao Zhong, Petr Lapukhov, Yiting Xia, and Ying Zhang. 2021. Capacity-                Workshop on Hot Topics in Networks. 152­159.
+      efficient and uncertainty-resilient backbone network planning with hose. In             [21] Matthijs Douze, Alexandr Guzhva, Chengqi Deng, Jeff Johnson, Gergely Szilvasy,
+      Proceedings of the 2021 ACM SIGCOMM 2021 Conference (Virtual Event, USA)                      Pierre-Emmanuel Mazaré, Maria Lomeli, Lucas Hosseini, and Hervé Jégou. 2024.
+      (SIGCOMM '21). Association for Computing Machinery, New York, NY, USA,                        The faiss library. arXiv preprint arXiv:2401.08281 (2024).
+      547­559.                                                                                [22] Aaron Erickson. 2024. Optimizing Data Center Performance with AI Agents
+ [9] Alexey Andreyev, Xu Wang, and Alex Eckert. 2019. Reinventing Facebook's                        and the OODA Loop Strategy. https://developer.nvidia.com/blog/optimizing-
+      Data Center Network. https://engineering.fb.com/2019/03/14/data-center-                       data-center-performance-with-ai-agents-and-the-ooda-loop-strategy. NVIDIA
+      engineering/f16- minipack/.                                                                   Developer Blog.
+[10] Steven Bird. 2006. NLTK: the natural language toolkit. In Proceedings of the             [23] David Gutiérrez-Avilés, Manuel Jesús Jiménez-Navarro, José Francisco Torres-
+      COLING/ACL 2006 Interactive Presentation Sessions. 69­72.                                     Maldonado, and Francisco Martínez-Álvarez. 2024. MetaGen: A Framework for
+[11] Sebastian Borgeaud, Arthur Mensch, Jordan Hoffmann, Trevor Cai, Eliza Ruther-                  Metaheuristic Development and Hyperparameter Optimization. https://github.
+      ford, Katie Millican, George Bm Van Den Driessche, Jean-Baptiste Lespiau, Bog-                com/Data- Science- Big- Data- Research- Lab/MetaGen.
+      dan Damoc, Aidan Clark, Diego De Las Casas, Aurelia Guy, Jacob Menick, Roman            [24] Pouya Hamadanian, Behnaz Arzani, Sadjad Fouladi, Siva Kesava Reddy Kakarla,
+      Ring, Tom Hennigan, Saffron Huang, Loren Maggiore, Chris Jones, Albin Cassirer,               Rodrigo Fonseca, Denizcan Billor, Ahmad Cheema, Edet Nkposong, and Ranveer
+      Andy Brock, Michela Paganini, Geoffrey Irving, Oriol Vinyals, Simon Osindero,                 Chandra. 2023. A Holistic View of AI-driven Network Incident Management. In
+      Karen Simonyan, Jack Rae, Erich Elsen, and Laurent Sifre. 2022. Improving                     Proceedings of the 22nd ACM Workshop on Hot Topics in Networks. 180­188.
+      Language Models by Retrieving from Trillions of Tokens. In Proceedings of the           [25] Zhiyuan He, Aashish Gottipati, Lili Qiu, Francis Y Yan, Xufang Luo, Kenuo Xu,
+      39th International Conference on Machine Learning (Proceedings of Machine Learn-              and Yuqing Yang. 2024. LLM-ABR: Designing Adaptive Bitrate Algorithms via
+      ing Research, Vol. 162), Kamalika Chaudhuri, Stefanie Jegelka, Le Song, Csaba                 Large Language Models. arXiv preprint arXiv:2404.01617 (2024).
+      Szepesvari, Gang Niu, and Sivan Sabato (Eds.). PMLR, 2206­2240.                         [26] Manolis Karpathiotakis, Dino Wernli, and Milos Stojanovics. 2017. Scribe:
+[12] Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan,                        Transporting petabytes per hour via a distributed, buffered queueing system.
+      Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda                    https://engineering.f b.com/2019/10/07/data- infrastructure/scribe/.
+      Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan,           [27] Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey
+      Rewon Child, Aditya Ramesh, Daniel M. Ziegler, Jeffrey Wu, Clemens Winter,                    Edunov, Danqi Chen, and Wen-tau Yih. 2020. Dense Passage Retrieval for Open-
+      Christopher Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin               Domain Question Answering. In Proceedings of the 2020 Conference on Empirical
+      Chess, Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya                     Methods in Natural Language Processing (EMNLP). 6769­6781.
+      Sutskever, and Dario Amodei. 2020. Language models are few-shot learners. In            [28] Manikanta Kotaru. 2023. Adapting Foundation Models for Operator Data An-
+      Proceedings of the 34th International Conference on Neural Information Processing             alytics. In Proceedings of the 22nd ACM Workshop on Hot Topics in Networks.
+      Systems (Vancouver, BC, Canada) (NIPS '20). Curran Associates Inc., Red Hook,                 172­179.
+      NY, USA, Article 159, 25 pages.                                                         [29] LangChain-AI. 2025. LangGraph. https://github.com/langchain-ai/langgraph.
+[13] Harrison Chase. 2024. LangChain: A Framework for Developing Applications                 [30] Petr Lapukhov and Aijay Adams. 2016. NetNORAD: Troubleshooting net-
+      Powered by Large Language Models (LLMs). https://github.com/langchain-                        works via end-to-end probing. https://engineering.fb.com/2016/02/18/core-
+      ai/langchain.                                                                                 data/netnorad- troubleshooting- networks- via- end- to- end- probing/.
+[14] Xu Chen, Yun Mao, Z. Morley Mao, and Jacobus Van der Merwe. 2010. Declarative            [31] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin,
+      configuration management for complex and dynamic networks. In Proceedings                     Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel,
+      of the 6th International Conference (Philadelphia, Pennsylvania) (Co-NEXT '10).               Sebastian Riedel, and Douwe Kiela. 2020. Retrieval-augmented generation for
+      Association for Computing Machinery, New York, NY, USA, Article 6, 12 pages.                  knowledge-intensive NLP tasks. In Proceedings of the 34th International Conference
+[15] Xu Chen, Z. Morley Mao, and Jacobus Van der Merwe. 2009. PACMAN: a                             on Neural Information Processing Systems (Vancouver, BC, Canada) (NIPS '20).
+      platform for automated and controlled network operations and configuration                    Curran Associates Inc., Red Hook, NY, USA, Article 793, 16 pages.
+      management. In Proceedings of the 5th International Conference on Emerging              [32] Yanhong Li, Karen Livescu, and Jiawei Zhou. 2024. Chunk-Distilled Language
+      Networking Experiments and Technologies (Rome, Italy) (CoNEXT '09). Association               Modeling. arXiv preprint arXiv:2501.00343 (2024).
+      for Computing Machinery, New York, NY, USA, 277­288.                                    [33] Xinyu Lian, Yinfang Chen, Runxiang Cheng, Jie Huang, Parth Thakkar, and
+[16] Sean Choi, Boris Burkov, Alex Eckert, Tian Fang, Saman Kazemkhani, Rob Sher-                   Tianyin Xu. 2023. Configuration Validation with Large Language Models. arXiv
+      wood, Ying Zhang, and Hongyi Zeng. 2018. FBOSS: building switch software                      preprint arXiv:2310.09690 (2023).
+      at scale (SIGCOMM '18). Association for Computing Machinery, New York, NY,              [34] Ajay Mahimkar, Carlos Eduardo de Andrade, Rakesh Sinha, and Giritharan Rana.
+      USA, 342­356.                                                                                 2021. A composition framework for change management. In Proceedings of
+[17] Mike Chow, Yang Wang, William Wang, Ayichew Hailu, Rohan Bopardikar, Bin                       the 2021 ACM SIGCOMM 2021 Conference (Virtual Event, USA) (SIGCOMM '21).
+      Zhang, Jialiang Qu, David Meisner, Santosh Sonawane, Yunqi Zhang, Rodrigo                     Association for Computing Machinery, New York, NY, USA, 788­806.
+      Paim, Mack Ward, Ivor Huang, Matt McNally, Daniel Hodges, Zoltan Farkas,                [35] Sathiya Kumaran Mani, Yajie Zhou, Kevin Hsieh, Santiago Segarra, Trevor Eberl,
+      Caner Gocmen, Elvis Huang, and Chunqiang Tang. 2024. ServiceLab: Preventing                   Eliran Azulai, Ido Frizler, Ranveer Chandra, and Srikanth Kandula. 2023. Enhanc-
+      Tiny Performance Regressions at Hyperscale through Pre-Production Testing. In                 ing network management using code generated by large language models. In
+      18th USENIX Symposium on Operating Systems Design and Implementation (OSDI
+      24). USENIX Association, Santa Clara, CA, 545­562. https://www.usenix.org/
+
+                                                                                         360
+      Proceedings of the 22nd ACM Workshop on Hot Topics in Networks. 196­204.
+[36] Ruijie Meng, Martin Mirchev, Marcel Böhme, and Abhik Roychoudhury. 2024.
+
+      Large language model guided protocol fuzzing. In Proceedings of the 31st Annual
+      Network and Distributed System Security Symposium (NDSS).
+[37] Xuying Meng, Chungang Lin, Yequan Wang, and Yujun Zhang. 2023. Netgpt: Gen-
+      erative pretrained transformer for network traffic. arXiv preprint arXiv:2304.09513
+      (2023).
+[38] Jeffrey C. Mogul, Drago Goricanec, Martin Pool, Anees Shaikh, Douglas Turk,
+      Bikash Koley, and Xiaoxue Zhao. 2020. Experiences with modeling network
+      topologies at multiple levels of abstraction. In Proceedings of the 17th Usenix
+      Conference on Networked Systems Design and Implementation (Santa Clara, CA,
+      USA) (NSDI'20). 403­418.
+[39] Rajdeep Mondal, Alan Tang, Ryan Beckett, Todd Millstein, and George Varghese.
+      2023. What do LLMs need to Synthesize Correct Router Configurations?. In
+      Proceedings of the 22nd ACM Workshop on Hot Topics in Networks. 189­195.
+[40] Dhaval Patel, Shuxin Lin, James Rayfield, Nianjun Zhou, Roman Vaculin, Natalia
+      Martinez, Fearghal O'Donncha, and Jayant Kalagnanam. 2025. AssetOpsBench:
+      Benchmarking AI Agents for Task Automation in Industrial Asset Operations
+      and Maintenance. arXiv:2506.03828
+[41] Tuomas Pelkonen, Scott Franklin, Justin Teller, Paul Cavallaro, Qi Huang, Justin
+      Meza, and Kaushik Veeraraghavan. 2015. Gorilla: a fast, scalable, in-memory
+      time series database. Proc. VLDB Endow. 8, 12 (Aug. 2015), 1816­1827.
+[42] Erik Schluntz, Simon Biggs, Dawn Drain, Eric Christiansen, Shauna Kravec, Felipe
+      Rosso, Nova DasSarma, and Ven Chandrasekaran. 2025. Raising the Bar on SWE-
+      bench Verified with Claude 3.5 Sonnet. https://www.anthropic.com/research/swe-
+      bench- sonnet.
+[43] Prakhar Sharma and Vinod Yegneswaran. 2023. PROSPER: Extracting Protocol
+      Specifications Using Large Language Models. In Proceedings of the 22nd ACM
+      Workshop on Hot Topics in Networks. 41­47.
+[44] Arjun Singh, Joon Ong, Amit Agarwal, Glen Anderson, Ashby Armistead, Roy
+      Bannon, Seb Boving, Gaurav Desai, Bob Felderman, Paulie Germano, et al. 2015.
+      Jupiter rising: A decade of Clos topologies and centralized control in Google's
+      datacenter network. In SIGCOMM.
+[45] Hongjin Su, Weijia Shi, Jungo Kasai, Yizhong Wang, Yushi Hu, Mari Ostendorf,
+      Wen-tau Yih, Noah A. Smith, Luke Zettlemoyer, and Tao Yu. 2023. One Embedder,
+      Any Task: Instruction-Finetuned Text Embeddings. In Findings of the Associa-
+      tion for Computational Linguistics: ACL 2023, Anna Rogers, Jordan Boyd-Graber,
+      and Naoaki Okazaki (Eds.). Association for Computational Linguistics, Toronto,
+      Canada, 1102­1121.
+[46] Yu-Wei Eric Sung, Xiaozheng Tie, Starsky H.Y. Wong, and Hongyi Zeng. 2016.
+      Robotron: Top-down Network Management at Facebook Scale. In Proceedings
+      of the 2016 ACM SIGCOMM Conference (Florianopolis, Brazil) (SIGCOMM '16).
+      Association for Computing Machinery, New York, NY, USA, 426­439.
+[47] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne
+      Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric Hambro, Faisal
+      Azhar, Aurelien Rodriguez, Armand Joulin, Edouard Grave, and Guillaume Lam-
+      ple. 2023. Llama: Open and efficient foundation language models. arXiv preprint
+      arXiv:2302.13971 (2023).
+[48] Tongze Wang, Xiaohui Xie, Lei Zhang, Chuyi Wang, Liang Zhang, and Yong Cui.
+      2024. ShieldGPT: An LLM-based Framework for DDoS Mitigation. In Proceedings
+      of the 8th Asia-Pacific Workshop on Networking (Sydney, Australia) (APNet '24).
+      Association for Computing Machinery, New York, NY, USA, 108­114.
+[49] Duo Wu, Xianda Wang, Yaqi Qiao, Zhi Wang, Junchen Jiang, Shuguang Cui, and
+      Fangxin Wang. 2024. Netllm: Adapting large language models for networking.
+      In Proceedings of the ACM SIGCOMM 2024 Conference. 661­678.
+[50] Qingyun Wu, Gagan Bansal, Jieyu Zhang, Yiran Wu, Beibin Li, Erkang (Eric)
+      Zhu, Li Jiang, Xiaoyun Zhang, Shaokun Zhang, Ahmed Awadallah, Ryen W.
+      White, Doug Burger, and Chi Wang. 2024. AutoGen: Enabling Next-Gen LLM
+      Applications via Multi-Agent Conversation. In COLM 2024.
+[51] Jiarong Xing, Kuo-Feng Hsu, Yiting Xia, Yan Cai, Yanping Li, Ying Zhang, and
+      Ang Chen. 2024. Occam: A Programming System for Reliable Network Manage-
+      ment. In Proceedings of the Nineteenth European Conference on Computer Systems
+      (Athens, Greece) (EuroSys '24). Association for Computing Machinery, New York,
+      NY, USA, 148­162.
+[52] Ying Zhang, Nathan Hu, Carl Verge, and Scott O'Brien. 2022. Cross-layer di-
+      agnosis of optical backbone failures. In Proceedings of the 22nd ACM Internet
+      Measurement Conference (Nice, France) (IMC '22). Association for Computing
+      Machinery, New York, NY, USA, 419­432.
+[53] Jiawei Zhou, Woojeong Kim, Zhiying Xu, Alexander M Rush, and Minlan Yu. 2024.
+      NetFlowGen: Leveraging Generative Pre-training for Network Traffic Dynamics.
+      arXiv preprint arXiv:2412.20635 (2024).
+[54] Yajie Zhou, Nengneng Yu, and Zaoxing Liu. 2023. Towards Interactive Research
+      Agents for Internet Incident Investigation. In Proceedings of the 22nd ACM Work-
+      shop on Hot Topics in Networks. 33­40.
+
+                                                                                  361
+Appendix                                                                                                                                      CollectorTask
+
+Appendices are supporting material that has not been peer-reviewed.                                      description: "You are a code generating agent for TML queries. Your task is to create
+                                                                                                         the corresponding TML query for the user's question above. TML, which stands for
+A Supplemental Figures                                                                                   Topology Modification Language, is a Python-based DSL that..."
+                                                                                                         examples: [Example(·)]
+
+                                                                                                         CollectorExample                   CollectorThinking
+
+                                                                                                         user_input: "How to update         content: "User wants to update L3 nodes, this is a
+                                                                                                         spectrum for my given set of       tm.update type query. User mentions a known set
+                                                                                                         fibers?"                           of fibers already. Create a dict
+                                                                                                         assistant_response: [Thinking(·),  `fiber_spectrum_overrides' with fibers and their
+                                                                                                         Artifact(·)]                       desired spectrum. Inject this into the TML update."
+
+Figure 15: Ensemble Struct Example.                                                                                                         CollectorArtifact
+
+                                                                                                         content:
+
+                                                                                                         fiber_spectrum_overrides = {
+                                                                                                                "<fiber_1>": <spectrum_size_ghz_per_fp_value>, "<fiber_2>":
+
+                                                                                                         <spectrum_size_ghz_per_fp_value>,
+                                                                                                         }
+                                                                                                         tm.update(
+
+                                                                                                                what="fibers",
+                                                                                                                update="ownedFiberProperties=
+
+                                                                                                                               ownedFiberProperties(spectrum_size_ghz_per_fp=fiber_spectrum
+                                                                                                                               _overrides[name])",
+                                                                                                                where="name in fiber_spectrum_overrides",
+                                                                                                                fiber_spectrum_overrides=fiber_spectrum_overrides,
+                                                                                                         )
+
+                                                                                                              Figure 18: Example of Collector for TML use case.
+
+Figure 16: RAG to Assist Planning
+
+       Pydantic Example:                     Analect Example:
+class QueryInput(BaseModel):                class ODSQuerier(LLMAnalect[QueryInput, QueryOutput]):
+
+  text: str = Field(...,                      def display_name(cls) -> str:
+  description="user input request")             return "ODS Querier"
+
+class QueryOutput(BaseModel):                 def input_examples(cls) -> list[EntryInput]:
+  entity: ODSEntity = Field(name="device")      return [EntryInput(
+  key: ODSKey = Field(name="interface")               question="Show me p90 CPU utilization
+  transformation: List[str] = ["diff"]                   for all routers in X"),
+  reduction: List[str] = ["p90","avg"]             EntryInput(
+  start_timestamp: int = -3600                        question="What is average egress link
+  end_timestamp: int = 0                                  utilization in X?"
+                                                   )]
+  Run Context Example:
+  class AnalectRunContext(BaseModel):         async def impl(self, inp: QueryInput,
+                                                         context: AnalectRunContext)
+    session: str = "s1"
+    io: IOInterface = "UI"                            -> QueryOutput:
+    llm_manager: LLManager =                    ...
+
+           LLMParams(model="llama3-70b")
+    ...
+
+Figure 17: An example of Pydantic, Analect, and Run Context.
+
+                                                                                                    362
+

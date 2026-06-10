@@ -1,0 +1,1110 @@
+SkyNet: Analyzing Alert Flooding from Severe Network Failures
+                       in Large Cloud Infrastructures
+
+Bo Yang, Huanwu Hu, Yifan Li, Yunguang Li, Xiangyu Tang, Bingchuan Tian,
+       Gongwei Wu, Jianfeng Xu, Xumiao Zhang, Feng Chen, Cheng Wang,
+                    Ennan Zhai, Yuhong Liao, Dennis Cai, Tao Lin
+
+                                        Alibaba Cloud
+
+Abstract                                                                                            Infrastructures. In ACM SIGCOMM 2025 Conference (SIGCOMM '25), Sep-
+                                                                                                    tember 8­11, 2025, Coimbra, Portugal. ACM, New York, NY, USA, 15 pages.
+For providers operating large-scale global networks, the timeliness                                 https://doi.org/10.1145/3718958.3750536
+of network failure recovery significantly affects the reliability of
+network services. Ideally, a network monitoring system should have                                  1 Introduction
+enough coverage to detect even minor issues, but high coverage
+means alert floods during severe network failures. In practice, there                               As a leading cloud provider, Alibaba Cloud provides 24×7 cloud
+is a gap between the flooding raw alerts data collected by network                                  network services to millions of customers worldwide. This service
+monitoring tools and the readable information needed for failure                                    is supported by a network infrastructure comprising a wide area
+diagnosis. Existing solutions using limited network monitoring                                      network (WAN) and numerous interconnected data centers. This
+data sources and heuristic diagnostic rules, lack comprehensive                                     infrastructure includes millions of servers, and the number of net-
+coverage and the capability to address severe failures, especially                                  work devices reaches  (105). Our network operators diligently
+which network operators have never handled a similar one before.                                    maintain network reliability through careful design, construction,
+This paper presents SkyNet, a network analysis system to extract                                    and verification processes. However, incidents in such a complex
+scope and severity information from alert floods. SkyNet ensures                                    network are inevitable. As illustrated in Figure 1, the causes of
+comprehensive coverage by integrating multiple monitoring data                                      network failures are diverse, making it challenging for our network
+sources through a uniform input format, enhancing extensibility                                     operators to diagnose and address them. This highlights the critical
+for new network monitoring tools. During alert floods, SkyNet                                       need for effective monitoring and failure localization methods to
+groups alerts, assesses their severity, and filters out insignificant                               minimize the impact of these incidents.
+ones to aid network operators in mitigating network failures. To
+date, SkyNet has been running stably on our network for one and a                                      Existing research has significantly enhanced network monitor-
+half years without any false negatives and has successfully reduced                                 ing capabilities. Nevertheless, most studies depend on a single or
+the time-to-mitigation for over 80% of network failures since its                                   limited set of data sources, rendering them effective only under spe-
+deployment in production.                                                                           cific circumstances or for minor failures. For example, tools based
+                                                                                                    on Ping can accurately identify a fault when a solitary link lacking
+CCS Concepts                                                                                        a backup malfunctions. Traditional monitoring tools such as SNMP
+                                                                                                    can detect packet loss within seconds, and Syslog collectors can
+· Networks  Data center networks; Network management;                                               provide instant notifications for failures logged by network devices.
+Network monitoring; Network reliability.                                                            However, this reliance on a single data source frequently leads to
+                                                                                                    restricted coverage. For example, Syslog cannot address routing
+Keywords                                                                                            errors that do not trigger runtime errors on a device, and other
+                                                                                                    tools also exhibit their coverage limitations. Based on our indus-
+Data center networking, Network management, monitoring and                                          trial experience, the failure detection coverage of various network
+troubleshooting                                                                                     monitoring tools ranges from 3% to 84% (Figure 3). None can detect
+                                                                                                    all network failures.
+ACM Reference Format:
+Bo Yang, Huanwu Hu, Yifan Li, Yunguang Li, Xiangyu Tang, Bingchuan                                     Here arises a natural question: why not integrate all these tools
+Tian,, Gongwei Wu, Jianfeng Xu, Xumiao Zhang, Feng Chen, Cheng Wang,,                               to address the coverage issue and achieve comprehensive network
+Ennan Zhai, Yuhong Liao, Dennis Cai, Tao Lin, Alibaba Cloud . 2025. SkyNet:                         monitoring? Ideally, if the network operates smoothly or suffers only
+                                                                                                    from minor failures, as depicted in Figure 2a, the monitoring system
+Analyzing Alert Flooding from Severe Network Failures in Large Cloud                                would generate few alerts, thus enabling operators to more easily
+                                                                                                    identify the root cause. For example, some systems employ belief
+    Bo Yang, Huanwu Hu and Yifan Li are the co-primary authors.                                     networks to automate failure recovery using Standard Operating
+                                                                                                    Procedures (SOPs) built on prior experience [40, 49]. We refer to
+Permission to make digital or hard copies of all or part of this work for personal or               failures that network operators have previously encountered and
+classroom use is granted without fee provided that copies are not made or distributed               matched with predefined rules as "known failures".
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the                     However, when addressing severe failures, as shown in Figure 2b,
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or              which occur only a few times globally each year [1] yet account
+republish, to post on servers or to redistribute to lists, requires prior specific permission       for the majority of financial losses and reputation damage, merely
+and/or a fee. Request permissions from permissions@acm.org.                                         collecting alerts from all tools presents the following challenges:
+SIGCOMM '25, Coimbra, Portugal
+© 2025 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-1524-2/25/09
+https://doi.org/10.1145/3718958.3750536
+
+                                                                                               512
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                           Bo Yang et al.
+
+          Security error(1.9%)            Configuration error(1.9%)                          100
+Infrastructure error(9.3%)                       Route error(1.9%)
+                                                                                coverage(%)  75
+        Device software                          Device hardware
+           error(9.3%)                             error(42.6%)                              50
+
+                                                                                             25
+
+                                                                                             0    SNMPSYSOLuOtG-Eonfd-b-Itanon--bdeanndIdnptnienergtnweot rpMkiontdgeilfeimcaettiRoryonuetveemntosnitoring
+
+Network modification                                                            Figure 3: Network failure coverage of monitoring tools.
+     error(16.7%)
+                                                        Link error(18.5%)
+
+Figure 1: The proportion of network failure root causes.                        Failure                  Raw     A gap!     Readable    Root                                                                Failure
+                                                                                occurs                   alerts            information  cause                                                                fixed
+
+                      [YYYY-MM-DD 11:45:14.464][R4] Packet loss to H3                        Monitoring          Analysis    Diagnosis         Mitigation
+                      [YYYY-MM-DD 11:45:14.889][R4] TenGigE0/1/0/25 down                                         SkyNet
+                                                                                                Ping                       Heuristic tools
+                                                                                               SNMP                            Human
+                                                                                                                                 LLM
+                                                                                                  ...
+
+        R2            In a device group:
+
+R1                    R3: No alerts
+
+        R4            R4: Packet loss + interface down                                       Figure 4: The life cycle of a network failure.
+
+R3                    Other devices connected to R4: No alerts
+
+H1  H2  H3            Matched!                                                  or take ineffective actions based on incomplete information, lead-
+                      SOP: Isolate R4                                           ing to unnecessary delays in localizing and mitigating the failure.
+                                                                                Consequently, the recovery process is prolonged, often taking over
+                                  (a)                                           an hour. Although this recovery time might appear rapid consid-
+                                                                                ering the scale of the failure, it remains unsatisfactory, as we are
+                      [YYYY-MM-DD 01:10:11.323][R2] Traffic down                committed to providing minute-level failure recovery.
+
+                      [YYYY-MM-DD 01:10:15.358][R1] Packet drop to R4              In this paper, we address the challenges of resolving severe fail-
+                                                                                ures in large-scale cloud networks. Our goals include enhancing
+                      [YYYY-MM-DD 01:10:15.638][R2] Link down                   alert correlation, prioritizing incidents (defined as a set of alerts
+                                                                                originating from the same root cause), and root cause zooming-in,
+                      [YYYY-MM-DD 01:10:15.977][R1] Packet drop to R3           facilitating effective and efficient recovery from network failures.
+
+R1      R2            [YYYY-MM-DD 01:10:16.136][R2] TenGigE0/1/0/3 down            To this end, we built SkyNet, an integrated network failure anal-
+                                                                                ysis system bridging the gap between monitoring and diagnosis.
+                      [YYYY-MM-DD 01:10:17.893][R4] device unreachable          SkyNet employs a structured methodology: (1) It pre-processes
+                                                                                diverse data sources using sophisticated algorithms. The system
+                      [YYYY-MM-DD 01:10:18.712][R3] Packet loss to H1           records all alerts' timestamp and location data, classifying them
+                                                                                into predefined categories through heuristic or automatic methods.
+                      [YYYY-MM-DD 01:10:18.982][R1] Packet drop to R4           SkyNet then filters out non-essential alerts and aggregates spec-
+                                                                                ified alerts into comprehensive alerts based on experiential rules.
+R3      R4 ...                                                                  (2) SkyNet constructs a hierarchical alert tree(refer to Figure 5c),
+                                                                                indexed by location and comprising all collected alerts, maximizing
+                                                        ???                     the use of available data sources. This structure is then analyzed
+                                                                                to identify locations impacted by incidents. (3) SkyNet employs
+H1 H2   H3            No rule matched!                                          telemetry tools to identify the failure location precisely. It queries
+                                                                                user and traffic data related to the failure site and prioritizes con-
+                                           (b)                                  current alerts by urgency, enabling operators to address the most
+Figure 2: (a) Known failures which can be matched by SOP                        critical issues first.
+
+rules. (b) Unknown failures.                                                       SkyNet has already been deployed in our cloud infrastructure.
+                                                                                Over the past one and a half years, SkyNet has enhanced network
+· Firstly, severe failures typically impact numerous devices and                reliability for our operators. We present four representative cases
+   connections, generating an overwhelming number of alerts, mak-               to demonstrate its effectiveness and undertake extensive perfor-
+   ing it difficult for operators to meet the minute-level recovery             mance evaluations to assess SkyNet from multiple perspectives.
+   Service Level Agreement (SLA) requirements.                                  The average mitigation time for severe failures decreased by 80%.
+
+· Secondly, severe failures are rare, and an increasing number                  2 Background and Motivation
+   of them are unprecedented. We term these "unknown failures".
+   Thus, reliance solely on predefined SOPs or models becomes im-               Alibaba Cloud operates a global network infrastructure. By July
+   practical, leading to extended processing times or higher chances            2025, our network includes a private wide-area network and 89
+   of error.
+
+· Finally, there may be alerts triggered by minor failures or sched-
+   uled updates occurring concurrently, further complicating man-
+   ual localization efforts.
+
+   Figure 4 illustrates the complete life cycle of detecting and re-
+solving a network failure. A significant gap exists between the raw
+alerts generated by network monitoring tools and the actionable
+insights required for diagnosing the failure. In instances of severe
+failures, our network operators are inundated with alerts from the
+monitoring system, making comprehensive manual analysis chal-
+lenging. As a result, operators often either overlook the root cause
+
+                                                                           513
+SkyNet: Analyzing Alert Flooding from Severe Network Failures in Large Cloud Infrastructures  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+Table 1: Existing network monitoring tools and their data                     · Route monitoring is limited to the control plane and cannot
+sources.                                                                         diagnose data plane issues.
+
+         Tools        Used in Production  Data Sources                           Table 1 provides a summary of several existing studies, indicating
+                                                                              whether they are claimed to be used in production and specifying
+    RD-Probe [10]               True           Ping                           their data sources to highlight their limitations. Enhancing the com-
+    Pingmesh [15]               True           Ping                           prehensiveness of our monitoring system necessitates integrating
+   NetNORAD [3]                 True           Ping                           alerts from multiple network monitoring data sources.
+     deTector[34]               False          Ping
+Dynamic mining [50]             True          Syslog                          Does combining multiple data sources work? Several attempts
+                                True        traceroute                        have been made to integrate multiple network monitoring data
+         007 [7]                True            INT                           sources [12, 28, 29]. They employ a wide array of monitoring tools
+    Roy et al. [36]             True            INT                           to trigger telemetry tasks or redirect network alerts to appropriate
+   Netbouncer [42]              False           PTP                           network operator teams. But essentially, these tools are doing a
+    PTPMesh [35]                False         SNMP                            trade-off between achieving higher monitoring coverage and tol-
+    Shin et al. [37]            True       Out-of-band                        erating a larger number of alerts, which means a higher level of
+ Redfish-Nagios [6]                                                           analytical difficulty. They cannot help avoid the problem of "alert
+                                                                              flooding", especially when addressing "severe failures".
+data centers across 29 geographic regions, covering North America,
+Europe, Asia, and Oceania [2]. The network comprises approxi-                 2.2 Alert Flooding in Severe Failures
+mately  (105) network devices. Failures in these devices and links
+can compromise service reliability and potentially breach SLAs.               "Severe failure" refer to incidents that significantly impact extensive
+                                                                              areas, generating numerous alerts from various network monitoring
+   Although it is impossible to entirely prevent network failures             tools almost simultaneously. This situation impedes our network
+in an infrastructure of this magnitude, prompt recovery is crucial.           operators' ability to prioritize critical alerts and identify the root
+Initially, we considered failure recovery to consist of only three            cause of the failure.
+steps: monitoring, diagnosis, and mitigation.
+                                                                                 As shown in Figure 2b, on one occasion, half of the cables serv-
+   Over time, we have developed many advanced network moni-                   ing as the Internet entry point for one of our data centers failed
+toring tools for our in-production network. These tools are highly            simultaneously, triggering a surge of alerts. Our Syslog-based tool
+efficient, facilitating the rapid and precise identification of network       issued multiple alerts concerning links and interfaces being down.
+failures. Additionally, simple network issues can often be resolved           Concurrently, Ping-based monitoring tools reported packet drops
+automatically. For instance, if a device exhibits packet loss while           to specific servers in the data center, later attributed to congestion.
+another device in the same group functions normally, and the traffic          Simultaneously, SNMP reported sharp traffic declines on certain
+remains manageable, the malfunctioning device is automatically                links. Furthermore, the Out-of-band monitor flagged some net-
+isolated.                                                                     work devices as unreachable. In total, over 10,000 alerts related to
+                                                                              this network failure were generated within minutes. Additionally,
+   However, this scenario is an ideal theoretical situation. In prac-         unrelated glitches continued to produce alerts, further complicating
+tice, not all network failures can be resolved so easily.                     the task of accurately identifying the root cause.
+
+2.1 Limitation of Existing Work                                                  At that time, our network operators observed packet loss on
+                                                                              several devices, initially attributing the issue to device-level failures.
+This section examines the limitations of various monitoring data              In accordance with standard operating procedures, the affected
+sources, which stem from a current focus on enhancing the func-               devices were isolated; however, this action failed to resolve the
+tionality of tools reliant on individual sources. While these efforts         issue. Subsequently, the operators analyzed additional alerts and
+improve performance and accuracy, a singular data source approach             suspected the problem might be due to damaged cables. If this were
+limits the ability to capture all network failures. The detailed limi-        the case, resolution would require a repair technician's intervention.
+tations of each monitoring data source are outlined below:                    Fortunately, a thorough inspection of each device and a detailed
+                                                                              analysis of network packet propagation revealed that the packet loss
+· Ping is restricted to detecting failures related to reachability and        was due to network congestion rather than faulty cables, suggesting
+   cannot identify issues such as partial link failures that affect           that some cables remained functional.
+   redundancy but not reachability.
+                                                                                 To mitigate the congestion, bandwidth for certain services was
+· Traceroute loses effectiveness in networks with asymmetric                  reduced, allowing for the migration of some network services out-
+   paths or when tunnels such as Segment Routing Traffic Engi-                side the data center. This mitigation process took several hours and
+   neering (SRTE) are employed.                                               resulted in significant financial and reputational losses. Notably, a
+                                                                              congestion alert had been issued by our SNMP agent at the onset
+· Syslog-based tools cannot detect failures that are not evident              of this incident, but it was obscured by a flood of alerts. Reflecting
+   to the devices, including silent packet loss, transmission errors,         on this challenging experience, we have decided to implement a
+   routing errors, or bit flips.                                              network analysis system to extract valuable insights from a multi-
+                                                                              tude of alerts collected by monitoring tools, thereby expediting the
+· SNMP [39] collects only information available within the SNMP               recovery from severe failures.
+   protocol constraints.
+
+· Out-of-band monitor addresses predominantly infrastructure
+   related issues, focusing on device liveness, CPU utilization, tem-
+   perature, etc.
+
+· In-band network telemetry (INT) is not universally supported
+   across all devices.
+
+                                                                         514
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                                 Bo Yang et al.
+
+2.3 Why not LLM?                                                                 In conclusion, to address network failures manually, network op-
+                                                                              erators require the following information: the occurrence of net-
+Recently proposed network diagnostic systems leveraging large                 work failures, related alerts, specifically the types of alerts,
+language models (LLMs), such as Ahmed et al. [5], MonitorAs-                  and the severity of these failures. Presenting a distilled set of
+sistant [54] and NetAssistant [44], theoretically fails to meet our           approximately 10 messages containing this information instead of
+requirements. The primary challenge is the vast volume of alert               the original  (104) alerts enables operators to manually control
+data generated by monitoring tools. For instance, even only con-              network failures.
+sidering Syslog, approximately 10 million entries are produced
+every 15 minutes, far surpassing the input capacity of existing long-         2.5 Our Goal
+context LLMs, which at most support 20 million tokens [11]. Thus,
+these LLM-based solutions necessitate the specification of time and           Our goal is to develop an in-production network analysis system
+location parameters, operating more as diagnostic tools rather than           to aid network operators in detecting, displaying, and evaluating
+comprehensive monitoring systems. Incorrectly chosen parameters               all network failures.
+can render the LLM incapable of accurately identifying the root
+cause of issues.                                                              Detection. The system should cover all types of network failures.
+                                                                              Upon the occurrence of any network failure, it should be detected
+   Additionally, LLMs function as black boxes. Although they might            and reported to the network operator immediately, even in cases
+efficiently identify root causes under ideal conditions, their propen-        of previously unknown failures.
+sity for hallucination [20] means that erroneous diagnoses could
+force network operators to restart the diagnostic process, poten-             Display. The system must pinpoint the time and location of net-
+tially wasting time on misleading instructions. As a network service          work failures, efficiently extracting and presenting readable infor-
+provider, it is essential to maintain control even in worst-case sce-         mation from numerous alerts triggered by severe network incidents.
+narios, a reliability that LLMs currently lack. In summary, LLMs are          Additionally, it should classify all related network alerts.
+great future opportunities, but for now, they serve only as supple-
+mentary tools for evaluating network failures, necessitating manual           Evaluation. In situations where multiple network failures occur
+intervention for severe issues.                                               simultaneously, the system should evaluate the urgency of each
+                                                                              failure to help operators prioritize their response. Ideally, the system
+2.4 The Desire of Operators                                                   should also identify the specific device or link requiring repair.
+
+To assist network operators in addressing severe network failures             3 Overview
+manually, it is crucial to understand the specific information they
+require. Our network operators possess significant experience and             We introduce SkyNet, a comprehensive network analysis system
+can swiftly diagnose the root cause of network failures when the              designed for global network infrastructures. The central concept of
+number of alerts is limited to no more than approximately 20. In              SkyNet is aggregating network alerts from numerous monitoring
+a practical scenario, our network monitoring tools generated 16               tools and organizing them into clusters by time and location. We
+alerts within five minutes. Among these, an internet unreachability           refer to these clusters as incidents, which categorize the alerts ac-
+alert prompted the operators to address the issue. Upon initial               cording to type. Subsequently, incidents are prioritized based on
+inspection, they identified that 12 alerts originated from the same           severity, determined by associated traffic and customer data.
+location, while the remaining 4 were unrelated. Their attention was
+subsequently drawn to associated Syslog alerts regarding runtime                 The architecture of the SkyNet system is presented in Figure 5a.
+errors, ultimately determining that a software error caused the               SkyNet incorporates various data sources as input, and previous
+failure, which was subsequently reported to the device vendor.                research ensures the clarity and precision of these sources. Alerts
+                                                                              from these data sources include timestamps and location details.
+   Based on the above cases, when a network failure occurs, it is im-         Using a combination of heuristic and automated techniques, each
+perative for on-call network operators to immediately recognize its           alert is assigned a specific type, thus characterizing it by timestamp,
+presence. The manual process of identifying failures involves select-         location, and type.
+ing all relevant alerts to determine if any indicate potential network
+issues, such as packet loss, high transmission delay, or bit flips.              Utilizing the structured data, we initially filter alerts that align
+During this process, network operators are primarily concerned                with historical patterns and automatically apply SOPs. Subsequently,
+with the presence of certain alert types rather than their quantity.          SkyNet implements incident discovery to aggregate alerts into in-
+This procedure is laborious, and, in practice, network failures are           cidents, categorizing them by type. SkyNet then prioritizes the
+often detected by customers and reported through complaints.                  incidents based on their traffic impact on the affected network
+                                                                              and recommends the order in which they should be addressed. Fig-
+   Once a network failure is detected, network operators need to              ure 6 illustrates detailed examples of incidents identified by SkyNet.
+diagnose the issue. Unlike the detection phase, diagnosing requires           During the development and adjustment phases, it became evident
+identifying the presence of root cause alerts, including link failures,       that utilizing sufficient data sources along with a simple algorithm
+device malfunctions, and hardware or software error logs. The                 enables both high levels of accuracy and performance.
+redundancy design in our data center may prevent these root-cause
+alerts from impacting customers. However, if customers are affected,             Historically, when network failures occurred, on-call network
+network operators must diagnose the failure based on these alerts.            operators were required to manually sift through a deluge of alerts.
+Furthermore, if multiple network failures occur simultaneously,               They needed to filter out extraneous alerts and identify all relevant
+operators must prioritize addressing the most severe issue first.             ones. Given the substantial volume of alerts and limited human
+                                                                              processing capacity, this process was not only time-consuming but
+                                                                              also prone to errors. SkyNet automates this filtering and clustering
+
+                                                                         515
+SkyNet: Analyzing Alert Flooding from Severe Network Failures in Large Cloud Infrastructures                              SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+   Syslog       deduplicate       Heuristic rules   ...                  ISP           ...                        Root                                                    all alerts
+                               Automatic SOP(§7.3)                                     ...                                                                          failure alerts
+   SNMP            format                           Region                                         Region A Region B ... Region X                               behavior alerts
+                                Incident discovery                                  Device n                                                                  root cause alerts
+    Ping          combine         Localizer(§4.2)     City                                    City a  City b ... City x
+               Preprocessor                                  Device iii                                                                        100
+Out-of-band                      Location zoom-in                                             Logic
+monitoring          (§4.1)       Incident ranking    Logic Site                               site 1  Logic Logic         Alerts:              ratio(%)  75
+                                  Evaluator(§4.3)   Device ii                                         site 2 ... site n   failure: 1
+  In-band       Timestamp                           Site                                      Site I  Site II ... Site n  Abnormal: 0                    50
+ telemetry      Type                                                                                                      Root cause: 2
+                Location                              Device i                                                                                           25
+     ...
+   Route           Region                                                                          Cluster i Cluster ii ... Cluster n                    0
+monitoring         City
+Data sources       Logic site                       Cluster Cluster Cluster Cluster                   Incident 1          Incident 2                         failure     all
+                   Site
+                   Cluster                                                                                                                                   incidents incidents
+              Structured data
+
+              (a)                                                        (b)                                      (c)                                               (d)
+
+Figure 5: (a) System overview of SkyNet. (b) The hierarchy of our cloud network. (c) Hierarchical alert tree. (d) Correlation
+between incidents and different alerts.
+
+ Ping:                               Device i -> Site I Device iii -> Logic site 2    Locator                                                                            Logic site 2:
+ Packet loss at Device i!                                                                                                                                                 Traffic X :
+ Packet loss at Device ii!          Device ii -> Site II Device n -> Cluster n      Incident 1:                                                                             Customer x
+ Packet loss at Device i!                                                           [Region A | City a | Logic site 2][start time - end time]                             Traffic Y :
+ Packet loss at Device ii!                     Device Info                                                                                                                  Customer y
+ Packet loss at Device n!                                                            Syslog                     Out-of-band               Ping
+ ...                           Preprocessor                                          |- BGP link jitter (4)     - Inaccessable (680)      |- End to end ICMP (3)         Cluster n:
+                                                                                     |- hardware error (1)                                |- End to end Source (1)         Traffic Z :
+Out-of-band monitoring:         Type: [Ping][packet loss]                            - out of memory (2)        Syslog                    - End to end TCP (1)              Customer z
+Device i is inaccessible!       Time: 2024/07/02 11:45:14 ­ 11:48:10                                            |- Traffic blackhole (1)                                 ...
+Device ii is inaccessible!      Location:                                            SNMP                       |- Link flapping (8)          Failure alerts
+...                             Region A|City a|Logic site 2|Site I                  |- Traffic congestion (1)  |- Port flapping (3)                                     Traffic Info
+                                                                                     - Link down (6)            - BGP peer down (2)
+Syslog:                         Type: [Out-of-band][unreachable]                                                                                                           Evaluator
+Device i BGP break!             Time: 2024/07/02 11:45:11 ­ 11:48:05                   Root cause alerts          Abnormal alerts
+Device iii link down!           Location:                                                                                                                                Incident 1: 60.0
+Device n port down!             Region A|City a|Logic site 2|Site I|Cluster ii      Incident 2:                                                                          Incident 2: 9.5
+Device n software error!                                                            [Region A | City a | Logic site 2|site n|Cluster n][start time - end time]           ...
+                                Type: [Syslog][link down]
+SNMP:                           Time: 2024/07/02 11:45:27 ­ 11:47:59                 Syslog                     Syslog                    Ping                           Risk scores
+Device i traffic congestion!    Location:                                            |- port down (1)           - BGP peer down (1)       - End to end ICMP (1)
+Device ii port down!            Region A|City a|Logic site 2                         - software error (1)
+                                                                                                                  Abnormal alerts             Failure alerts
+        Alerts                  Type: [Syslog][port down]                              Root cause alerts
+                                Time: 2024/07/02 11:36:43 ­ 11:46:46                                                 Incidents
+                                Location:
+                                Region A|City a|Logic site n|Site n|Cluster n
+
+                                           Structured Alerts
+
+Figure 6: A running example showing how SkyNet processes alerts, groups alerts into incidents and ranks incidents by
+computing their risk scores.
+
+process, assisting network operators in addressing the most critical                               assumption that all monitoring tools are well designed, the raw data
+network failures first. This automation allows operators to concen-                                collected from them cannot be directly employed by SkyNet. The
+trate on root cause analysis of significant network issues without                                 differences between monitoring tools are highlighted as follows:
+being overwhelmed by irrelevant alerts. This transformative ad-
+vancement in network failure recovery has markedly decreased our                                   · Alert generation frequency varies among monitoring tools. For
+average recovery time.                                                                                instance, in our practice, Ping outputs one data point every 2
+                                                                                                      seconds, whereas Syslog produces a log only upon encountering
+4 Design                                                                                              an error. To equitably prioritize different monitoring tools, alert
+                                                                                                      frequencies must be normalized.
+In this section, with a running example(shown in Figure 6), we in-
+troduce how SkyNet works by three functional modules including                                     · The structure of location information differs. For example, the
+the preprocessor (§4.1), the locator (§4.2) and the evaluator (§4.3).                                 source device for Syslog and SNMP alerts is typically evident.
+                                                                                                      Conversely, other data sources, such as packet loss between two
+4.1 Preprocessor                                                                                      logical sites, are generally attributable to an intermediary link.
+                                                                                                      In such cases, the ping tool reports packet loss alerts for the
+The original data sources utilized by SkyNet are detailed in Table 2.                                 affected link.
+While the output alerts collected from network monitoring tools
+are typically well-structured, an alert ideally indicates when, where,
+and what is occurring in the network. However, even with the
+
+                                                                                              516
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                               Bo Yang et al.
+
+Data source                Table 2: Network monitoring tools used by SkyNet.
+
+Ping statistics             Description
+Traceroute statistics
+Out-of-band monitoring      Periodically records latency and reachability between pairs of servers
+Traffic statistics          Periodically records latency of each hop between pairs of servers
+Internet telemetry          Periodically collect device information from out-of-band, including liveness, CPU and RAM usage, etc.
+Syslogs                     Data from traffic monitoring system sFlow and netFlow.
+SNMP&GRPC                   Data from a monitoring system that ping Internet addresses from DC servers.
+In-band network telemetry   Errors detected by network devices.
+PTP                         Standard network protocol, including status and counters of interfaces, RX errors, CPU and RAM usage.
+Route monitoring            Sending test packets and collect information of devices bypassed.
+Modification events         System time of network devices out of Synchronization.
+Patrol inspection           Loss of default/aggregate route, route hijack and route leaking.
+                            Failure of network modification triggered automatically or manually.
+                            Run manual defined commands on network devices and collect result periodically.
+
+· Alert contents are varied. Syslog, for example, has thousands of                  After standardizing the data structure of the alerts, we encounter
+   types of command-line interface outputs. Furthermore, distinct                another challenge: the sheer volume of alerts. While each individual
+   monitoring systems present different alert contents.                          monitoring tool produces reasonable alerts, from the perspective of
+                                                                                 SkyNet, which evaluates the entire network to identify hotspots,
+   Given the potential integration of new monitoring tools in the                some alerts necessitate further processing. SkyNet primarily em-
+future, it is crucial to ensure the system's extensibility by defining a         ploys three methodologies to reduce the number of alerts.
+uniform input format and converting raw alert data into this format.             · Consolidate Identical Alerts: SkyNet may receive duplicate alerts
+SkyNet addresses the disparities among various data sources by
+transforming raw data into standardized data structures through                     from the same monitoring tool. For instance, if the CPU or RAM
+the following methods.                                                              usage of network devices is excessively high, or if there is sub-
+                                                                                    stantial traffic through an interface, SNMP might repeatedly gen-
+   To address the variation in frequency among different monitor-                   erate identical alerts. If a specific alert has been analyzed, SkyNet
+ing tools, the preprocessor aggregates similar alerts based on prior                disregards the subsequent ones. Otherwise, it updates the times-
+experience. For instance, SkyNet uses the start time of packet loss                 tamp of the initial alert.
+detected by ping as the alert timestamp, with subsequent alerts                  · Consolidate Alerts from a Single Data Source: Certain alerts
+contributing to a "duration" attribute that aids network operators.                 gain importance only when they exceed a specific threshold. For
+                                                                                    example, sporadic packet loss is ignored, while persistent packet
+   To explain how the location issue is resolved, prior knowledge                   loss is recorded. Moreover, some alerts are linked to associated
+must be introduced. The entire network, comprising both the WAN                     alerts; for example, a sudden traffic surge on an interface may
+and the DC network, is organized hierarchically, as shown in Fig-                   cause increased traffic through adjacent interfaces. SkyNet filters
+ure 5b. Each device is assigned a level in this hierarchy. Based on                 out these related alerts to streamline the analysis.
+our observations, if a failure occurs on a device, all devices at the            · Consolidate Alerts from Diverse Data Sources: Alerts from vari-
+lower levels are impacted, which helps evaluate the extent of a                     ous monitoring tools may not independently indicate a problem;
+network failure. Therefore, we associate alert information with the                 however, they might suggest an issue when combined with data
+hierarchical level of the device from which the alert is collected.                 from another tool. For example, a sudden decrease in port traffic
+An alert related to a link is split into two alerts corresponding to                is typically expected, but if it occurs alongside packet loss or a
+the devices it connects. In the example illustrated in Figure 6, the                Syslog error, it might suggest an abnormal decline in traffic.
+alerts from Devices i, ii, iii, and n are associated with Site I, Site II,
+Logic Site 2, and Cluster n, respectively.                                          Ultimately, the preprocessor generates a series of filtered, struc-
+                                                                                 tured alerts that include information such as alert type, time, and
+   For alerts collected from various network monitoring tools, it                location.
+is essential to separately consider the alert types. For tools with
+limited alert content, such as Ping for monitoring packet loss rates             4.2 Locator
+and SNMP for traffic monitoring, alert types are manually defined. To
+process Syslog, templates are employed to automatically convert                  When a network failure occurs, identifying the root cause begins
+command-line outputs into alert types. The template tree is con-                 with detecting the failure and understanding which alerts are asso-
+structed as follows: initially, it gathers command-line outputs from             ciated with it. Prior to the development of SkyNet, network failure
+all devices and breaks them down into individual words. Variable                 mitigation typically involved responding to custom complaints,
+words, such as addresses, interfaces, and numbers, are then removed              typical alert patterns, or alert floods. Subsequently, network op-
+using predefined regular expressions. The remaining words create                 erators inspect the links and devices that generated alerts or that
+templates for alert classification. An FT-tree [56] is constructed               are topologically adjacent. This involves connecting to the devices,
+using these templates, based on their frequency. The classification              reviewing logs, and executing status commands in a systematic
+process starts with manually assigning types to existing alerts. With            manner to identify and rectify the root cause. Based on our network
+hundreds of alert types to consider, we prioritize the most critical             operating experience, we have gathered the following insights:
+and complete the manual classification over several months. In
+practice, although severe failures are rare and unprecedented, these
+templates account for Syslog alerts during such events.
+
+                                                                            517
+SkyNet: Analyzing Alert Flooding from Severe Network Failures in Large Cloud Infrastructures             SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+· Multiple alerts appearing at the same location within a short              Algorithm 2: Tree generation
+   timeframe may indicate a network incident. A fundamental ap-
+   proach is to group alerts by both their time and location.                                 Data: main tree , incident trees 
+
+· Network alerts often propagate through topological links; if two                            Result: updated main tree  and incident trees 
+   adjacent devices generate alerts simultaneously, they likely share
+   the same root cause.                                                      1 for node    do
+
+· It is crucial for network operators to comprehend the full extent          2 if    . then
+   of a network failure in order to evaluate its scope and severity.
+                                                                             3                continue;
+   Utilizing the aforementioned insights, the proposed system, re-
+ferred to as SkyNet, employs a hierarchical alert tree structured by         4 failureAlerts, allAlerts = (.);
+the temporal and locational characteristics of alerts, known as the
+"main tree" (illustrated in Figure 5c). When a new alert is received,        5 if (  > 2)||( > 5)||
+SkyNet checks for the existence of its location node; if found, the
+alert is added to that node. Otherwise, a new node is created for            6 (  > 1&& > 3)|| then
+the alert(Algorithm 1). SkyNet continuously monitors these nodes,
+removing alerts that have expired, and assesses whether any nodes            7                for    do
+contain a sufficient number of alerts. The timeout threshold should
+be minimized to avoid associating unrelated alerts. However, if              8                if .  . then
+this threshold is set shorter than the alert delay, other alerts under
+the same node might expire before the delayed alert arrives. Con-            9                        . ();
+sidering that the maximum delay for alerts, due to SNMP on older
+network devices with CPU limitations, is approximately 2 minutes,            10                .. ();
+we have selected a 5-minute threshold to prevent data gaps caused
+by transmission errors or high CPU usage, which could lead to a              11               .. ( (.));
+maximum delay of approximately 4 minutes.
+                                                                             12                . (.);
+
+Algorithm 1: Alert node insertion                                            the main tree, the alerts collected from device n are attributed to a
+                                                                             different root cause. Consequently, two incident trees are stored.
+   Data: alert data , main tree , incident trees                             Subsequently, when a new alert arrives, the algorithm evaluates
+                                                                             both the main tree and any existing incident trees to determine
+   Result: updated main tree  and incident trees                             the appropriate location for the alert. If an incident tree for a node
+                                                                             already exists, the algorithm refrains from creating a new one. If
+1 for    do                                                                  no alerts are added to an incident tree for an extended period, the
+                                                                             incident tree times out. Theoretically, the timeout threshold is 5
+2 if .   then                                                                minutes(Algorithm 3), but as timeliness is not critical here, the
+                                                                             threshold is set to 15 minutes.
+3  . (.). ();
+                                                                                To determine whether there are sufficient alerts under a node,
+4  .  = .                                                                    it is essential to consider two potential issues that may arise from
+                                                                             merely counting the number of alerts associated with a node. First,
+5 else                                                                       the frequency of alerts from different data sources can vary. Some
+                                                                             alerts, such as "link down", are triggered only once, while others,
+6  if .  . then                                                              such as "packet loss", often appear in batches with diverse sources
+                                                                             and destinations. Second, the significance of alerts may differ. For
+7       . (.,  ());                                                          example, packet loss usually indicates that network service is com-
+                                                                             promised, whereas a sudden increase in delay might be only the
+8       . (.). ();                                                           result of concurrent access and could be automatically resolved.
+
+9       .  = .                                                                  To address the discrepancy in alert frequency, the proposed
+                                                                             method counts alerts based on their types. If multiple alerts of the
+10 if .   then                                                               same type are added to a node, they are counted only once.
+11 . (.). ();
+
+12 else
+13 . (.,  ());
+14 . (.). ();
+
+                                                                             Algorithm 3: Tree checking
+
+                                                                                              Data: main tree , incident trees 
+
+   The alert count for a node encompasses its own alerts as well as                           Result: updated main tree  and incident trees 
+those of its descendant nodes. If the number of alerts surpasses a
+specified threshold, the subtree beneath the node is replicated from         1 for node    do
+the main tree and designated as an "incident tree". However, as
+network alerts propagate through topology links, when calculating            2 if . > . + 300 then
+alerts, the algorithm only considers alerts within the area connected
+to the root node of the incident tree(Algorithm 2). For instance,            3                . ();
+in Figure 5c, alerts are raised solely by the nodes enclosed in red
+rectangles. Since device n is isolated from other alerting nodes in          4 for    do
+
+                                                                             5 if . > .  then
+
+                                                                             6                . ();
+
+                                                                        518
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                             Bo Yang et al.
+
+   In addressing the issue of varying alert importance, SkyNet                  into a single alert. This means we focus solely on the types of alarms
+categorizes alerts into three levels:                                           occurring within an incident's scope, irrespective of their origin.
+                                                                                This method reduces false positives, as demonstrated in §6.3.
+· Failure alerts: These occur when network behavior is definitively
+   abnormal, including instances of packet loss, packet bit flip, and              The output of the locator, illustrated in Figure 6, displays the
+   high packet transmission latency.                                            incidents. Each incident report includes the time and location of
+                                                                                the incident, along with the alerts associated with it, categorized
+· Abnormal alerts: These are triggered by irregular network packet              into three types.
+   behaviors such as jitter, sudden increases in latency, or abrupt
+   decreases in flow. They do not directly imply network failures.              4.3 Evaluator
+
+· Root cause alerts: These indicate failures of network entities,               In production settings, minimizing losses requires prioritizing the
+   such as device or NIC failures, link outages, CRC errors, or risky           resolution of failures that impact the most crucial services. A straight-
+   routing paths.                                                               forward approach is to analyze the affected workflows based on
+                                                                                time frames and the locations of grouped incidents. However, sim-
+   To illustrate the differences and relationships among these alert            ply grouping alerts into incidents provides network operators with
+types, consider the following example: Imagine a router in the net-             information only about the occurrence of incidents, without indi-
+work suddenly fails, redirecting its traffic through a backup router,           cating their severity. For instance, consider one link experiencing
+leading to congestion and subsequent packet loss. Packet loss is                5% packet loss and another link with 50% packet loss. Both can be
+absolutely faulty and thus classified as a failure alert. Concurrently,         monitored using tools like Ping, with packet loss alerts generated,
+there is a sudden decrease in traffic on the failed router and a sharp          yet they differ significantly in severity. When multiple incidents
+increase on the backup router. These abrupt changes are classified              occur simultaneously, the network operator might not prioritize
+into abnormal alerts as they might be expected due to user behav-               the most severe one accurately.
+ior. However, identifying packet loss and sudden traffic changes
+alone does not directly guide network operators in resolving the                   A real-world example from our network illustrates this issue.
+issues. It is the root cause alerts, such as the notification of a device       Two incidents happened concurrently at different locations. One
+failure, that specify the precise solution. Network operators then              incident affected a larger number of network devices, generating
+understand they must repair the malfunctioning device based on                  more alerts, whereas the other involved fewer devices but affected
+this alert.                                                                     more critical customers. The network operator focused on resolving
+                                                                                the incident with more alerts, causing a delay in addressing the
+   As discussed in §2.4, failure alerts are considered the most au-             second, more critical incident, resulting in unnecessary financial
+thoritative during incident detection, while the others are regarded            and reputational losses.
+as less significant. Historical network failure records support the
+greater importance of failure alerts in incident detection. As illus-              Thus, SkyNet provides a quantitative assessment of incident
+trated in Figure 5d, although the overall incidence of failure alerts is        severity, prioritizing incidents to help network operators address
+relatively low, nearly all network failure incidents are accompanied            the most critical issues first. The severity of incidents is evaluated
+by these alerts, highlighting their positive correlation with network           based on the following criteria:
+failures.
+                                                                                · Packet Loss Ratio: This includes packet loss ratios determined
+   Given this correlation, failure alerts are of paramount importance              by both Ping and sFlow, as packet loss directly impacts service
+in incident detection. The threshold for incident tree generation                  quality. We use the packet loss ratio to normalize the packet loss
+is set at either two failure alerts, one failure alert plus two other              rate collected by sFlow under varying traffic conditions, rather
+alerts, or five alerts of any type. These thresholds were determined               than relying solely on the packet loss rate.
+through experiments detailed in §6.3 and are consistent across all
+location layers. Although it might be assumed that higher-level                 · Link Break Ratio: Devices connect to link sets for redundancy
+thresholds should be set higher to filter noise from lower-level                   purposes. While a break in some links within a set may not
+nodes, in practice, SkyNet often identifies a single alert, such as                directly cause packet loss, it can reduce the total bandwidth,
+a port or device down, as the root cause for a complete failure.                   thereby affecting service quality during traffic surges.
+Consequently, each alert is treated with importance by maintaining
+uniform thresholds across layers.                                               · Importance of Affected Customers: Customers who purchase
+                                                                                   services with higher stability expectations should experience
+   Despite having equal significance in incident detection, abnor-                 minimal downtime. The impact on affected customers is deter-
+mal alerts and root cause alerts require different approaches from                 mined using traffic data collected via Netflow.
+our operators to resolve incidents. Specifically, root cause alerts
+are more critical during manual mitigation procedures. Therefore,               · Duration of the Incident: Ignoring an incident indefinitely is
+SkyNet categorizes them into two levels to aid network operators.                  unreasonable, even if its impact is mild. Adhering to our ser-
+                                                                                   vice level agreements (SLA), prolonged recovery times cause
+   In practice, random events can generate numerous alerts. For                    significant financial and reputational losses.
+instance, if a device probe used for activity detection encounters an
+error, it may trigger numerous identical device down alerts. These                 With the information above, the severity  of an incident  is
+alerts can easily surpass the incident threshold, causing false alarms          calculated using Equations 1-3.
+and increasing the workload for our network operators. To mitigate
+this, we consolidate alarms of the same type from different devices                  
+
+                                                                                     
+
+                                                                                 = max 1,  +     (1)
+
+                                                                                 =1   =1
+
+                                                                           519
+SkyNet: Analyzing Alert Flooding from Severe Network Failures in Large Cloud Infrastructures  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+             Packet loss hot spot - Cluster                Packet loss rate        · A focal point is identified within the reachability matrix calcu-
+                                                                                      lated by the Ping tool. Using the end-to-end reachability teleme-
+Cluster o    0    0    15.49                         0     0                          try results produced by Ping, a reachability matrix is constructed.
+                                                                                      For example, in the illustrative scenario, the reachability matrix,
+Cluster i    0    0    17.12                         0     0                          depicted in Figure 7, allows zooming into Cluster II. Source-
+                                                                                      destination pairs exhibiting high packet loss rates are indicated
+Cluster ii 4.12   8.3                        0       6.64  9.35                       by dark colors. A column and a row shaded in dark colors pin-
+                                                                                      point the precise location of the incident after zoom-in. The
+Cluster iii  0    0                          6.05    0     0                          reachability matrix vary in granularity from cluster to region.
+
+Cluster iv   0    0                          3.38    0     0                       · The sFlow detects packet loss, with all affected devices trac-
+                                                                                      ing back to a node within the incident tree. Thus, the incident
+Cluster v    0    0                          8.32    0     0                          location is refined to this specific node.
+
+             Cluster o Cluster i Cluster ii          Cluster iii Cluster iv        · In-band network telemetry generate test flows with desig-
+                                                                                      nated DSCP values to compare input and output rates. A dis-
+             Figure 7: A reachability matrix example.                                 crepancy between these rates indicates packet loss. Should the
+                                                                                      affected devices correlate with a node in the incident tree, the
+Table 3: Explanation of symbols used to evaluate incident.                            zoom-in process identifies this as the incident location.
+
+Symbol       Explanation                                                              There may be instances where the location cannot be further
+                                                                                   refined. In such cases, emergency procedures revert to the general
+             The total num of circuit set related to the incident                  location of the incident. The evaluator's output assigns a severity
+             The break ratio of circuit set                                        score. In this running example, incident 1 has a severity score of 60,
+             The ratio of SLA flows beyond limit on circuit set                    whereas incident 2 scores 9.5. Consequently, our network operators
+             The importance factor of customers related to circuit set             prioritize addressing incident 1.
+             The number of customers related to circuit set 
+             The average ping packet loss rate                                     5 Deployment Experience
+             The max average SLA flow rate beyond limit
+             The alert lasting time                                                SkyNet has operated stably within our global network infrastruc-
+             The number of important customers                                     ture for one and a half years and detected  (10) severe network
+                                                                                   failures.1 It has expedited the processes of network failure detec-
+                                                                                   tion and localization, ultimately reducing failure mitigation time.
+ = max log 1 ( + ( )) , log 1 ( + ( )) (2)                                         We present case studies demonstrating SkyNet's assistance to our
+                                                                                   network operators and examine its extensibility based on our de-
+                                                                                   ployment experiences.
+
+                   =  ·                                                  (3)       5.1 Case Study
+
+   Table 3 clarifies the symbols used in the equations, each corre-                We demonstrate the capabilities of SkyNet by analyzing its perfor-
+sponding to variables within the evaluated incident's context. For                 mance in four incidents involving simple, concurrent, and severe
+redundancy purposes, all links connecting network devices consist                  failures.
+of multiple circuits, each is called a circuit set.
+                                                                                   Automatically SOP for known failures. As illustrated in Fig-
+   To make it easier to understand, we split the incident severity                 ure 2a, SkyNet detected various alerts from a network device,
+calculation into two parts. The first part is impact factor  , illus-              including packet loss, Syslog errors, and abnormal SNMP counter
+trating the impact on significant users, calculated by Equation 1.                 statistics. No other devices in the same group triggered alerts. Con-
+The impact factor  increases as the number of circuit sets used by                 sequently, SkyNet generated an incident report exclusively for
+important users that experience breaks or overloads increases. With                this device and initiated an automatic SOP, successfully isolating
+a maximum function, we ensure that the severity remains non-zero,                  it. Our network operators later verified the correctness of the au-
+even when no critical customers are affected. The second part is                   tomatic isolation. The entire mitigation process was completed in
+time factor  , calculated by Equation 2. The time factor  demon-                   approximately one minute without manual intervention.
+strates that severity escalates with the incident's duration, ensuring
+all incidents eventually capture the attention of network opera-                   Multiple scene detection. Last year, we experienced a DDoS
+tors. An increased average packet loss rate accelerates this growth.               attack targeting five different locations simultaneously. Without
+The sigmoid function (represented by ) significantly influences                    SkyNet, our network operators would have needed to manually
+severity when only a few key users are affected but stabilizes when                correlate the abrupt traffic increases. By clustering the alerts by
+many important users are impacted, thus preventing false alarms                    location, SkyNet generated five separate incidents, indicating the
+due to jitter. With this time factor  , critical incidents are promptly            attacks were unrelated. With this information, our network opera-
+highlighted, ensuring attention while excluding incidents resolved                 tors quickly implemented IP blocking for all five regions efficiently
+by transient jitter.                                                               and comprehensively. Without SkyNet, although manual diagnosis
+
+Location zoom-in. To maintain manageable control over incident                     1We omit the absolute numbers for confidential reasons.
+areas and prevent the average packet loss rate from being influenced
+by unrelated links, our method employs behavior monitoring tools
+to conduct a "location zoom-in". This approach aids in accurately
+identifying the exact location of the incident.
+
+   The location zoom-in is triggered under the following conditions:
+
+                                                                              520
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                                  Bo Yang et al.
+
+can manage alert floods and identify a DDoS attack, it is possible             6.1 Coverage
+to overlook certain attack points, thereby increasing recovery time
+and causing greater damage.                                                    Initially, we have demonstrated that no single network monitoring
+                                                                               tool is sufficient to address all network failures, shown in Figure 3.
+Scene ranking. On one occasion, two network failures occurred
+nearly simultaneously. SkyNet successfully detected both, gener-                  In our analysis, we systematically removed data sources, begin-
+ating two incidents. Although one incident covered a larger ge-                ning with those having low coverage and progressing to those with
+ographical area and included more alerts, SkyNet identified the                high coverage. This allowed our network operators to manually
+other incident as more urgent based on the traffic and service impor-          evaluate SkyNet's false positives and false negatives. As depicted
+tance. This prioritization enabled our network operators to address            in Figure 8a, a reduction in the number of data sources minimally
+the more critical incidents first. Without SkyNet, network oper-               impacts false positives but leads to an increase in false negatives,
+ators may be distracted by minor yet more conspicuous failures,                pointing to potentially overlooked failures. While false positives
+potentially resulting in increased losses.                                     mainly impose additional workload on network operators and can
+                                                                               be tolerated within certain limits, it is vital to minimize false nega-
+Fine-grained localization. Following the deployment of SkyNet,                 tives. Thus, integrating as many data sources as possible is crucial
+a similar failure occurred as described in §2.2, involving another             to ensuring comprehensive coverage.
+broken Internet entrance cable. SkyNet consolidated the related
+alerts into a single incident and, using the reachability matrix de-           6.2 Preprocessing
+rived from ping data, identified the data center entrance as the
+likely failure point. Relevant alerts, including link-down notices,            The alert preprocessing occurs through a stream processing mech-
+were effectively grouped and displayed. The mitigation time was                anism. Consequently, evaluating the time required to preprocess
+reduced to just a few minutes, including cable repairs, compared               an individual alert is not meaningful. Instead, our evaluation em-
+to several hours in the case outlined in §2.2, representing a near             phasizes how effectively the preprocessing tool reduces the overall
+two-orders of magnitude reduction in recovery time.                            volume of alerts. We collect logs from all monitoring tools over
+                                                                               several hours and process them using the preprocessing stream.
+5.2 Extensibility                                                              On average, the system generates approximately 100,000 alerts per
+                                                                               hour before preprocessing. The preprocessing tool typically reduces
+The initial input format of SkyNet was limited to data sources such            this number to fewer than 10,000 under normal conditions and to
+as SNMP, Syslog, and device detection. Over the past eight years,              fewer than 50,000 in more extreme circumstances. The resulting
+additional data sources, including route monitoring, end-to-end                performance benefits are substantial.
+ping, modification events, and GRPC, have been iteratively in-
+corporated. The seamless integration of these new data sources                    The locator leverages the preprocessor output to identify in-
+demonstrates the extensibility of SkyNet, suggesting its potential             cidents hourly. In the worst-case scenario, it takes less than 10
+to accommodate even more data sources in the future.                           seconds to locate failures, which is significantly below our minute-
+                                                                               level Service Level Agreement (SLA). In addition, there is a positive
+6 Performance Evaluation                                                       correlation between the time required and the number of alerts.
+                                                                               Without the preprocessor, the time to locate failures can extend to
+We conducted a series of experiments to evaluate SkyNet, aligning              several minutes, which is ineffective for mitigating network issues.
+with the goals outlined in §2.5. Initially, we establish the necessity
+of integrating multiple data sources with SkyNet to achieve exten-             6.3 Accuracy
+sive network failure coverage (§6.1). Subsequently, we examine the
+preprocessor's impact on reducing alerts and evaluate its advan-               We assessed the accuracy of SkyNet using various incident detec-
+tages by presenting the time required for incident detection (§6.2).           tion parameters. The results are depicted in Figure 9. The x-axis
+Furthermore, we demonstrate the accuracy of the locator, includ-               uses the format / +/, representing incident generation thresh-
+ing its false positive and false negative rates (§6.3). By adjusting           olds as " failure alerts", " failure alerts and  other alerts" or "
+the incident thresholds, we elucidate the criteria for their deter-            any alerts". In production, the parameters currently set for SkyNet
+mination based on accumulated experience. We also compare the                  are "2/1 + 2/5". A parameter set to 0 indicates the corresponding
+severity scores of all incidents with failure incidents, evidencing the        threshold is disabled. While some false positives bringing extra
+evaluator's effectiveness in filtering trivial incidents (§6.4), thereby       solving time can be tolerated, minimizing false negatives causing
+diminishing the workload of network operators. Finally, we deliver             undetected failures is crucial and ideally should be eliminated.
+an overall assessment of SkyNet by comparing the network failure
+mitigation times pre- and post-deployment in our network.                      Type and location. As mentioned in §4.2, SkyNet, by default,
+                                                                               consolidates multiple alerts of the same type at different locations
+Experiment setup. SkyNet was deployed on a server using an                     into a single alert. The "type and location" data refer to incident de-
+Intel Xeon Platinum 8260 CPU(2.40 GHz), with 96 cores and 32 GB                tection results treating alerts of the same type at different locations
+of RAM for all performance evaluations. The dataset utilized for               as distinct alerts. Although this approach avoids false negatives, it
+the evaluation comprised alerts collected from our real production             increases false positives from less than 20% to 70%, imposing an
+network, as described in 1, consisting of  (105) network devices,              additional burden on network operators.
+over the past one and a half years. The alerts are raised by over 10
+network monitoring tools shown in Table 2                                      Disabling Thresholds. As noted in §4.2, all three thresholds are
+                                                                               justified. Disabling any of these thresholds results in higher false
+                                                                               negatives.
+
+                                                                          521
+SkyNet: Analyzing Alert Flooding from Severe Network Failures in Large Cloud Infrastructures                   SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+                    25  false positive                                                                    40000
+
+                                                                                                          30000                                 6
+
+                                                                                                          20000                                 4
+
+                                                                                                          10000                                 2
+
+                                                                                                                 0                              0
+                                                                                                                     0 100000 200000 300000        0 10000 20000 30000 40000
+                                                                                                                          before preprocessing                     alert num
+
+                                                                                                                              (b)                                 (c)
+                    20  false negative                      after preprocessing
+                                                                                                                               locating time/s
+          ratio(%)  15
+
+                    10
+
+                    5
+
+                    0
+
+                        All  6          4  3
+
+                             data sources
+
+                             (a)
+
+Figure 8: (a) Locating accuracy vs data source number. (b) Alert num before and after preprocessing. (c) The time cost of locating.
+
+          100                               false positive                                                     Compared to mitigation efforts without SkyNet, the time required
+                                           false negative                                                      for network failure resolution has significantly decreased. Figures
+ratio(%)  75                                                                                                   on mitigation time statistics, both with and without SkyNet, are
+                                                                                                               shown in Figure 10c. Both the median and maximum mitigation
+          50                                                                                                   times have been reduced by more than 80% due to SkyNet.
+
+          25                                                                                                      The median mitigation time is reduced from 736s to 147s, and the
+                                                                                                               maximum mitigation time is from 14028s to 1920s, but we cannot
+      0                                                                                                        directly post these detailed numbers.
+type+locat0io/n1+22//50+02th//51re+s21h//o01l+d22(/b/51iz+/22b//i41z++12o//t51h+e2r2///a51l+l)32//51+2/6
+                                                                                                               7 Lessons and Discussion
+          Figure 9: Accuracy with different parameters.
+                                                                                                               Here we share some experience on consolidating our network mon-
+Adjusting parameters. We also experimented with adjusting the                                                  itoring system, and what we are doing now to further improve
+thresholds and determined that the current settings used by SkyNet                                             SkyNet.
+provide the lowest false positives while maintaining zero false
+negatives, thereby achieving the optimal balance between false                                                 7.1 Visualization
+positives and false negatives.
+                                                                                                               To provide network operators with an intuitive understanding of
+6.4 Evaluator                                                                                                  network incidents, we have developed a visualization frontend for
+                                                                                                               SkyNet, as depicted in Figure 11. In this graph, nodes symbolize
+Indeed, even when incidents are grouped by locator, hundreds of                                                network devices, while edges represent the connections between
+network events occur monthly, though only a few truly consti-                                                  these devices. The temporal and spatial scope of the graph is de-
+tute harmful network failures. This volume can be overwhelming                                                 limited by incidents identified by SkyNet. Devices and links are
+for network operators to manage. It should be noted that not all                                               highlighted based on the outcomes of alert voting; an alert gener-
+high-risk incidents culminate in network failures, thanks to our                                               ated by a device or link registers a vote for itself and the connected
+high-availability design, which incorporates redundant links and                                               links or devices. In severe incidents, the visualization frontend aids
+devices. Nevertheless, high-risk incidents are more likely to impact                                           network operators in swiftly localizing the root cause. For example,
+our customers. We have configured a severity threshold in the eval-                                            during a logic-site incident last year involving multiple devices at
+uator, allowing SkyNet to only trigger alerts for incidents whose                                              the logic-site level, the visualization frontend identified the device
+severity exceeds this threshold. This threshold is determined based                                            with the highest voted score as a reflector, which is not a com-
+on historical experience. Over the past nine months, we gathered                                               mon logic-site level device. As a result, the failure was promptly
+network incidents identified by SkyNet, then had our network op-                                               mitigated, effectively reducing its duration.
+erators select those attributable to network failures. The results are
+depicted in Figure 10a. For clarity, we capped the maximum sever-                                              7.2 Heuristic Rules
+ity score at 100. Generally, the severity scores for failure-related
+incidents are higher than those for all incidents. To avoid false                                              Before implementing SkyNet, we deployed a network diagnosis
+negatives, we set the severity threshold score to 10, which reduces                                            and mitigation system based on heuristic rules manually formulated
+the number of incidents by almost two orders of magnitude, as illus-                                           from historical failures. The following example illustrates the rule
+trated in Figure 10b. After applying this filter--while ensuring no                                            operation:
+false negatives--the average number of incidents falls to fewer than                                           · If a device within a group is detected to be losing packets.
+one per day, which effectively alleviates the analytical workload of                                           · If other devices within this group do not generate alerts.
+network operators regarding network failures.                                                                  · If the total traffic through this group is below a specified thresh-
+
+   During its nine-month stable operation, SkyNet has assisted                                                    old.
+our network operators in mitigating approximately ten failures.
+
+                                                                                                          522
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                                                                                                                  Bo Yang et al.
+
+     100                                                                           all incidents
+                                                                             severe incidents
+
+                                                              4 5 6 7 8 9 10 11 12
+                                                                                        month
+
+                                                                                 (b)
+     80severity score                                 1000
+                                                       incident num100
+     60                                                  10
+                                                                                                                                                     mitigation time1
+     40
+
+     20
+
+     0
+
+          All  Failure                                                                                                                                                before after
+                                                                                                                                                                      SkyNet SkyNet
+          incidents incidents
+                                                                                                                                                                             (c)
+          (a)
+
+Figure 10: (a) Severity score of network incidents. (b) Incident number before and after filter counted by month. (c) Comparison
+of mitigation time before and after deploying SkyNet.
+
+          DCBR_HDSC-ABGP_SEC BSR_ABTN_CITY1 BSR_ABTN_CITY2 BSR_ABTN_CITY3 BSR_ABTN_CITY4 BSR_ABTN_CITY5                                                               BSR_ABTN_CITY6
+
+               DCBR            BSR                            BSR       BSR                     BSR       BSR                                                             BSR
+
+                                                                            BSR
+
+                                                                        BSR_ABTN_CITY7
+
+                                                      ISR          ISR                                 ISR
+
+                                                      NA61-BUS1-ISR-G1 NA61-MASTER-ISR-G1       NA62-MASTER-ISR-G1
+
+CSR       CSR        CSR                              CSR          CSR                     CSR       CSR            CSR                                               CSR             CSR
+
+NA175-MASTER-CSR-G1 NA175-BUS1-CSR-G1 NA175-VM-CSR-G1 NA61-MASTER-CSR-G1 NA61-VM-CSR-G1 NA62-MASTER-CSR-G1 NA62-QSA-CSR-G1 NA62-VM-CSR-G1 NA63-VM-CSR-G1 NA63-MASTER-CSR-G1
+
+                                                      Figure 11: Visualization of SkyNet.
+
+   When these conditions are met, the monitoring system diag-                are collected, such as device errors or interface failures. In an in-
+noses a device-induced packet loss and devises a plan to isolate             cident last year, both an unbalanced hash and device hardware
+the faulty device. If any conditions are unmet, mitigation is not            error jointly caused a network failure. Contrary to expectations,
+initiated. Concurrently, a rollback plan is prepared, enabling net-          the device hardware error was not the initial alert; instead, a BGP
+work operators to manually revert actions to prevent incorrect               link break alert was the first to occur, followed by an flood of packet
+mitigation. Despite the operators having developed nearly 1,000              drop and device unreachable alerts. Several minutes later, SkyNet
+rules, it remains challenging to address every network failure with          received a syslog indicating the device had encountered a hardware
+these rules alone. For instance, last year we encountered a failure          error, which is finally proved to be the root cause of the incident.
+in which all entry links to a data center were broken. This situa-           Based on these observations, we choose not to use time series to
+tion was unprecedented, thus no heuristic rule could effectively             decide the relationship between alerts, but use a alert tree with
+address it. However, SkyNet rapidly identified that the alerts were          time-out window to associate alerts and detect incidents.
+concentrated on a single data center, enabling resolution within
+15 minutes. Currently, our network employs both heuristic rules              8 Related Work
+and SkyNet, with minor network issues typically resolved by the
+heuristic system and severe failures addressed by SkyNet.                    Network monitoring tools. To do fast network failure mitigation,
+                                                                             we should start from network monitoring tools [3, 6, 10, 15, 17, 18,
+7.3 Time-series relationship among alerts                                    27, 35­38, 42, 50, 60]. We define the network monitoring tools here
+                                                                             as the works using various techniques to get aware of the status
+In common sense, time series analysis is employed to establish               of the network. The outputs are information possibly related to
+causal relationships between alerts, where the first alert is seen           network failures, for example, packet-level or flow-level reachability
+as the root cause, and subsequent alerts are considered effects.             issues, device level hardware or software errors. Some of these
+However, this approach is not always reliable in practice. Usually           works [7, 19, 24, 34, 55] have the ability of zooming the root cause
+network behavior is affected first, then the logs of root cause alerts
+
+                                                                        523
+SkyNet: Analyzing Alert Flooding from Severe Network Failures in Large Cloud Infrastructures  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+of failure into a specific link or device, and even mitigate it, but as           Integration with LLM. The use of SkyNet is not inconsistent
+we mentioned before, because they only depends on single data                     with failure localization tools that rely on large language models
+source, they may have limitation of coverage. On the other hand,                  (LLMs). On the contrary, the time and location data extracted from
+in the view of SkyNet's workflow, the output of them is the input                 incidents identified by SkyNet can serve as valuable inputs for
+of SkyNet's preprocessor.                                                         LLMs. In theory, SkyNet truncates the monitoring results to main-
+                                                                                  tain compliance with the LLM input length constraints without
+   Meanwhile, there are other works focusing on optimizing the                    sacrificing valuable information. We are currently exploring the
+existing network monitoring tools to improve their performance,                   integration of SkyNet and LLMs to enhance the precision of root
+granularity, reliability and availability [4, 8, 13, 14, 16, 21­23, 26, 30,       cause localization in network failures.
+31, 41, 45, 52, 53, 58, 59]. Although they does not import new data
+sources to SkyNet, the improvement of data quality also improves                  Acknowledgements
+the accuracy of SkyNet.
+                                                                                  We acknowledge all teams within Alibaba Cloud that contributed
+Network diagnosis systems. Not all of them directly collect in-                   to the success of SkyNet, including the Network Automation, Net-
+formation from the network, but they analyze the information col-                 work Operation, and Network Systems, to name a few. We thank
+lected by network monitoring tools [12, 28, 29, 40, 46, 49], and trying           our shepherd, Ryan Beckett, and the SIGCOMM reviewers for their
+to point out the root cause of network failures. Other tools [33, 48,             insightful comments. Ennan Zhai and Tao Lin are the corresponding
+61] recommends mitigation plans with least impact to network                      authors.
+services in the given range of some heuristic operations. Due to
+the limitation of data sources or heuristic diagnosis rules, they                 This work does not raise any ethical issues.
+cannot meet our demand on coverage or cannot solve the alert
+flooding issue. The difference and relationship between SkyNet                    References
+and LLM-based solutions [5, 44, 47] has already been discussed in
+§2.3.                                                                              [1] 2024. Annual Outage Analysis 2024 - Uptime Institude. https://uptimeinstitute.
+                                                                                        com/resources/research- and- reports/annual- outage- analysis- 2024.
+Incident prioritizing. There are many existing works [25, 32, 43,
+51, 57] that evaluate the severity and priority of bugs in general                 [2] 2025. Alibaba Cloud's Global Infrastructure. https://www.alibabacloud.com/en/
+programs and systems. However, there are few works specifically                         global- locations.
+aims at evaluating the severity of network failures. DeepIP [9] use
+the history data to train a model with deep learning to evaluate the               [3] Aijay Adams, Petr Lapukhov, and J Hongyi Zeng. 2016. NetNORAD: Trou-
+severity of network incidents. But for severe network failures it is                    bleshooting networks via end-to-end probing. Facebook White Paper (2016).
+impossible to get enough history data for model training therefore
+we can only use heuristic way like in SkyNet.                                      [4] Anup Agarwal, Zaoxing Liu, and Srinivasan Seshan. 2022. {HeteroSketch}:
+                                                                                        Coordinating network-wide monitoring in heterogeneous and dynamic networks.
+9 Conclusion and Future Work                                                            In 19th USENIX Symposium on Networked Systems Design and Implementation
+                                                                                        (NSDI 22). 719­741.
+This paper presents SkyNet, a practical network monitoring sys-
+tem with high coverage of network failures by importing various                    [5] Toufique Ahmed, Supriyo GHOSH, Chetan Bansal, Tom Zimmermann, Xuchao
+network monitoring data sources. SkyNet avoid alert flooding                            Zhang, and Saravan Rajmohan. 2023. Recommending Root-Cause and Mitigation
+by clustering network alerts into incidents, filtering network fail-                    Steps for Cloud Incidents using Large Language Models. In 2023 IEEE/ACM
+ures which are not urgent. SkyNet has been stably running in our                        45th International Conference on Software Engineering (ICSE 2023). https:
+network over the past nine months, reducing the network failure                         //www.microsoft.com/en- us/research/publication/recommending- root- cause-
+mitigation time by over 80%. We are actively working on importing                       and- mitigation- steps- for- cloud- incidents- using- large- language- models/
+more data sources into SkyNet to further improve its coverage and
+reliability, and adjusting parameters to reduce false positives.                   [6] Ghazanfar Ali, Jon R. Hass, Alan Sill, Elham Hojati, Tommy Dang, and Yong
+                                                                                        Chen. 2022. Redfish-Nagios: A Scalable Out-of-Band Data Center Monitoring
+   Our future work would focus on the following directions.                             Framework Based on Redfish Telemetry Model. In SNTA@HPDC 2022, Fifth Inter-
+                                                                                        national Workshop on Systems and Network Telemetry and Analytics, Minneapolis,
+More data sources. To enhance the coverage of SkyNet, we are                            MN, USA, 30 June 2022, Massimo Cafaro, Jerry Chou, Jinoh Kim, and Alex Sim
+currently integrating additional network monitoring data sources,                       (Eds.). ACM, 3­11. doi:10.1145/3526064.3534108
+such as user-side telemetry, which transmits telemetry packets
+from users' clients to the data center. For our newly designed SRTE                [7] Behnaz Arzani, Selim Ciraci, Luiz Chamon, Yibo Zhu, Hongqiang Harry Liu, Jitu
+network, we are utilizing a label-based testing tool to periodically                    Padhye, Boon Thau Loo, and Geoff Outhred. 2018. 007: Democratically finding
+verify link reachability. After being structured, the alerts raised by                  the cause of packet drops. In 15th USENIX Symposium on Networked Systems
+these tools can be simply injected into SkyNet.                                         Design and Implementation (NSDI 18). 419­435.
+
+Better thresholds. SkyNet employs several experience-based                         [8] Ran Ben Basat, Sivaramakrishnan Ramanathan, Yuliang Li, Gianni Antichi,
+thresholds, including those for alert numbers in incident gener-                        Minian Yu, and Michael Mitzenmacher. 2020. PINT: Probabilistic in-band network
+ation and severity scores in evaluation. In the future, with the                        telemetry. In Proceedings of the ACM SIGCOMM 2020 Conference. 662­680.
+accumulation of more experiential data, it will be possible to imple-
+ment AI solutions, such as deep learning, to develop more precise                  [9] Junjie Chen, Shu Zhang, Xiaoting He, Qingwei Lin, Hongyu Zhang, Dan Hao,
+and dynamically adaptive thresholds.                                                    Yu Kang, Feng Gao, Zhangwei Xu, Yingnong Dang, et al. 2020. How incidental
+                                                                                        are the incidents? characterizing and prioritizing incidents for large-scale online
+                                                                                        service systems. In Proceedings of the 35th IEEE/ACM International Conference on
+                                                                                        Automated Software Engineering. 373­384.
+
+                                                                                  [10] Rui Ding, Xunpeng Liu, Shibo Yang, Qun Huang, Baoshu Xie, Ronghua Sun, Zhi
+                                                                                        Zhang, and Bolong Cui. 2024. RD-Probe: Scalable Monitoring With Sufficient
+                                                                                        Coverage In Complex Datacenter Networks. In Proceedings of the ACM SIGCOMM
+                                                                                        2024 Conference. 258­273.
+
+                                                                                  [11] Yiran Ding, Li Lyna Zhang, Chengruidong Zhang, Yuanyuan Xu, Ning Shang,
+                                                                                        Jiahang Xu, Fan Yang, and Mao Yang. 2024. Longrope: Extending llm context
+                                                                                        window beyond 2 million tokens. arXiv preprint arXiv:2402.13753 (2024).
+
+                                                                                  [12] Jiaqi Gao, Nofel Yaseen, Robert MacDavid, Felipe Vieira Frujeri, Vincent Liu,
+                                                                                        Ricardo Bianchini, Ramaswamy Aditya, Xiaohang Wang, Henry Lee, David Maltz,
+                                                                                        et al. 2020. Scouts: Improving the diagnosis process through domain-customized
+                                                                                        incident routing. In Proceedings of the ACM SIGCOMM 2020 Conference. 253­269.
+
+                                                                                  [13] Yilong Geng, Shiyu Liu, Zi Yin, Ashish Naik, Balaji Prabhakar, Mendel Rosenblum,
+                                                                                        and Amin Vahdat. 2019. {SIMON}: A simple and scalable method for sensing,
+                                                                                        inference and measurement in data center networks. In 16th USENIX Symposium
+                                                                                        on Networked Systems Design and Implementation (NSDI 19). 549­564.
+
+                                                                             524
+SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal                                         Bo Yang et al.
+
+[14] Mojgan Ghasemi, Theophilus Benson, and Jennifer Rexford. 2017. Dapper: Data             [35] Diana Andreea Popescu and Andrew W Moore. 2017. PTPmesh: Data center
+      plane performance diagnosis of tcp. In Proceedings of the Symposium on SDN                   network latency measurements using PTP. In 2017 IEEE 25th International Sympo-
+      Research. 61­74.                                                                             sium on Modeling, Analysis, and Simulation of Computer and Telecommunication
+                                                                                                   Systems (MASCOTS). IEEE, 73­79.
+[15] Chuanxiong Guo, Lihua Yuan, Dong Xiang, Yingnong Dang, Ray Huang, Dave
+      Maltz, Zhaoyi Liu, Vin Wang, Bin Pang, Hua Chen, et al. 2015. Pingmesh: A              [36] Arjun Roy, Hongyi Zeng, Jasmeet Bagga, and Alex C Snoeren. 2017. Passive
+      large-scale system for data center network latency measurement and analysis. In              realtime datacenter fault detection and localization. In 14th USENIX Symposium
+      Proceedings of the ACM SIGCOMM 2015 Conference. 139­152.                                     on Networked Systems Design and Implementation (NSDI 17). 595­612.
+
+[16] Arpit Gupta, Rob Harrison, Marco Canini, Nick Feamster, Jennifer Rexford, and           [37] Kwang Sik Shin, Jin Ha Jung, Jin Young Cheon, and Sang Bang Choi. 2007. Real-
+      Walter Willinger. 2018. Sonata: Query-driven streaming network telemetry. In                 time network monitoring scheme based on SNMP for dynamic information.
+      Proceedings of the ACM SIGCOMM 2018 Conference. 357­371.                                     Journal of network and computer applications 30, 1 (2007), 331­353.
+
+[17] Nikhil Handigol, Brandon Heller, Vimalkumar Jeyakumar, David Mazières, and              [38] Vibhaalakshmi Sivaraman, Srinivas Narayana, Ori Rottenstreich, Shan Muthukr-
+      Nick McKeown. 2014. I know what your packet did last hop: Using packet                       ishnan, and Jennifer Rexford. 2017. Heavy-hitter detection entirely in the data
+      histories to troubleshoot networks. In 11th USENIX Symposium on Networked                    plane. In Proceedings of the Symposium on SDN Research. 164­176.
+      Systems Design and Implementation (NSDI 14). 71­85.
+                                                                                             [39] William Stallings. 1993. SNMP, SNMPv2, and CMIP: The practical guide to network
+[18] Rob Harrison, Qizhe Cai, Arpit Gupta, and Jennifer Rexford. 2018. Network-wide                management. Addison-Wesley Longman Publishing Co., Inc.
+      heavy hitter detection with commodity switches. In Proceedings of the Symposium
+      on SDN Research. 1­7.                                                                  [40] Malgorzata Steinder and Adarshpal S. Sethi. 2004. Probabilistic fault localization
+                                                                                                   in communication systems using belief networks. IEEE/ACM transactions on
+[19] Vipul Harsh, Tong Meng, Kapil Agrawal, and Philip Brighten Godfrey. 2023.                     networking 12, 5 (2004), 809­822.
+      Flock: Accurate network fault localization at scale. Proceedings of the ACM on
+      Networking 1, CoNEXT1 (2023), 1­22.                                                    [41] Haifeng Sun, Jiaheng Li, Jintao He, Jie Gui, and Qun Huang. 2023. OmniWindow:
+                                                                                                   A General and Efficient Window Mechanism Framework for Network Telemetry.
+[20] Lei Huang, Weijiang Yu, Weitao Ma, Weihong Zhong, Zhangyin Feng, Haotian                      In Proceedings of the ACM SIGCOMM 2023 Conference (New York, NY, USA) (ACM
+      Wang, Qianglong Chen, Weihua Peng, Xiaocheng Feng, Bing Qin, and Ting                        SIGCOMM '23). Association for Computing Machinery, New York, NY, USA,
+      Liu. 2024. A Survey on Hallucination in Large Language Models: Principles,                   867­880. doi:10.1145/3603269.3604847
+      Taxonomy, Challenges, and Open Questions. ACM Trans. Inf. Syst. (Nov. 2024).
+      doi:10.1145/3703155 Just Accepted.                                                     [42] Cheng Tan, Ze Jin, Chuanxiong Guo, Tianrong Zhang, Haitao Wu, Karl Deng,
+                                                                                                   Dongming Bi, and Dong Xiang. 2019. {NetBouncer}: Active device and link fail-
+[21] Qun Huang, Patrick PC Lee, and Yungang Bao. 2018. Sketchlearn: Relieving user                 ure localization in data center networks. In 16th USENIX Symposium on Networked
+      burdens in approximate measurement with automated statistical inference. In                  Systems Design and Implementation (NSDI 19). 599­614.
+      Proceedings of the ACM SIGCOMM 2018 Conference. 576­590.
+                                                                                             [43] Yuan Tian, David Lo, Xin Xia, and Chengnian Sun. 2015. Automated prediction
+[22] Qun Huang, Siyuan Sheng, Xiang Chen, Yungang Bao, Rui Zhang, Yanwei Xu, and                   of bug report priority using multi-factor analysis. Empirical Software Engineering
+      Gong Zhang. 2021. Toward {Nearly-Zero-Error} sketching via compressive sens-                 20 (2015), 1354­1383.
+      ing. In 18th USENIX Symposium on Networked Systems Design and Implementation
+      (NSDI 21). 1027­1044.                                                                  [44] Haopei Wang, Anubhavnidhi Abhashkumar, Changyu Lin, Tianrong Zhang, Xi-
+                                                                                                   aoming Gu, Ning Ma, Chang Wu, Songlin Liu, Wei Zhou, Yongbin Dong, et al. 2024.
+[23] Qun Huang, Haifeng Sun, Patrick PC Lee, Wei Bai, Feng Zhu, and Yungang Bao.                   {NetAssistant}: Dialogue Based Network Diagnosis in Data Center Networks. In
+      2020. Omnimon: Re-architecting network telemetry with resource efficiency and                21st USENIX Symposium on Networked Systems Design and Implementation (NSDI
+      full accuracy. In Proceedings of the ACM SIGCOMM 2020 Conference. 404­421.                   2024). 2011­2024.
+
+[24] Chenhao Jia, Tian Pan, Zizheng Bian, Xingchen Lin, Enge Song, Cheng Xu, Tao             [45] Weitao Wang, Xinyu Crystal Wu, Praveen Tammana, Ang Chen, and TS Eugene
+      Huang, and Yunjie Liu. 2020. Rapid detection and localization of gray failures               Ng. 2022. Closed-loop network performance monitoring and diagnosis with
+      in data centers via in-band network telemetry. In NOMS 2020-2020 IEEE/IFIP                   {SpiderMon}. In 19th USENIX Symposium on Networked Systems Design and
+      Network Operations and Management Symposium. IEEE, 1­9.                                      Implementation (NSDI 22). 267­285.
+
+[25] Ahmed Lamkanfi, Serge Demeyer, Emanuel Giger, and Bart Goethals. 2010. Pre-             [46] Zhe Wang, Huanwu Hu, Linghe Kong, Xinlei Kang, Qiao Xiang, Jingxuan Li,
+      dicting the severity of a reported bug. In 2010 7th IEEE working conference on               Yang Lu, Zhuo Song, Peihao Yang, Jiejian Wu, et al. 2024. Diagnosing Application-
+      mining software repositories (MSR 2010). IEEE, 1­10.                                         network Anomalies for Millions of {IPs} in Production Clouds. In 2024 USENIX
+                                                                                                   Annual Technical Conference (USENIX ATC 24). 885­899.
+[26] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. 2016. {FlowRadar}: A
+      better {NetFlow} for data centers. In 13th USENIX symposium on networked               [47] Duo Wu, Xianda Wang, Yaqi Qiao, Zhi Wang, Junchen Jiang, Shuguang Cui, and
+      systems design and implementation (NSDI 16). 311­324.                                        Fangxin Wang. 2024. NetLLM: Adapting Large Language Models for Networking.
+                                                                                                   In Proceedings of the ACM SIGCOMM 2024 Conference. https://api.semanticscholar.
+[27] Yuliang Li, Rui Miao, Changhoon Kim, and Minlan Yu. 2016. LossRadar: Fast                     org/CorpusID:267413129
+      detection of lost packets in data center networks. In Proceedings of the 12th
+      International on Conference on emerging Networking EXperiments and Technologies.       [48] Xin Wu, Daniel Turner, Chao-Chih Chen, David A Maltz, Xiaowei Yang, Lihua
+      481­495.                                                                                     Yuan, and Ming Zhang. 2012. NetPilot: Automating datacenter network failure
+                                                                                                   mitigation. In Proceedings of the ACM SIGCOMM 2012 Conference. 419­430.
+[28] Yuxing Li, Hu Zheng, Chengqiang Huang, Ke Pei, Jinghui Li, and Longbo Huang.
+      2020. Terminator: An Efficient and Light-weight Fault Localization Framework.          [49] Yang Wu, Ang Chen, and Linh Thi Xuan Phan. 2019. Zeno: Diagnosing per-
+      In IEEE INFOCOM 2020-IEEE Conference on Computer Communications Workshops                    formance problems with temporal provenance. In 16th USENIX Symposium on
+      (INFOCOM WKSHPS). IEEE, 580­585.                                                             Networked Systems Design and Implementation (NSDI 19). 395­420.
+
+[29] Ze Li, Qian Cheng, Ken Hsieh, Yingnong Dang, Peng Huang, Pankaj Singh,                  [50] Kenji Yamanishi and Yuko Maruyama. 2005. Dynamic syslog mining for network
+      Xinsheng Yang, Qingwei Lin, Youjiang Wu, Sebastien Levy, et al. 2020. Gandalf:               failure monitoring. In Proceedings of the eleventh ACM SIGKDD international
+      An intelligent,{End-To-End} analytics service for safe deployment in {Large-                 conference on Knowledge discovery in data mining. 499­508.
+      Scale} cloud infrastructure. In 17th USENIX Symposium on Networked Systems
+      Design and Implementation (NSDI 20). 389­402.                                          [51] Cheng-Zen Yang, Chun-Chi Hou, Wei-Chen Kao, and Xiang Chen. 2012. An
+                                                                                                   empirical study on improving severity prediction of defect reports using feature
+[30] Zaoxing Liu, Ran Ben-Basat, Gil Einziger, Yaron Kassner, Vladimir Braverman,                  selection. In 2012 19th Asia-Pacific Software Engineering Conference, Vol. 1. IEEE,
+      Roy Friedman, and Vyas Sekar. 2019. Nitrosketch: Robust and general sketch-                  240­249.
+      based monitoring in software switches. In Proceedings of the ACM SIGCOMM
+      2019 Conference. 334­350.                                                              [52] Tong Yang, Jie Jiang, Peng Liu, Qun Huang, Junzhi Gong, Yang Zhou, Rui Miao,
+                                                                                                   Xiaoming Li, and Steve Uhlig. 2018. Elastic sketch: Adaptive and fast network-
+[31] Zaoxing Liu, Antonis Manousis, Gregory Vorsanger, Vyas Sekar, and Vladimir                    wide measurements. In Proceedings of the 2018 ACM SIGCOMM Conference. 561­
+      Braverman. 2016. One sketch to rule them all: Rethinking network flow mon-                   575.
+      itoring with univmon. In Proceedings of the 2016 ACM SIGCOMM Conference.
+      101­114.                                                                               [53] Minlan Yu, Lavanya Jose, and Rui Miao. 2013. Software {Defined} {Traffic}
+                                                                                                   Measurement with {OpenSketch}. In 10th USENIX symposium on networked
+[32] Tim Menzies and Andrian Marcus. 2008. Automated severity assessment of                        systems design and implementation (NSDI 13). 29­42.
+      software defect reports. In 2008 IEEE International Conference on Software Main-
+      tenance. IEEE, 346­355.                                                                [54] Zhaoyang Yu, Minghua Ma, Chaoyun Zhang, Si Qin, Yu Kang, Chetan Bansal,
+                                                                                                   Saravan Rajmohan, Yingnong Dang, Changhua Pei, Dan Pei, et al. 2024. Moni-
+[33] Pooria Namyar, Arvin Ghavidel, Daniel Crankshaw, Daniel S Berger, Kevin                       torassistant: Simplifying cloud service monitoring via large language models. In
+      Hsieh, Srikanth Kandula, Ramesh Govindan, and Behnaz Arzani. 2025. Enhancing                 Companion Proceedings of the 32nd ACM International Conference on the Founda-
+      Network Failure Mitigation with {Performance-Aware} Ranking. In 22nd USENIX                  tions of Software Engineering. 38­49.
+      Symposium on Networked Systems Design and Implementation (NSDI 25). 335­357.
+                                                                                             [55] Hongyi Zeng, Ratul Mahajan, Nick McKeown, George Varghese, Lihua Yuan, and
+[34] Yanghua Peng, Ji Yang, Chuan Wu, Chuanxiong Guo, Chengchen Hu, and Zong-                      Ming Zhang. 2015. Measuring and troubleshooting large operational multipath
+      peng Li. 2017. {deTector}: a topology-aware monitoring system for data center                networks with gray box testing. Mountain Safety Res., Seattle, WA, USA, Rep.
+      networks. In 2017 USENIX Annual Technical Conference (USENIX ATC 17). 55­68.                 MSR-TR-2015-55 (2015).
+
+                                                                                             [56] Shenglin Zhang, Weibin Meng, Jiahao Bu, Sen Yang, Ying Liu, Dan Pei, Jun Xu,
+                                                                                                   Yu Chen, Hui Dong, Xianping Qu, and Lei Song. 2017. Syslog processing for
+
+                                                                                        525
+SkyNet: Analyzing Alert Flooding from Severe Network Failures in Large Cloud Infrastructures  SIGCOMM '25, September 8­11, 2025, Coimbra, Portugal
+
+      switch failure diagnosis and prediction in datacenter networks. 2017 IEEE/ACM
+      25th International Symposium on Quality of Service (IWQoS) (2017), 1­10. https:
+      //api.semanticscholar.org/CorpusID:26472285
+[57] Tao Zhang, Jiachi Chen, Geunseok Yang, Byungjeong Lee, and Xiapu Luo. 2016.
+      Towards more accurate severity prediction and fixer recommendation of software
+      bugs. Journal of Systems and Software 117 (2016), 166­184.
+[58] Hao Zheng, Chengyuan Huang, Xiangyu Han, Jiaqi Zheng, Xiaoliang Wang, Chen
+      Tian, Wanchun Dou, and Guihai Chen. 2024. Mon: Empowering Microsecond-
+      level Network Monitoring with Wavelets. In Proceedings of the ACM SIGCOMM
+      2024 Conference. 274­290.
+[59] Yang Zhou, Ying Zhang, Minlan Yu, Guangyu Wang, Dexter Cao, Eric Sung, and
+      Starsky Wong. 2022. Evolvable network telemetry at facebook. In 19th USENIX
+      Symposium on Networked Systems Design and Implementation (NSDI 22). 961­975.
+[60] Yibo Zhu, Nanxi Kang, Jiaxin Cao, Albert Greenberg, Guohan Lu, Ratul Mahajan,
+      Dave Maltz, Lihua Yuan, Ming Zhang, Ben Y Zhao, et al. 2015. Packet-level
+      telemetry in large datacenter networks. In Proceedings of the ACM SIGCOMM
+      2015 Conference. 479­491.
+[61] Danyang Zhuo, Monia Ghobadi, Ratul Mahajan, Klaus-Tycho Förster, Arvind
+      Krishnamurthy, and Thomas Anderson. 2017. Understanding and mitigating
+      packet corruption in data center networks. In Proceedings of the ACM SIGCOMM
+      2017 Conference. 362­375.
+
+526
+

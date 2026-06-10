@@ -1,0 +1,876 @@
+                                       Computer Networks 214 (2022) 109171
+                                    Contents lists available at ScienceDirect
+
+                                 Computer Networks
+
+                         journal homepage: www.elsevier.com/locate/comnet
+
+dDrops: Detecting silent packet drops on programmable data plane
+
+Mimi Qian a, Lin Cui a,, Xiaoquan Zhang a, Fung Po Tso b, Yuhui Deng a
+
+a Department of Computer Science, Jinan University, Guangzhou, China
+b Department of Computer Science, Loughborough University, LE11 3TU, UK
+
+ARTICLE INFO             ABSTRACT
+
+Keywords:                Silent packet drops are common in data center networks, and are a major cause of network performance
+Silent packet drop       anomalies (NPAs) that have significant impacts on application performance and network management.
+Packet-level telemetry   However, existing solutions using coarse-grained statistics and flow-level telemetry either fail to provide precise
+Programmable data plane  location of packet drops or incur large overhead. This paper presents dDrops, a packet-level telemetry based
+                         on programmable data plane to detect and retrieve details of silent packet drops immediately when they
+                         happen. dDrops can dynamically adapt to varying ratios of silent packet drops for different ports on a switch
+                         to improve performance of silent packet drops detection. Moreover, a dynamic memory management scheme is
+                         also designed to efficiently use the limited memory on the data plane of switch. dDrops has been implemented
+                         on both P4 hardware programmable switches (based on Intel Tofino ASIC) and BMv2. Extensive experiment
+                         results show that dDrops is able to detect and locate the silent packet drops within 5 ms (including detailed
+                         information of dropped packets), and reduce the memory consumption by up to 50%.
+
+1. Introduction                                                            locations (e.g., ingress & egress ports of switches) and the timing of
+                                                                           losses (e.g., the last hop switch what time the victim packets appear).
+    Large-scale datacenter networks (DCNs) are comprised of hundreds
+of thousands of servers which are interconnected via a significant             Unfortunately, traditional solutions fail to satisfy all these require-
+number of network switches and links. In such large systems, network       ments for silent packet drops detection. Some methods use counters
+performance anomalies (NPAs), such as packet loss, bandwidth decline,      (e.g., [7­9]) to aggregate number of packets on the granularity of each
+long-tailed latency and bandwidth/latency jitters, are inevitable [1].     interface, device or flow, failing to provide detailed information of
+                                                                           individual lost packet. Probe-based solutions (e.g., [5,10]) are typ-
+    Recent studies [2] show that packet drop is a major cause of NPAs.     ically used to obtain end-to-end statistics, such as latency and loss,
+More than 15% of NPAs are attributed by silent packet drops, which         from an application point of view, but they only probe the network
+are packet drops or packet corruptions over the link between two           rather than track the actual traffic, which can capture losses but cannot
+independent forwarding pipelines. For example, one common occur-           identify the exact switch or link causing silent packet drops and af-
+rence of silent packet drops is frame checksum (FCS) errors. Previous      fected flows/applications. Sampling solutions (e.g., [11­15]) measure
+study [3] shows that 13% of the failures in DCNs are caused by FCS         a subset of the network traffic and inevitably miss some silent packet
+errors due to damaged or faulty cable. Such packet drops not only          drop events. Thus, above schemes are not fine-grained enough for silent
+significantly degrade application performance, but also affect network     packet drop detection.
+management such as understanding flow size distribution and anomaly
+detection [4­6]. However, due to the difficulty of detection (e.g., they       For detailed packet information of silent packet drops, packet-
+are usually invisible to switches), locating silent packet drops usually   level telemetry is required, which can obtain fine-grained information
+takes longer time than other NPAs, e.g., about 161 min on average [2].     based on data plane tracing. Nevertheless, existing packet-level solu-
+Thus, it is important to detect silent packet drop fast (e.g., in tens of  tions suffer from trade-off between granularity and cost. For example,
+milliseconds) so that operators can intervene in time to take actions to   NetSight [16] can provide packet-level detection for silent packet drops
+eliminate these losses and mitigate their impacts. Moreover, in order to   by making switches to mirror all packets to controllers. It proposes an
+diagnose the root cause and mitigate the impact on flows/applications,     optimization scheme by sending compressed aggregates of postcards1
+detailed information of silent packet drops are required, for example,     to controllers, which still brings 7% bandwidth overhead. NetSeer [2]
+details of lost packets (e.g., packet headers and other useful contents),
+
+   Corresponding author.
+      E-mail address: tcuilin@jnu.edu.cn (L. Cui).
+
+   1 Postcards are event records created whenever a packet traverses a switch.
+
+https://doi.org/10.1016/j.comnet.2022.109171
+Received 28 February 2022; Received in revised form 6 July 2022; Accepted 8 July 2022
+Available online 14 July 2022
+1389-1286/© 2022 Elsevier B.V. All rights reserved.
+M. Qian et al.                                                                                                                                     Computer Networks 214 (2022) 109171
+
+uses coordination between upstream and downstream switches to de-                   Moreover, silent packet drops will typically occur for a period
+tect silent packet drops in the packet-level. It allocates a fixed memory       time (e.g., tens of minutes). One reason is that such packet drops or
+for each port of switches, causing large memory consumption and low             corruptions are usually invisible to switches, making them difficult
+accuracy when just one or a few ports experience continuous losses              to detect and mitigate its impact, for example, it can take up to
+(e.g., last for several minutes due to damaged optical fiber or dirty           several hours [2] to locate. In addition, when silent packet drops
+optical connectors).                                                            happen, operators may need to reboot switches because of poorly install
+                                                                                hardware or replace some damaged components. These interventions
+    Therefore, in this paper, in order to achieve fast and fine-grained         are costly as they usually take a long period of time to complete. It
+detection of silent packet drop with low overhead, we propose dDrops            may need several days or even weeks in the worst case to mitigate
+which is a packet-level telemetry based on programmable data plane              and repair critical failures [3]. Thus, silent packet drops may affect
+(PDP). dDrops leverages neighboring switches for packet-level drop              a large number of flows, significantly increase perceived latency of
+detection, a pattern that is already adopted by several production              users since dropped packets need to be retransmitted, and increase
+switch functions such as NetSeer [2] and BFD [17]. dDrops can well              the difficulty for network management such as traffic monitoring and
+adapt to dynamic failure and packet rate on different ports of switches,        diagnosis [4­6].
+and constantly monitor all individual packets to discover silent packet
+drops. Considering limited memory resources on data plane, a novel              2.2. Motivations
+dynamic memory management scheme is designed to enable memory
+sharing across all ports of a switch. As a result, dDrops is able to handle         Table 1 compares existing solutions with dDrops (more detailed
+a large numbers of continuous silent packet drops with low memory               description can be found in Section 6). Existing works detect silent
+consumption. In addition, dDrops can detect silent packet drops quickly         packet drops via maintaining per-packet or per-flow information on
+within 5 ms while providing detailed information of individual lost             programmable switches or match-and-mirror packets to a remote col-
+packet, such as location of packet loss (e.g., ingress & egress ports of        lector. However, these solutions consume large overhead in order to
+switches), packet header information and timing information.                    capture details of all packet loss and cannot adapt to dynamic network
+                                                                                characteristics as a result of changing packet rate or network failures
+    The major contributions of this paper are three-folded:                     variation on different ports and links.
+
+     1. We investigate the issue of silent packet drops and propose             (1) Memory consumption for silent packet drops detection vs.
+         dDrops which achieves both low memory consumption and fine-            limited SRAM on programmable data plane
+         grained detection. To the best of our knowledge, this is the first
+         paper considering adaption to dynamic characteristics among                To help operators analyze the root cause of silent packet drops,
+         ports for silent packet drop detection on programmable data            identifying affected applications and taking intervention actions, fol-
+         planes.                                                                lowing information are required: (1) All lost packet information such
+                                                                                as 5-tuples (source, destination IP addresses, ports, and protocol) which
+     2. A dynamic memory management scheme is designed for pro-                 can indicate the applications that are affected by silent packet drop and
+         grammable data planes. It allows on-demand allocation/release          help operators to take corresponding actions. (2) Location including
+         of memory and efficient content access, enabling sharing buffer        switches, link or port. (3) Timing information that can determine
+         across different ports on a switch.                                    whether the problem is transient (which could be ignored) or persis-
+                                                                                tent (which requires attention). It is very important to obtain these
+     3. We have implemented dDrops on both hardware P4 switches                 information for as many lost packets as possible, because operators can
+         (equipped with Intel Tofino ASIC) and software switches of             see affected flows or applications based on these information, so that
+         BMv2. Extensive evaluations demonstrate that it can detect and         more fine-grained operations (e.g., re-schedule flows or select better
+         locate silent packet drop within 5 ms. dDrops saves 50% SRAM           servers) can be performed to mitigate or solve the impact of silent
+         compared with NetSeer, and uses only 0.013% of the bandwidth           packet drops. However, a large amount of packet loss may occur when
+         overhead when loss rate is 0.01%.                                      continuous packet drop happens. Previous studies have found that an
+                                                                                average failure rate of 40.8 links per day in a production data center,
+    The rest of paper is organized as follows. Section 2 discusses mo-          which can cause a median silent packet drop of 59,000 packets per
+tivation of this paper through analyzing the major challenges of de-            failure [19]. Collecting above information will generate a large amount
+tecting silent packet drops. The major design of dDrops are provided            of data, while switches only have limited memory (only tens of MB for
+in Section 3. Section 4 discusses the implementation of dDrops on               all the counters and match-action tables).
+programmable switch. Section 5 evaluates dDrops on both BMv2 and
+hardware P4 switches with Tofino ASIC. Finally, Section 7 concludes                 FlowRadar [9] keeps information about all per-flow traffic and
+this paper.                                                                     counters at each switch and compares them at two nearby hops. Its
+                                                                                memory usage is proportional to the number of the ongoing flows
+2. Background and motivations                                                   (e.g., 29.7MB per switch for SingleDecode and 24.8MB per switch for
+                                                                                NetDecode with 1M flows). NetSeer [2] leverages coordination of both
+2.1. Silent packet drop and its impacts                                         upstream and downstream switches to detect silent packet drops by
+                                                                                allocating fixed memory to each port. Thus, its memory overhead is
+    Silent packet drops refer to packet drops or packet corruptions over        proportional to number of ports upon continuous losses. For example,
+the link between two independent forwarding pipelines. The causes               for a switch with 64 × 100Gbps ports, 5 ms of continuous silent packet
+for silent packet drops include faulty cables, damaged/dirty connectors         drops requires over 50MB SRAM in total (see Fig. 1).
+or optical fiber, bad transceivers (e.g., devices that convert between
+optical and electrical signals), poorly installed hardware (e.g., not-well-         Therefore, being able to keep detailed information of all silent packet
+seated linecards) or decaying transmitters [2,3,5,18]. Today's DCNs are         drops with limited memory in data plane is highly desirable.
+usually comprised of hundreds of thousands of hardware and software
+components, including multiple types of switches and routers, load                  (2) Dynamic differences in packet loss and flow rate among
+balancers, and millions of cables and fibers. Silent packet drops may           ports of a switch.
+occur frequently at any of those components. When they happen,
+applications suffer from increased latency and packet drops, while                  Previous studies [3] show that the number of simultaneous faulty
+switches for various reasons (such as without reporting [5,11]) cannot          links is small. This means it is unlikely that all ports or links of a
+show information about these packet drops and seem innocent.                    switch experience silent packet drops simultaneously. In addition, the
+                                                                                packet arrival rates of different ports can vary drastically [20­22].
+
+                                                                             2
+M. Qian et al.                                                                                                                     Computer Networks 214 (2022) 109171
+
+                Table 1
+                State-of-the-art datacenter detection solutions.
+
+                Methods              Detection time               Location           Packet-level info  Overhead                   Dynamic adaption
+                                                                  Infer location     #                                             !
+                Host monitoring [5]  10 s of seconds              !                  !                  Host CPU                   #
+                                                                  !                  #                                             #
+                Mirroring [11]       10 s of ms                   !                  !                  B/w prop to packet         #
+
+                Flow-level counters [6,9] After a flow(let) ends  !                  !                  Memory prop.to flows       !
+
+                NetSeer [2]          in millisecondsa                                                   Medium
+                                                                                                        (fixed memory allocation)
+                dDrops               < 5 ms
+                                                                                                        Low
+                                                                                                        (on-demand dynamic
+                                                                                                        memory allocation)
+
+                aThe upstream switch can detect silent packet drop within 6 ms in the experiment. But NetSeer batches 50 events together in one packet to
+                the controller, so the actual detection time may extend to few more seconds.
+
+Fig. 1. Memory consumption on different duration of continuous silent packet drops.              intensive. For example, considering a switch with 64 × 100Gbps
+Packets of 1024 bytes are transmitted back-to-back on 100 Gbps.                                  (e.g., about 106 pps), 5 ms of continuous silent packet drops
+                                                                                                 detection will require over 50 MB memory.2 This is challenging
+These factors lead to widely varying number of silent packet drops                               for programmable switches as they usually have small memory
+on different ports of the same switch. Ignoring these characteristics of                         size (e.g., 2030 MB) to be shared among different functions
+switch ports will degrade performance of silent packet drops detection.                          (e.g., forwarding and encapsulation). Thus, minimizing memory
+It will either waste large amount of memory in order to capture all lost                         consumption is crucial for the success and feasibility of dDrops
+packets (e.g., allocating a fixed buffer for each port of a switch), or                          in practice.
+reduce detection accuracy due to overflow of buffer when continuous                          2. Dynamic adaptation to port differences. The occurrence and
+silent packet drops happen on a port (e.g., 5 ms of continuous silent                            duration of silent packet drops happen in a random manner [3].
+packet drops require over 50MB in Fig. 1).                                                       Moreover, the traffic rate of different ports on a switch also
+                                                                                                 varies and changes dynamically, leading to different amounts of
+    Therefore, the characteristic of dynamic differences in both packet loss                     lost packets when continuous silent packet drop occurs. For these
+and flow rate among ports should be considered when designing detection                          reasons, allocating a fixed amount of memory to each port is in-
+methods for silent packet drops.                                                                 efficient. Thus, a flexible on-demand memory allocation/release
+                                                                                                 scheme is required to adapt to the dynamic diversity of both
+3. dDrops design                                                                                 traffic rate and failure on each port of a switch.
+                                                                                             3. Fast detection. Modern datacenter applications have strong
+    Leveraging the programmability of programmable data plane (PDP),                             requirements for SLA (e.g., 99.9%) as the rapid development of
+we propose dDrops, an adaptive detection scheme which can constantly                             network speed. Failing to deliver the SLAs can result in severe
+detect silent packet drops and report their features to controller.                              customer, reputation and revenue loss [2]. Thus, to mitigate
+                                                                                                 impact on performance of applications, the latency between a
+3.1. Overview                                                                                    failure occurrence and its detection should be as low as possi-
+                                                                                                 ble [23]. Therefore, dDrops should be able to detect silent packet
+3.1.1. Goals of dDrops                                                                           drops and report the detailed information of lost packets to the
+    dDrops should detect silent packet drops immediately when they                               controller (i.e., network administrators) immediately when they
+                                                                                                 happen, so that network administrators can intervene quickly.
+happen, and be able to retrieve detailed information of lost packets,
+such as critical header fields, locations and timing information, under                 3.1.2. Challenges and limitations
+limited memory in data plane. Furthermore, it should achieve low                            Achieving all goals above in the PDP is challenging. For example,
+overhead and good memory efficiency taking into account the diversity
+of traffic and failures among different ports. There are three goals for                in order to detect all silent packet drops, dDrops needs to leverage
+dDrops:                                                                                 the coordination of nearby programmable switches to cache packets
+                                                                                        information before being forwarded. However, caching all packets
+     1. Low memory consumption. When silent packet drops happen,                        in data plane is impossible and will increase memory consumption.
+         detailed information of individual lost packet (e.g., the 5 tuples             Considering dynamic port differences, the amount of memory required
+         and other useful data) are important for troubleshooting by net-               by each port is different and can change dramatically, e.g., when
+         work administrators. Due to the invisibility of silent packet drops            continuous silent packet drops happen. Therefore, how to adapt to the
+         on switches, it is inevitable to store information of all packets              dynamic differences of ports is very challenging, and it still remains
+         transmitted out of a switch. However, doing so is very memory                  unexplored in data plane yet.
+
+                                                                                            Moreover, in order to process packets at guaranteed line rates, PDP
+                                                                                        significantly restricts operations in the pipeline [24]. For example, a
+                                                                                        stateful ALU can only support basic mathematical operations (e.g., ad-
+                                                                                        dition, subtraction and bitwise operation) which makes it challenging
+                                                                                        to implement more complex applications for dDrops. For example,
+                                                                                        multiplication and division are required when implementing dynamic
+                                                                                        memory allocation/release for dDrops.
+
+                                                                                            Registers in P4 programs are stored in SRAM blanks which are
+                                                                                        local to each match+action processor. They have three limitations.
+
+                                                                                           2 Assuming only 5 tuples are stored for each packet, i.e., 13 bytes for each
+                                                                                        packet.
+
+                                                                                     3
+M. Qian et al.                                                                 Computer Networks 214 (2022) 109171
+
+Fig. 2. Overview of dDrops: The data plane nodes perform the monitoring operations and report lost packets to the control plane which uses the packet features of losses from
+dDrops to locate where losses happen in the network and mitigate the impact of losses.
+
+First, a program can only read or write a register by match+action                    and port, and generates a packet ID, then inserts them into
+model implemented in the same stage. Second, a register can only be                   the buffer space of the port before packets are transmitted out.
+accessed once for each packet to meet timing requirements. Finally, all               Packet features management will apply for a new block via memory
+register operations in the stage must be accessed in parallel. These three            management when the buffer space of the port is almost full.
+limitations can be challenging to dDrops which take advantage of PDP                · Memory management enables dynamic memory allocation and
+for implementation of dynamic memory allocation or release.                           release using a sequence of match + action tables in PDP. It
+                                                                                      implements operations of both buffer allocation and buffer release.
+3.2. dDrops architecture                                                              Buffer allocation can allocate a block from a global buffer (A fixed
+                                                                                      size buffer pool, which is used to cache packet features in a
+    dDrops is a PDP telemetry system that supports low memory consump-                switch) to a port, e.g., when buffer space of the port is almost full.
+tion, dynamic adaption to port difference and fast detection for network              Buffer release can release specific blocks, e.g., when packets in the
+measurement. It can obtain detailed information such as 5-tuples, loca-               block are all reported to controller as packet loss or received by
+tion and timing information of silent packet drops (referred as packet                downstream switch.
+features in the following of this paper). Unlike existing works [2,6],
+dDrops introduces a dynamic memory management mechanism, which                 3.3. Drop detection
+can dynamically allocate and release memory on demand for each
+port rather than allocating fixed memory per port. Considering the                 To capture all silent packet drops, dDrops uses an individual packet
+invisibility of silent packet drops on single switch, dDrops lets two          ID to identify all packets transmitted by each port. Initially, a block-
+adjacent switches cooperate with each other to detect silent packet            based buffer is allocated for each port to temporarily keep packets that
+drops between them. For ease of description, the two adjacent switches         are not confirmed for successful transmission yet. As shown Fig. 3,
+are referred as upstream switch and downstream switch respectively.            dDrops takes 7 steps to detect silent packet drops:
+Fig. 2 depicts an overview of dDrops and how it is deployed in a network
+infrastructure.                                                                Step 1: For each packet that arrives at the upstream switch, it will iden-
+                                                                               tify whether the packet is a normal transmitted packet or a notification
+    dDrops consists of three main components as follows:                       packet via packet header type.
+
+     · Drop detection is used to detect silent packet drops. It saves the      Step 2: The egress of upstream switch embeds a packet ID into each
+       packet ID (which is used to identify each packet) of the last re-       transmitted normal packet. The packet ID is increased by 1 for each
+       ceived packet for each port using an array (which is initialized to     packet. It can be embedded into unused header fields (e.g., VLAN tags
+       0), and compares it with the currently received packet to identify      and DSCP) or customized header.
+       whether packet loss happens. If so, it constructs a loss notifica-
+       tion packet to notify the upstream switch. The upstream switch          Step 3: The egress of upstream switch inserts packet features and the
+       performs the lookup operation for the positions of lost packets in      packet ID into the block buffer allocated to the egress port. If the
+       the buffer, sends the positions to packet features management for       block buffer is full, a new block buffer will be allocated by memory
+       reporting and notifies releasable blocks (a block refers to a small     management from a global buffer that is shared by all ports of a switch
+       fixed size memory, e.g., 1024Bytes) to memory management.               (see Section 3.4).
+
+     · Packet features management is used to report lost packets               Step 4: The ingress of downstream switch will extract the packet ID
+       and store packet features of all packets that have been sent out        and compare it with the last received packet. Discontinuous packet IDs
+       recently through each port. It obtains the position from drop           are considered as a signal of packet loss.
+       detection, retrieves lost packets from memory and reports them to
+       remote controller. In addition, it extracts the 5-tuple information     Step 5: In case of packet loss, the downstream switch sends back a
+       from each packet, copies metadata including forwarding latency          notification packet (i.e., loss notification packet) which contains the
+
+                                                                            4
+M. Qian et al.                                                                     Computer Networks 214 (2022) 109171
+
+                Fig. 3. Silent packet drop detection..
+
+current received packet ID and the last received packet ID to upstream             packets, whose packet header type is modified to a notification packet.
+switch.                                                                            Upon receiving these packets, the upstream switch will parse packets,
+                                                                                   extract packet IDs and change them back to normal packet without
+Step 6: The upstream switch performs the lookup operation for retriev-             affecting their normal forwarding.
+ing packet features of lost packets whose packet IDs fall into the missing
+interval from buffer, and reports them to the controller by packet                     Upon receiving a loss notification packet, the upstream switch
+features management. Then, the upstream switch releases the blocks,                triggers the lookup operation for lost packets and reports them to
+whose packets have been reported to the controller or confirmed to                 controller. Note that currently available PDP does not support loops
+be received successfully, through memory management.                               inside a stage. To report multiple continuous lost packets, dDrops uses
+                                                                                   each subsequent packet that arrives at the switch to perform the lookup
+Step 7: If more than  packets are received without any drops (see                  operation once, until all lost packets are reported (the report of the first
+detailed discuss on  in Section 3.5), the downstream switch would                  dropped packet can be triggered by the loss notification packet).
+proactively send a notification packet (i.e., a proactive notification
+packet) to the upstream switch, which contains the last received packet                Due to the limitation of PDP memory and buffer size, if too many
+ID. That means all packets are received prior to the packet ID. Thus,              packets are dropped (i.e., continuous silent packet drops for a long
+the upstream switch can release those blocks whose packets have been               period of time), more blocks will be allocated constantly and the global
+received by the downstream switch.                                                 buffer will be filled up quickly. When the global buffer is full, buffer
+                                                                                   allocation for new blocks will fail and information of subsequent packets
+    The packet ID can either be placed in an existing header field or              cannot be stored in the buffer any more. In this case, lost packets
+transported via a custom header. Both approaches need new metadata                 cannot be detected correctly, resulting in false negative for detection.
+to store the packet ID. Compared to leveraging an existing header field,           Therefore, under the buffer sharing mechanism, the capacity of each
+inserting packet ID via a custom header will produce extra bandwidth               port to detect continuous packet loss is within a certain range, which
+overhead and create more VLIW resources for modifying a new packet                 is discussed in Section 3.5.
+header. In the implementation, dDrops chooses to insert the packet ID
+in an existing header field (using VLAN tags).                                     3.4. Memory and packet features management
+
+    dDrops generates notification packet by cloning.3 To avoid noti-                   dDrops introduces buffer sharing on a switch by memory management
+fication packet being dropped, it can be sent three times like prior               to adapt the diversity of traffic and failure among different ports.
+works [2,25] at the cost of more bandwidth usage. Another effective                Initially, memory management allocates a block for each port from a
+optimization is that the discontinuous packet IDs can be piggybacked               global buffer, which stores the packet ID and packet features. When
+in headers of normal packets from downstream to upstream switch. For               buffer of a port is almost full, packet features management will apply for
+example, discontinuous packet IDs can be inserted to several normal                a new block via memory management, which will call buffer allocation
+                                                                                   operations to assign buffer space. When all packets of a block have
+   3 The clone operation can be used to generate a copy of the original packet     been received by downstream switch or reported to controller due to
+in the pipleline.
+
+                                                                                5
+M. Qian et al.                                                                Computer Networks 214 (2022) 109171
+
+                Fig. 4. Dynamic allocation and release.
+
+packet loss (via packet features management ), the block will be released                                 Fig. 5. Converting packet ID to buffer index.
+by memory management.
+                                                                                  The operations of reporting and releasing buffer are shown in
+    Block-based allocation and store. To allow all ports of switch to         Algorithm 2. dDrops maintains a stack  to keep lost packet IDs
+share the limited memory in data plane, dDrops proposes an innovative         extracted from loss notification packets. For each subsequent packet
+block-based buffer sharing mechanism (Fig. 4). A global buffer                that arrives at port , dDrops first pops out a lost packet id  and get
+is divided into many blocks, each containing a fixed number of slots,         . from  (line 23). Then, it uses CONVERTID() to calculate
+which is denoted by  (a block size). A slot is used to store packet            and retrieve features from buffer with , reporting them to
+features and packet ID of a packet. Each      has a                           controller (line 4  5). For buffer release,   is updated to
+unique .. dDrops allows the buffer to be shared by all ports of               . (line 6). dDrops performs buffer release operation if  
+a switch through an effective sharing buffer algorithm in Algorithm 1.        (which is initialized to 0) is less than  . Specifically, dDrops
+It maintains a global stack  containing all blocks. The packet ID             gets the actual block that can be released by [ ], then
+is split into . and offset, and uses an array [] for port                     pushes it back to ;   is increased by 1(line 79). For pack-
+to save actual block which is allocated by memory management. The             ets that are confirmed to be received, dDrops uses the same operation
+function CONVERTID() implements a block buffer table (similar to the          to release their buffer.
+page table of virtual memory in operation system) to convert packet ID
+ to , which is the position of the packet in the global buffer.
+The  is obtained by concatenating the offset  with the actual
+block id (line 15, see Fig. 5), using simple mathematical operations
+(e.g., shift, and, or).
+
+    Specifically, upon transmitting a packet  on port , dDrops first
+checks current used block . If  is full and  is not
+empty (line 910), dDrops would pop a block from  and allocates
+it to port  for extension (line 1112). Then dDrops uses CONVERTID()
+to calculate  and insert packet features to this new block (line
+1314). The counter of this block is increased by 1 (line 15). If 
+is not full, dDrops inserts features of packet Q to  and increase
+. (line 1719).
+
+    Report and release. There are two cases that need to perform buffer
+release. First, when a lost packet of one port is reported, it implies
+that all packets whose packet ID is smaller than this lost packet are
+confirmed as reported or received. Thus their space can be released.
+Second, when the upstream switch receives a proactive notification
+packet, it means all packets whose packet ID is smaller than the packet
+ID carried in notification packet have been received. So their space also
+can be released.
+
+                                                                           6
+M. Qian et al.                                                                                                                      Computer Networks 214 (2022) 109171
+
+Algorithm 1 Block-based buffer allocation                                           loss notification packet will not be sent back until the entire packet
+                                                                                    is received. The remaining term after 2  + 1 is the expected number
+Input: Global stack ; a packet  to be transmitted by port .
+ 1: function convertid()                                                                                                                                    8
+
+2: obtain . and offset with                                                         of packets that the upstream switch is expected to send following 
+
+                                                                                    until the first successfully sent packet. It is a geometric distribution that
+
+3: .  [.]                                                                           counts the number of successive failures before a success is obtained in
+4:   concatenating offset and .
+                                                                                    a  Bernoulli  trial  with  parameter  1 - .  Thus,  it  should  be   equal  to   1.
+
+                                                                                                                                                                    1-
+                                                                                    This is an increasing function of . Also, since packet loss rate is very
+5: return 
+                                                                                    low (e.g., less than 0.01%) in data centers [5], we can approximate 
+6: procedure Allocation()                                                           to 2  + 3 without the knowledge of the drop rate.
+
+7: obtain . retrieve from  and get . with .                                                 8
+
+8:   read current block used by port                                                    All those packets should be kept in the buffer of the th port until
+
+9: if . =  then                                                                     the loss notification packet is received. Thus, we define the block size
+
+10:          if  not empty then                                                      to be at least the maximum of  for all ports:
+
+11:                 .()                                                               max(1, 2, ... , )
+
+12:               [.]  .                                                                Proactive notification. If there is no packet drop for a long time,
+                                                                                    the downstream switch would not send any drop packet notification
+13:                convertid(.)                                                     and the buffer cannot be released on upstream switch. Thus, dDrops
+                                                                                    lets the downstream switch send a proactive notification if more than 
+14:                 []  .                                                           packets are received without any drops. Proactive notification will in-
+                                                                                    troduce additional network overhead. To reduce this overhead, dDrops
+15:               . + +                                                             requires   . The additional network overhead will decrease as 
+                                                                                    increases, which is also shown in experiment results in Section 5.3.
+16: else                                                                            However,  cannot be too large considering the limited available
+                                                                                    memory in data plane. We define the maximum of  as . dDrops
+17:           convertid(.)                                                          needs to ensure all buffer can be released timely under the multi-ports
+                                                                                    sharing mechanism. Therefore,  should satisfy Eq. (1). Suppose the
+18:            []  .                                                                size of buffer (total slots) is R and the switch has  ports:
+
+19:          . + +
+
+Algorithm 2 Report packet features and release buffer
+
+Input: Global stack , .                                  refer to Fig. 5                   + 2       +1            =                                                (1)
+ 1: if  not empty then                                                              (                     + )
+ 2:   .()                                                                                         8
+ 3: .  to shift 
+                                                                                             
+4:  convertid()
+
+5: (  [])                                   report features of lost packets to                           - 2 
+                                                                                                              8
+     controller                                                                        =   (      - )              - 1                                              (2)
+
+6:    .    is the max logical block                                                               2
+                                                                                                    8
+     id that can be released                                                        where     +          +1    is  the  number  of  blocks  used  by  a  port  when  it
+
+7: if   <   then    is initialized to zero                                                                   
+
+8: .([ ])                                                                           receives a proactive notification packet from downstream switch that
+9:   + +
+                                                                                    have been received  packets without any drops. One block (``+'') is
+
+                                                                                    used to store the subsequent packets for reporting and releasing.
+
+                                                                                       Detection capacity of silent packet drops. Detection capacity
+
+                                                                                    refers to the maximum number of lost packets that can be detected
+
+3.5. Discussions                                                                    when continuous silent packet drops happen. The detection capacity of
+
+                                                                                    a port is determined by the maximum buffer that the port may obtain.
+
+    Block size. For an -ports switch, let the link bandwidth-delay                  dDrops utilize the diversity of network traffic and failure across different
+product (BDP) for the th port be . Suppose the probability of silent
+packets drop is . Each packet contains  bytes. Considering packets are              ports of a switch to obtain a large detection capacity. Considering two
+transmitted from the th port of the upstream switch to downstream
+switch back-to-back, if a packet  is dropped (th packet of the port),               extreme cases, if continuous packet loss occurs on all ports at the same
+before the loss notification packet is received, the upstream switch
+would transmit  packets:                                                            time, a port has the least capacity to detect continuous packet loss. On
+
+                                                                                    the other extreme, if only one port experiences continuous packet loss
+
+                                                                                    and others work well, the port has the largest capacity of detecting
+
+                                                                                    continuous packet loss. About the detection capacity:
+
+     =  2       + 1 + 1(1 - ) + 2(1 - ) + 32(1 - ) +                                   · Min: In the first case, all ports suffer from continuous packet drops
+           8                                                                             until the buffer is full. The detection capacity of dDrops is similar
+                                                                                         to allocating the same fixed buffer to each port, which is  - .
+     = 2                   
+        8                                                                                                                                                                                           
+                + 1 +  -1(1 - )
+                                                                                          is subtracted to maintain a block for storing the subsequent
+                  =1                                                                     packets that are used for reporting and releasing.
+                                                                                       · Max: When continuous packet drops only happen on one port,
+     = 2  + 1 + 1                                                                        each other port only occupies one block. Therefore, the maximum
+        8         1 -                                                                    detection capacity would be  - ( - 1) ×  -  =  - . The
+                                                                                         ``-'' shares the same reason as the first case.
+     < 2  + 1 + 2 = 2  + 3 0   < 0.01.
+        8                 8
+
+To obtain , we first need to know how many packets can hold on the                  4. Implementation
+link during the period from the upstream switch to the downstream
+
+switch of  . This capacity is determined by the bandwidth (in bits per                  We have implemented dDrops on both BMv2 [26] and the P4
+                                                                                    hardware switch (Flnet S9180-32X) with a 3.2Tb/s Barefoot Tofino 32D
+second or bps) multiplied by the one-way transmission time. We call it              ASIC [24], using P414 language.4
+
+        and  the  number  of  packets  is   .  If  the  upstream  switch  sends
+
+                                            8
+packets continuously and receives a loss notification packet within the
+
+round-trip time, the minimum number of packets that the upstream                       4 https://github.com/AntLab-Repo/dDrops.
+switch will transmit continuously is 2  . The ``+1'' is because the
+
+                                                                        8
+
+                                                                                 7
+M. Qian et al.                                                                                                                                     Computer Networks 214 (2022) 109171
+
+    The detection module is implemented in ingress that is shown in                                              Fig. 6. Network topology in Mininet.
+Fig. 3. It extracts packet ID and packet features from each packet,
+maps the port to a register array using a hash of the ingress port,             5.2. Performance in P4 hardware switch
+and then triggers a notification by cloning if loss happens or there are
+more than  packets received without any drops. Other functions, such                Detecting capacity. We evaluate the capacity of detecting con-
+as reporting packet features of lost packets, allocating and releasing          tinuous packet drops for both dDrops and NetSeer. We first calculate
+buffer, are implemented in egress. To avoid affecting normal packet             the upper and lower bounds of the capacity of detecting continuous
+forwarding, dDrops sends notification packets and features of lost by           packet drops of dDrops according to the formula in Section 3.5. In
+clone_ingress_pkt_to_egress and clone_egress_pkt_to_egress respectively.        addition, a port may be assigned any number of blocks between the
+                                                                                upper and lower bounds under the multi-port sharing mechanism due
+    The dynamic memory management module is implemented using                   to the randomness of packet rate and loss rate in network [3]. Thus,
+a pointer and register stack. When a block is filled up, dDrops checks          we assume the probability of any block being allocated for one port is
+the pointer of the stack for allocation. If the stack is not empty, dDrops      equal for simplicity. For NetSeer, the capacity of detecting continuous
+moves the pointer and pops a block from the stack. When all packets are         packet drops is fixed at 1/4 of the total buffer. Thus, we can obtain
+reported or received in one block, dDrops pushes the block back to the          the maximum number of continuous silent packet drops that can be
+stack and updates the pointer. This design requires a simultaneous read         detected with different total buffer size, which is shown in Fig. 7(a)
+and write register operations when the port needs both allocation and           (four ports are used for each switch). Fig. 7(a) shows that the capacity
+release block. However, each packet can only access a register once and         of dDrops is always larger than that of NetSeer with different buffer
+cannot move ``backwards'' in the pipeline of Tofino ASIC. To solve the          sizes. Specifically, the capacity of dDrops increases by 118% and 134%
+problem, dDrops uses clone packet to complete the release operation.            on average for 1024 and 2048 of slots respectively when compared
+                                                                                to NetSeer. The maximum detectable number of continuous packet
+    In the design of block buffer table, each port uses an array  to            drops of dDrops is close to the size of total buffer. Fig. 7(b) shows the
+store actual block. There may be three situations that need to read or          percentage of dropped packets can be detected correctly when long
+write this array for each packet. First, when packet features management        continuous silent packet drop happens. With 800KB SRAM in total,
+stores a packet, it would read the array to determine the position of           NetSeer can only detect 20% and 3.3% of lost packets when it lasts for
+buffer in order to keep the packet's features. Second, when packet losses       5 ms and 30 ms respectively, while dDrops can detect 100%. It means
+occur, drop detection component needs to read the array to look up their        that dDrops achieves higher accuracy than NetSeer. The reason for this
+positions in the buffer. Third, when memory management allocates a              result is the inherent benefit of dynamic memory allocation/release.
+block for the port, it would write actual block id to the array. Therefore,     Considering the diversity of both traffic rate and failure on each port,
+dDrops needs to access  at most three times for each packet. In order           dDrops will allocate more memory from the global buffer to those ports
+to solve the limitation that only one read and write operation can be           experiencing continuous silent packet drops, while the memory of each
+performed in a pipeline, dDrops clones a normal packet multiple times           port is fixed for NetSeer.
+to achieve above operations.
+                                                                                    PDP Resource Usage.
+5. Evaluation                                                                       Table 2 summarizes the memory and computational resource usage
+                                                                                in the pipeline of Tofino ASIC for both dDrops and NetSeer [2]. dDrops
+    In this section, we evaluate performance of dDrops on drop detection,       uses 18.33% SRAM, while NetSeer consumes 36.98% SRAM with the
+packet features management and memory management. First, we analyze             same buffer size (65536 slots). Thus, dDrops saves 50% of the memory
+detecting capacity, the latency to obtain features of lost packet and           compared with NetSeer. NetSeer maintains fixed size ring buffer per-
+the PDP resource requirements of dDrops to demonstrate its feasibility          port at each switch which results in high memory consumption, because
+and performance on real hardware switches. Second, we show the                  the number of simultaneous faulty links is small [3]. In addition, dDrops
+performance of dDrops on both bandwidth overhead and detection                  also consumes fewer resources than NetSeer in terms of stateful ALUs,
+latency through Mininet [27]. Third, we evaluate dDrops under realistic         stages and VLIWs.
+network traffic trace to verify its effectiveness on silent packet drop             Latency to obtain packet features. Fig. 8 shows the detection
+detection and memory management.                                                latency for obtaining packet features of silent packet drops. We define
+                                                                                the detection latency as  =  -  , where  is the
+5.1. Experiment setup                                                           time of packet features received by controller and  is the time of
+                                                                                a subsequent packet sent by upstream switch which will triggers the
+    We have setup a testbed composed of two connected P4 hardware               lookup operation for reporting. The average and 99th percentile of
+switches (Flnet S9180-32X with Tofino ASIC). Each switch is connected
+with a server, which has 2.90 GHz CPU cores, 16 GB RAM, and 10Gbps
+NIC. All network links are 10Gbps fibers. In addition to dDrops, we
+also deploy NetSeer [2] for comparison. NetSeer detects packet loss
+with coordination of both the upstream and downstream switches by
+allocating a fixed memory for each port.
+
+    In addition to testbed experiments, we also conduct extensive eval-
+uations in Mininet with a network topology that consists of 6 servers, 3
+switches and 9 links (see Fig. 6). All switches are interconnected, while
+each switch is connected with two servers. Unless otherwise stated, the
+host sends a packet every 10 ms, and the average size of packets is
+64B. We tune the drop rate during the experiment for comparison with
+existing state-of-the-art solutions including NetSeer [2], Everflow [11]
+and NetSight [16]. Both Everflow and NetSight can detect packet
+loss by sending the packet headers of all packets at every hop to a
+centralized controller in the entire network.
+
+                                                                             8
+M. Qian et al.                                                                                      Computer Networks 214 (2022) 109171
+
+                                                Fig. 7. Detection capacity of silent packet drops.
+
+Fig. 8. Latency to obtain packet features on P4 hardware switches.              to overwrite existing data when buffer is full. In contrast, dDrops can
+                                                                                release the blocks for packets that have been received and reported.
+Table 2                                         NetSeer                         These results also show that both methods can detect packet loss rate
+Resource consumption on Tofino ASIC.                                            of links well (i.e., 0.01% and 0.1%), but dDrops can detect more packet
+                                                36.98%                          drops than NetSeer (e.g., 20 s and 70 s in Fig. 9(b)).
+                                        dDrops  0%
+                                                                                    Memory usage under continuous packet drop. We also evaluate
+                Memory                          47.92%                          the memory usage and ratio of correctly detected lost packets when
+                                                7.81%                           continuous packet drops happen in Fig. 9(c) and Fig. 9(d). In Fig. 9(c),
+                SRAM           18.33%           12                              we simulate continuous silent packet drops by disabling one of the
+                TCAM           0%                                               two ports used in the experiments (from 25 s to 50 s). The data rate
+                                                                                of both flows a and b are 100 pps. Since dDrops adopts dynamic
+                Computational                                                   memory allocation/release mechanism, its total memory usage starts
+                                                                                to increase at 25 s when continuous silent packet drops happen. At
+                sALUs          43.75%                                           50 s, the first packet after continuous silent packet drops arrives at
+                VLIWs          6.77%                                            the downstream switch. Upon receiving the loss notification packet
+                Stages         9                                                from downstream switch, lost packets are reported to the controller
+                                                                                by subsequent packets. During this process, blocks of reported packets
+latency for dDrops are 31 us and 45.57 us respectively, while they are          will be released and the total memory usage of dDrops is gradually
+30.2 us and 43.08 us for NetSeer. Therefore, the detection latency for          reduced to normal level. Particularly, dDrops detects and reports all lost
+obtaining packet features of dDrops is close to NetSeer, while dDrops           packets during continuous silent packet drops. For NetSeer, it fills up all
+obtains larger capacity of detection with lower SRAM than NetSeer.              memories rapidly (within 25 s) and only detects 81% of all lost packets
+                                                                                as a result of buffer overflow. Furthermore, we also disabled another
+5.3. Performance in P4 software switch                                          port to simulate the case of concurrent continuous packet drops at two
+                                                                                ports (from 35 s to 45 s). Results in Fig. 9(d) show that, during the
+    Memory usage of multiple ports. We use the dataset collected in             period 35 s to 50 s, the maximum memory usage of dDrops is increased
+2010 from a data center trace (UN2) [28] to evaluate the memory usage           by 7.38 KB, compared to the scenario in Fig. 9(c), due to continuous
+and performance on lost packets detection on a switch with multiple             packet drops of another port. At 55 s, the blocks of this port are released
+ports (see Fig. 9). It contains different types of packets, such as TCP and     since lost packets are reported, and the total memory usage of dDrops
+UDP. Each host emits these traffic with a certain rate using tcpreplay          significantly reduced for the first time (the memory usage in Fig. 9(c) at
+(which is a tool for replaying network traffic from files). There are           this point is larger because the occupied memory has not been released
+two flows (flow a and b in Fig. 6), which are sent to two different             without any drops or proactive notification packets). At 75 s, all lost
+destination hosts through different ports of the switch. The data rate          packets of the two ports are reported and memory is released to normal
+of flow a is 200 pps and flow b is 100 pps. Different drop rates on links       levels.
+are used for evaluation. The total buffer size is set to be 52KB for dDrops
+and NetSeer.                                                                        Detection Latency. Fig. 10(a) shows the result of detection latency
+                                                                                of silent packet drops of dDrops. In this experiment, TCP traffic is used
+    Fig. 9(a) shows that the average of consumed memory remain stable           and loss rate is set to be 0.01%. The detection latency (blue curve)
+around 11.15KB and 20.65 KB at drop rate 0.1% and 0.01%, respec-                is broken down into notification time and report time. Notification
+tively. While Fig. 9(b) shows that the ring buffer of NetSeer is exhausted      time refers to the interval between when the upstream switch sends
+quickly (reached 52 KB within 20 s) as more and more packets arrive             a subsequent packet, which will trigger a notification packet in the
+at the ports. Since NetSeer have no active release mechanism, it needs          downstream switch, and receives the notification packet. Report time
+                                                                                consists of the time to look up features of lost packets on the upstream
+                                                                                switch and the time to send them to the controller. Results show that
+                                                                                the 99th percentage of lost packets can be detected and reported within
+                                                                                1 ms to 4 ms. Fig. 10(b) shows that average notification time of dDrops
+                                                                                and NetSeer are around 1.1 ms and 1.8 ms respectively. Notification
+                                                                                time of NetSeer is slightly longer because it maintains independent
+                                                                                registers and tables/actions for each port to store or access packet
+                                                                                features that requires more memory and computational resource under
+                                                                                multiple ports.
+
+                                                                             9
+M. Qian et al.                                                                       Computer Networks 214 (2022) 109171
+
+                Fig. 9. Memory usage and detected packets with different drop rate.
+
+                Fig. 10. Latency of detection.
+
+    Bandwidth overhead. Fig. 11(a) shows how the drop rate affects                   Fig. 11(b) shows how the drop rate affect the overhead between
+the bandwidth overhead between switches and controller. Both Ev-                 adjacent switches. When packet loss rate is relatively high, the over-
+erflow [11] and NetSight [16] capture packets at every hop in the                head of dDrops is close to NetSeer. When packet loss rate is low, the
+entire network and send them to a centralized controller. Everflow               overhead of dDrops is slightly higher than NetSeer, which is necessary
+mirrors raw packets and NetSight introduces compression to reduce                because the downstream switch needs to proactively send notification
+the overhead. Their overhead are proportional to the ongoing traffic.            packets to the upstream switch to release buffer.
+Both dDrops and NetSeer use coordination between neighbor switches
+and report lost packet features to controller. Compared with NetSight,               We also compare the additional bandwidth overhead generated by
+dDrops reduces 99.8% and 98.6% bandwidth usage for 0.01% and 0.1%                proactive notification packets with different parameter  and packet
+drop rate respectively. When packet drop rate is larger than 1%, the             drop rate. Fig. 11(c) shows that the additional overhead decreases as
+bandwidth overhead of dDrops (2.09%) becomes higher than Everflow.               the packet loss rate increases. Moreover, the overhead also decreases
+The reason is that dDrops uses clones of packets to report features of lost      when value of  increases. This is because dDrops needs to send a
+packets to controller and its overhead is proportional to the number             proactive notification packet when there are more than  packets are
+of lost packets. However, previous studies [5] show that the packet              received without any drops. In Section 3.5, we have discussed the
+loss rate is very low (less than 0.01%) in data centers. Thus, such              maximum value of  considering available memory to minimize the
+overhead of dDrops is acceptable in practice. Overhead of NetSeer is             bandwidth overhead.
+0.012%, which is lower than dDrops because NetSeer optimizes it by
+compressing and batching loss events.                                                dDrops uses the programmability of PDP to clone packets for noti-
+                                                                                 fication and report. The bandwidth overhead of cloning includes over-
+                                                                                 head of switch-to-controller and overhead between adjacent switches.
+
+                                                                             10
+M. Qian et al.                                                                    Computer Networks 214 (2022) 109171
+
+                Fig. 11. Overall bandwidth overhead.6
+
+According to above analysis on Fig. 11, the bandwidth overhead of                 However, it needs to wait for synchronization of counters, which may
+switch-to-controller depends on silent packet drop rate, while the band-          result in coarse-grained time scale (e.g., 10 s of milliseconds).
+width overhead between adjacent switches is determined by both 
+and loss rate.                                                                        Packet telemetry. NetSeer [2] leverages coordination between
+                                                                                  upstream and downstream switches to detect silent packet drops in
+6. Related works                                                                  packet-level. It allocates a fixed memory for each port of switches,
+                                                                                  causing large memory consumption and low accuracy. The design of
+    In data centers, there have already been many network monitoring              dDrops takes inspiration from NetSeer, but differs in three aspects: (1)
+systems, but none of them can meet design goals for silent packet drops           Instead of allocating fixed memory to each port, dDrops introduces a
+detection.                                                                        novel dynamic memory management to enable memory sharing across
+                                                                                  all ports of a switch, which reduces memory consumption on the data
+    Host-based telemetry solution. Host-based solutions [5,10,29]                 plane. (2) dDrops can well adapt to dynamic failure and packet rate on
+send probes into the network to infer failures or measure the states of           different ports, which improves memory usage efficiency and accuracy
+devices or links according to responses. However, they cannot precisely           of detection. (3) dDrops allows downstream switch to trigger proactive
+locate causes of losses in the network with data solely from end hosts,           notifications, which can further reduce memory consumption. Some
+especially small-scale packet drops.                                              other previous works have also used dynamic memory management in
+                                                                                  the data plane. For example, *Flow [32] uses a cache to group packet-
+    Pingmesh [5] sends probes into the network to locate causes of lost           level telemetry information according to the flow IDs. It allocates a
+packets, but cannot infer exact switch within the leaf or spine groups            narrow ring buffer for each flow, attempts to allocate a wider buffer
+suffering from losses. Furthermore, to reduce its bandwidth overhead,             from a buffer pool for active flows when the narrow ring buffer is filled
+the frequency of probing is at least 10 s, it may result in many losses           up, then the active flows keep the buffer until collision happen or it
+which cannot be detected between two probes.                                      is full. Instead of just allocating once, dDrops can allocate blocks of
+                                                                                  memory for each port multiple times dynamically. Another difference
+    Sketch-based. Recent works [15,20,25,30,31] adopt sketches for                is that the memory of dDrops can be proactively released after ensuring
+network measurement in hardware or software switches. Network op-                 the packets are received by downstream switch.
+erators could collect the information of every packet in a compact data
+structure and analyze problems such as switch offline or DDoS attacks.                ERSPAN [11,33,34] and INT [16,35] can potentially achieve full-
+However, they are not robust to network failures, and suffer from the             visibility, but suffer from granularity-cost trade-off. Their bandwidth
+trade off between memory efficiency and provable accuracy.                        and processing overhead grow quickly with the scale of the network.
+                                                                                  Thus, they cannot fully capture such random events (e.g., silent packet
+    FlowRadar [9] encodes per-flow counters with a small memory at                drop). NetSight [16] can detect silent packet drops by mirroring all
+switches, then leverages the computing power at the remote collector              packets at every hop in entire network to a centralized controller.
+to perform network-wide decoding and analysis of the flow counters. It            It requires 31% bandwidth overhead and proposes techniques to re-
+identifies packet losses by comparing the counters at two nearby hops.            duce the bandwidth overhead to 7%. But these techniques require
+                                                                                  heavy modifications on switching ASICs and are difficult to deploy. To
+   6 No extra bandwidth is introduced between adjacent switches for NetSight      reduce bandwidth overhead, EverFlow [11] selects packets based-on
+and EverFlow.                                                                     pre-selection filers, and then mirrors these packets to remote controller.
+
+                                                                              11
+M. Qian et al.                                                                                                                         Computer Networks 214 (2022) 109171
+
+The controller extracts per flow information and performs static anal-                         [5] C. Guo, L. Yuan, D. Xiang, Y. Dang, R. Huang, D. Maltz, Z. Liu, V. Wang, B.
+ysis. since it only traces a subset of packets, some lost packets may be
+missed (see Table 1).                                                                          Pang, H. Chen, et al., Pingmesh: A large-scale system for data center network
+
+7. Conclusions and future works                                                                latency measurement and analysis, in: Proceedings of the Conference of the ACM
+
+    The measurement of silent packet drops is significant on appli-                            Special Interest Group on Data Communication, 2015, pp. 139­152.
+cation performance of data centers and today's clouds network. We
+presented dDrops, a packet-level telemetry system that supports low                            [6] Y. Li, R. Miao, C. Kim, M. Yu, Lossradar: Fast detection of lost packets in data
+memory consumption, dynamic adaption to port difference and fast detec-
+tion network measurement. It leverages the PDP to report the detail                            center networks, in: Proceedings of the 12th International on Conference on
+information of silent packet drops to remote controller. Experiments
+on both software and hardware switches show that dDrops can detect                             Emerging Networking Experiments and Technologies, 2016, pp. 481­495.
+silent packet drops efficiently with low memory through the dynamic
+memory management scheme.                                                                      [7] J.D. Case, M.S. Fedor, M.L. Schoffstall, J.R. Davin, Simple network management
+
+    Since the probability of continuous silent packet drops has not been                       protocol (SNMP), in: RFC, 1990, pp. 1­36, https://datatracker.ietf.org/doc/html/
+studied yet, we use independent probability of packet loss in dDrops,
+which is commonly used in many existing works [36]. In the future                              rfc1157 (Accessed on: 25 Feb 2022).
+work, we will conduct more deep investigation and study on continuous
+silent packet drops such as probability analysis. Also, a memory sharing                       [8] B. Claise, Cisco systems NetFlow services export version 9, in: RFC, 2004, pp.
+scheme on the data plane is proposed in this paper. We will extend
+this on-demand allocation and dynamic release mechanism to other                               1­33, https://www.ietf.org/rfc/rfc3954.txt (Accessed on: 25 Feb 2022).
+measurement tasks, such as flow distribution measurement, which will
+be part of our future work.                                                                    [9] Y. Li, R. Miao, C. Kim, M. Yu, FlowRadar: A better NetFlow for data centers,
+
+CRediT authorship contribution statement                                                       in: 13th USENIX Symposium on Networked Systems Design and Implementation,
+
+    Mimi Qian: Conceptualization, Writing ­ original draft. Lin Cui: Su-                       NSDI, 2016, pp. 311­324.
+pervision, Writing ­ review & editing, Funding acquisition. Xiaoquan
+Zhang: Software, Writing ­ review & editing. Fung Po Tso: Writing ­                            [10] C. Tan, Z. Jin, C. Guo, T. Zhang, H. Wu, K. Deng, D. Bi, D. Xiang, Netbouncer:
+review & editing. Yuhui Deng: Writing ­ review & editing.
+                                                                                               Active device and link failure localization in data center networks, in: 16th
+Declaration of competing interest
+                                                                                               USENIX Symposium on Networked Systems Design and Implementation, NSDI,
+    The authors declare that they have no known competing finan-
+cial interests or personal relationships that could have appeared to                           2019, pp. 599­614.
+influence the work reported in this paper.
+                                                                                               [11] Y. Zhu, N. Kang, J. Cao, A. Greenberg, G. Lu, R. Mahajan, D. Maltz, L. Yuan,
+Data availability
+                                                                                               M. Zhang, B.Y. Zhao, et al., Packet-level telemetry in large datacenter networks,
+    No data was used for the research described in the article.
+                                                                                               in: Proceedings of the Annual Conference of the ACM Special Interest Group on
+Acknowledgments
+                                                                                               Data Communication, 2015, pp. 479­491.
+    This work has been partially supported by National Natural Science
+Foundation of China (NSFC) No. 62172189 and 61772235; Natural Sci-                             [12] V. Sekar, M.K. Reiter, W. Willinger, H. Zhang, R.R. Kompella, cSamp: A system
+ence Foundation of Guangdong Province, China No. 2020A1515010771
+and 2021B1515120048; Science and Technology Program of Guangzhou                               for network-wide flow monitoring, in: 5th USENIX Symposium on Networked
+No. 202002030372; The UK Engineering and Physical Sciences Re-
+search Council (EPSRC) grants EP/P004407/2 and EP/P004024/1, and                               Systems Design and Implementation, NSDI, 2008.
+InnovateUK grant 106199-47198.
+                                                                                               [13] M. Yu, L. Jose, R. Miao, Software defined traffic measurement with OpenSketch,
+References
+                                                                                               in: 10th USENIX Symposium on Networked Systems Design and Implementation,
+  [1] G. Dimopoulos, P. Barlet-Ros, C. Dovrolis, I. Leontiadis, Detecting network perfor-
+         mance anomalies with contextual anomaly detection, in: 2017 IEEE International        NSDI, 2013, pp. 29­42.
+         Workshop on Measurement and Networking, MN, 2017, pp. 1­6.
+                                                                                               [14] J. Suh, T.T. Kwon, C. Dixon, W. Felter, J. Carter, OpenSample: A low-latency,
+  [2] Y. Zhou, C. Sun, H.H. Liu, R. Miao, S. Bai, B. Li, Z. Zheng, L. Zhu, Z. Shen,
+         Y. Xi, et al., Flow event telemetry on programmable data plane, in: Proceedings       sampling-based measurement platform for commodity SDN, in: 2014 IEEE 34th
+         of the Conference of the ACM Special Interest Group on Data Communication,
+         2020, pp. 76­89.                                                                      International Conference on Distributed Computing Systems, 2014, pp. 228­237.
+
+  [3] X. Wu, D. Turner, C.-C. Chen, D.A. Maltz, X. Yang, L. Yuan, M. Zhang,                    [15] Z. Liu, R. Ben-Basat, G. Einziger, Y. Kassner, V. Braverman, R. Friedman, V.
+         NetPilot: Automating datacenter network failure mitigation, in: Proceedings of
+         the Conference of the ACM Special Interest Group on Data Communication, 2012,         Sekar, Nitrosketch: Robust and general sketch-based monitoring in software
+         pp. 419­430.
+                                                                                               switches, in: Proceedings of the Conference of the ACM Special Interest Group
+  [4] S. Sheng, Q. Huang, P.P. Lee, DeltaINT: Toward general in-band network teleme-
+         try with extremely low bandwidth overhead, in: 2021 IEEE 29th International           on Data Communication, 2019, pp. 334­350.
+         Conference on Network Protocols, ICNP, IEEE, 2021, pp. 1­11.
+                                                                                               [16] N. Handigol, B. Heller, V. Jeyakumar, D. Mazières, N. McKeown, I know what
+
+                                                                                               your packet did last hop: Using packet histories to troubleshoot networks, in:
+
+                                                                                               11th USENIX Symposium on Networked Systems Design and Implementation,
+
+                                                                                               NSDI, 2014, pp. 71­85.
+
+                                                                                               [17] D. Katz, D. Ward, Bidirectional Forwarding Detection (BFD)(RFC 5880), IETF,
+
+                                                                                               2010, https://datatracker.ietf.org/doc/html/rfc5880 (Accessed on: 25 Feb 2022).
+
+                                                                                               [18] D. Zhuo, M. Ghobadi, R. Mahajan, K.-T. Förster, A. Krishnamurthy, T. Anderson,
+
+                                                                                               Understanding and mitigating packet corruption in data center networks, in:
+
+                                                                                               Proceedings of the Conference of the ACM Special Interest Group on Data
+
+                                                                                               Communication, 2017, pp. 362­375.
+
+                                                                                               [19] P. Bailis, K. Kingsbury, The network is reliable: An informal survey of real-world
+
+                                                                                               communications failures, Queue 12 (7) (2014) 20­32.
+
+                                                                                               [20] T. Yang, J. Jiang, P. Liu, Q. Huang, J. Gong, Y. Zhou, R. Miao, X. Li,
+
+                                                                                               S. Uhlig, Elastic sketch: Adaptive and fast network-wide measurements, in:
+
+                                                                                               Proceedings of the Annual Conference of the ACM Special Interest Group on
+
+                                                                                               Data Communication, 2018, pp. 561­575.
+
+                                                                                               [21] V.T. Lam, M. Mitzenmacher, G. Varghese, Carousel: Scalable logging for intrusion
+
+                                                                                               prevention systems, in: 7th USENIX Symposium on Networked Systems Design
+
+                                                                                               and Implementation, NSDI, 2010.
+
+                                                                                               [22] W. Leland, M. Taqqu, W. Willinger, D. Wilson, On the self-similar nature of
+
+                                                                                               ethernet traffic (extended version), IEEE/ACM Trans. Netw. 2 (1994) 1­15.
+
+                                                                                               [23] M. Kalewski, A. Kobusinska, J. Kobusinski, FAST failure detection service for
+
+                                                                                               large scale distributed systems, in: 2009 17th Euromicro International Conference
+
+                                                                                               on Parallel, Distributed and Network-Based Processing, IEEE, 2009, pp. 229­236.
+
+                                                                                               [24] Intel Tofino Series Programmable Ethernet Switch ASIC, https://www.
+
+                                                                                               intel.com/content/www/us/en/products/network- io/programmable- ethernet-
+
+                                                                                               switch/tofino-series/tofino.html (Accessed on: 16 Feb 2022).
+
+                                                                                               [25] Y. Zhao, K. Yang, Z. Liu, T. Yang, L. Chen, S. Liu, N. Zheng, R. Wang, H. Wu,
+
+                                                                                               Y. Wang, et al., LightGuardian: A full-visibility, lightweight, in-band telemetry
+
+                                                                                               system using sketchlets, in: 18th USENIX Symposium on Networked Systems
+
+                                                                                               Design and Implementation, NSDI, 2021, pp. 991­1010.
+
+                                                                                               [26] p4lang/behavioral-model,    https://github.com/p4lang/behavioral- model
+
+                                                                                               (Accessed on: 16 Feb 2022).
+
+                                                                                               [27] B. Lantz, B. Heller, N. McKeown, A network in a laptop: rapid prototyping for
+
+                                                                                               software-defined networks, in: Proceedings of the 9th ACM SIGCOMM Workshop
+
+                                                                                               on Hot Topics in Networks, 2010, pp. 1­6.
+
+                                                                                           12
+M. Qian et al.                                                                                                                   Computer Networks 214 (2022) 109171
+
+[28] T. Benson, A. Akella, D.A. Maltz, Network traffic characteristics of data centers             Lin Cui is currently a professor in the Department of
+         in the wild, in: Proceedings of the 10th ACM SIGCOMM Conference on Internet               Computer Science at Jinan University, Guangzhou, China.
+         Measurement, 2010, pp. 267­280.                                                           He received the Ph.D. degree from City University of Hong
+                                                                                                   Kong in 2013. He has broad interests in networking systems,
+[29] Y. Peng, J. Yang, C. Wu, C. Guo, C. Hu, Z. Li, deTector: a topology-aware                     with focuses on cloud data center networking, software
+         monitoring system for data center networks, in: 2017 USENIX Annual Technical              defined networking (SDN), NFV, programmable networking,
+         Conference, USENIX ATC, 2017, pp. 55­68.                                                  distributed systems and so on.
+
+[30] Q. Huang, P.P. Lee, Y. Bao, Sketchlearn: relieving user burdens in approximate                Xiaoquan Zhang is a Ph.D. student in Jinan Uni-
+         measurement with automated statistical inference, in: Proceedings of the Con-             versity. He received the M.Phil. degree in computer
+         ference of the ACM Special Interest Group on Data Communication, 2018, pp.                science and technology from Jinan University, China,
+         576­590.                                                                                  in 2021. His current research interests includes state-
+                                                                                                   ful data plane/programmable data plane, software-defined
+[31] Q. Huang, S. Sheng, P.-H. Wang, X. Chen, C. Zhang, I. Pedisich, Y. Bao, Z.                    networking, and machine learning in computer network.
+         Han, D. Bharadia, R. Zhang, et al., Toward nearly-zero-error sketching via
+         compressive sensing, in: 18th USENIX Symposium on Networked Systems Design                Fung Po Tso received his B.Eng., M.Phil. and Ph.D. degrees
+         and Implementation, NSDI, 2021, pp. 1027­1044.                                            from City University of Hong Kong in 2006, 2007 and 2011
+                                                                                                   respectively. He is currently a senior lecturer in the Depart-
+[32] J. Sonchack, O. Michel, A.J. Aviv, E. Keller, J.M. Smith, Scaling hardware                    ment of Computer Science at the Loughborough University.
+         accelerated network monitoring to concurrent and dynamic queries with * flow,             His research interests include: network policy management,
+         in: 2018 USENIX Annual Technical Conference, USENIX ATC 18, 2018, pp.                     network measurement and optimization, service chaining,
+         823­835.                                                                                  data centre networking, software defined networking (SDN),
+                                                                                                   and edge computing.
+[33] D. Yu, Y. Zhu, B. Arzani, R. Fonseca, T. Zhang, K. Deng, L. Yuan, dShark:
+         A general, easy to program and scalable framework for analyzing in-network                Yuhui Deng received the Ph.D. degree in computer science
+         packet traces, in: 16th USENIX Symposium on Networked Systems Design and                  from the Huazhong University of Science and Technology,
+         Implementation, NSDI, 2019, pp. 207­220.                                                  in 2004. He is currently a Professor with the Computer
+                                                                                                   Science Department, Jinan University. Before joining Jinan
+[34] P. Nikolopoulos, C. Pappas, K. Argyraki, A. Perrig, Retroactive packet sampling               University, he worked with the EMC Corporation as a Senior
+         for traffic receipts, Proc. ACM Meas. Anal. Comput. Syst. (2019) 1­39.                    Research Scientist from 2008 to 2009. He worked as a
+                                                                                                   Research Officer with Cranfield University, U.K., from 2005
+[35] C. Kim, A. Sivaraman, N. Katta, A. Bas, A. Dixit, L.J. Wobker, In-band network                to 2008. His research interests cover green computing, cloud
+         telemetry via programmable dataplanes, in: Proceedings of the Conference of the           computing, information storage, computer architecture, and
+         ACM Special Interest Group on Data Communication, Vol. 15, 2015.                          performance evaluation.
+
+[36] B. Arzani, S. Ciraci, L. Chamon, Y. Zhu, H.H. Liu, J. Padhye, B.T. Loo, G.
+         Outhred, 007: Democratically finding the cause of packet drops, in: 15th USENIX
+         Symposium on Networked Systems Design and Implementation, NSDI, 2018, pp.
+         419­435.
+
+                                     Mimi Qian is a postgraduate student in Jinan University.
+                                     She received the B.E. degree in communication engi-
+                                     neering from Hainan Tropical Ocean University, China,
+                                     in 2014. Her current research interests includes state-
+                                     ful data plane/programmable data plane, software-defined
+                                     networking, and machine learning in computer network.
+
+                                                                                               13
+

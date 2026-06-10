@@ -5,8 +5,19 @@ import os,sys
 import copy
 import pandas as pd
 sys.path.append("/home/sbp/lixinyang/pingmesh")
-from utils.public_functions import load_json,save_json
 
+def load_json(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_jsonl(data, path):
+    with open(path, 'a') as f:
+        for item in data:
+            f.write(json.dumps(item, ensure_ascii=False) + '\n')
+def save_json(data, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 class Modifier:
     def __init__(self, alarm_content_path):
         """
@@ -19,7 +30,8 @@ class Modifier:
         self.alarm_content.pop("all_tag")
 
         self.json_file=os.path.dirname(alarm_content_path)
-        self.json_file=os.path.join(self.json_file,f"merged_pingmesh-{self.alarm_content['csn']}-全链路.json")
+        #self.json_file=os.path.join(self.json_file,f"merged_pingmesh-{self.alarm_content['csn']}-全链路.json")
+        self.json_file=os.path.join(self.json_file,f"pingmesh-{self.alarm_content['csn']}-全链路.json")
         self.nodes = load_json(self.json_file)
         self.destip=self.alarm_content["dst_tunnel_ip"]
         self.srcip=self.alarm_content["src_tunnel_ip"]
@@ -522,7 +534,7 @@ if __name__ == "__main__":
     # modifier.get_top_k_jaccard_ips(method=4)
     # modifier.evaluate_jaccard_methods([0,1,2,3,4])
     #modifier.run()
-    base_data_dir = "/home/sbp/lixinyang/pingmesh/data/nodes_silent_2/"
+    base_data_dir = "/home/sbp/lixinyang/pingmesh/data/nodes_labeled/"
     
     # 2. 递归查找所有以 _info.json 结尾的告警文件
     search_pattern = os.path.join(base_data_dir, "**", "**","*_info.json")

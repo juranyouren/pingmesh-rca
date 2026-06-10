@@ -1,0 +1,400 @@
+                       
+
+    Intelligent Operation
+
+
+    
+
+  Research on Alarm Compression Technology Based on Time-space
+           Feature Fusion and Graph Convolution Neural Network
+
+ 1  2 3 1 11.  1000482. 
+
+1000453.  100012
+
+Huang Bingming1Qiao Zhi2Huang Jianfeng3Zhao Huiying1Ma Ruitao11.China Unicom Research InstituteBeijing 100048Chi
+na2.China United Network Communications Group Co.Ltd.Beijing 100045China3. Beijing Ultrapower Software Co.Ltd.Beijing 100012
+China
+
+                      
+
+                      
+GCN                   doi10.12045/j.issn.1007-3043.2023.07.016
+ GCN                  1007-3043202307-0087-06
+ XGBoost              TN914
+                      A
+                      OSID
+
+Abstract
+
+The development trend and problems of current telecommunication network alarm correlation technology are analyzed. The
+technical scheme of alarm correlation in telecommunication network based on time-space feature fusion and root cause anal-
+ysis is proposed. By extracting the time and space features of alarmseffectively eliminating invalid noise dataand using the
+fusion model of GCN and XGBoost algorithmaccurate root cause analysis and efficient compression of network alarms are
+achieved. Finallythe effectiveness and reliability of the technical scheme are verified by analyzing the application results of the
+network alarm compression technology.
+
+Keywords
+
+Space-time feature fusionRoot cause analysisAlarm correlationAlarm compression
+
+ . J. 2023787-92.
+
+1                     
+                      
+       4G  5G         
+
+                            
+ 5G                   
+--------------------  
+                      Apriori1-2 FP-Growth 
+2023-05-08            Aprior 
+
+                        /2023/07 87
+          
+
+Intelligent Operation 
+
+                                 
+                                 
+FP-Growth                         GCN  XGBoost  2 
+                                 
+                                 
+                                                     
+                                 
+
+ 2                               2  GCN 
+                                    
+      a
+                                 2.1 
+                                       
+
+                                  1 
+                                       a
+
+                                 
+                                 
+      b
+                                       b
+                                 
+                                 
+
+                                       c
+                                 
+                                 
+
+                                       d                 
+                                 
+      
+                                       e GCN 
+                                 
+                                 
+
+                                       f GCN 
+
+ 1                                           
+                 ...     ......              
+                                 
+ m                                             GCN 
+                                  XGBoost      
+ 1                               
+                 ...                        
+                                             
+ n                                  
+                                            
+ 1                                          
+                 ...
+
+ k
+
+                         1 
+
+88 2023/07/DTPT
+                    
+
+ Intelligent Operation
+
+ XGBoost                                                
+
+                                        1 
+      g
+-                                      
+
+                                       
+      h
+                                       
+
+                                       
+2.2 
+                                       
+       2 
+                                       
+
+                                       
+ 2 
+                                       
+                                  
+                                       
+
+                                       
+                                  
+                                       
+                               
+                                       
+
+                                       
+                                     
+                                       
+                                  
+                                       
+                                     
+                                       
+
+                                       
+                                     
+                                       2.3  GCN  XGBoost 
+                                     
+                                                     AI  
+
+                   2                    AI 
+
+                                        2.2 
+
+                                       
+
+                                       
+
+                                        3 
+
+                                        AI  GCN
+
+                                        XGBoost GCN 
+
+                                       
+
+                                       XGBoost 
+
+                                       GCN 
+
+                                       
+
+                                       GCN AI 
+
+                                       
+
+                                       
+
+                                        G=VE
+
+                                         vi    V    i    vi   X  v  
+
+                                                                    i
+
+                                       ujvi  E  2 uj
+
+                                       vi  euj,vi  EGCN 
+
+                                       
+
+                                       GCN 
+
+                                                       /2023/07 89
+          
+
+Intelligent Operation 
+
+ 1                                                                                       
+                 ...                                                                     
+                                                                                         
+ m                                              
+                                               ......                                     
+ 1                                                                    
+                 ...                                                                      
+                                                                                       
+ n                                                              
+
+ 1                                                                          
+                 ...
+
+ k
+
+                               
+
+                                                3 
+
+ GCN                                                                  Gj j  gi 
+                                                                Hj j  hi
+
+                                                                       XGBoost 
+                                                                
+                                                                
+       vi                                                       
+GCN  vi 
+ n  n                                                           3 
+
+ GCN                                                            3.1 
+                                                                      
+H (l + 1)   =         D  -  1  AD  -  1  H (l + 1)W (l + 1)  1
+                            2         2                          5G 
+                                                                
+A = A + IN G IN                                                 
+                                                                
+ Di = AijWl                                                     
+             j                                                  
+                                                                3.2 
+Hl RN×D l  H0=X
+                                                                       5G 
+ GCN  XGBoost                                                    GCN 
+                                                                
+                                                                
+                                                                 4  5G 
+                                                                
+                                                                
+                                                                3.2.1 
+
+ XGBoost  XGBoost                                                      4  5G
+                                                                                    
+                                                                
+
+ Feature_importances_
+
+
+
+ XGBoost 
+
+ XGBoost 
+
+[0N] num_class
+
+                         C
+  Soft max ( zi) = ezi      ezc 
+
+                      c=1
+
+
+
+ Obj = -                    i  G   2     +  3                2
+                            j      j
+
+                               Hj +   
+
+90 2023/07/DTPT
+                                                            
+
+                                         Intelligent Operation
+
+                                              
+
+                                               4 
+                                               n min n
+                                              minn  10 i=/n i>2 
+       5G                                     
+
+1001  1010                              1020  1030  1040
+
+             4 5G 
+
+3.2.2                                          GCN 
+                                              
+
+                                                     XGBoost 
+                                              
+ K-Means                                       0.85
+                                              
+5G                                             1 
+ 5                                            3.2.4 
+3.2.3  GCN  XGBoost 
+                                                    
+                                                                  
+                                              
+                                              
+                                              3.3 
+
+SaaS                                                 5G 
+                                               9+
+PaaS                                          
+                                              / 31
+IaaS                                          
+                                              
+                                              
+                                               2 
+
+         1:00 2:00 3:00 4:00 5:00 6:00        4 
+
+ 5 5G                                               
+
+                                                    /2023/07 91
+            
+
+  Intelligent Operation 
+
+                         1 
+
+                                                                             
+   XX _                                                                      0.958 6
+   XX _                                                       XX _           0.946 6
+
+    _                                                         XX _           0.939 2
+
+          _             B _A __                                              0.939 3
+       _                 XX __C                                              0.899 8
+                        ___                                                  0.887 3
+          _
+                                                                       _
+
+                                                 __
+
+                                                          XX _
+
+                        _A _C _
+                                 _B _
+
+   2                                                                                mining. BerlinHeidelbergSpringer2012306-313.
+                                                                            5  . 
+                                
+                                /                                                   J. 200730166-70.
+                                                                            6  . D. 
+  XX             425       18      23
+                           61      59                                               2009.
+  XX             3 560             13                                       7 YUAN Y BHUANG T Z. A matrix algorithm for mining association
+                             2     17
+  XX             19          2     16                                               rulesC//Advances in Intelligent Computing. BerlinHeidelberg
+                           27      13                                               Springer2005370-379.
+  XX             35        59      31                                       8  . D. 
+                         168                                                        2016.
+                 429                                                        9  . 
+                                                                                   J. 201629418-23.
+  XX             769                                                        10  .  FPgrowth 
+                                                                                    J. 201935256-62.
+                 5 238                                                      11  . D. 
+                                                                                    2010.
+                                                                            12  . 
+                                                                                   D. 2010.
+                                                                            13  . D. 
+                                                                                    2007.
+                                                                            14  .  Spark D. 
+                                                                                    2015.
+                                                                            15  .  Spark 
+                                                                                    D. 2017.
+                                                                            16  .  5G 
+                                                                                    J. 2022671-76.
+
+                                                                               
+                                                                                
+1 AGRAWAL RIMIELISKI TSWAMI A. Mining association rules                         
+        between sets of items in large databasesJ. ACM SIGMOD Record            
+        1993222207-216.                                                         
+                                                                                
+2 AL-DHARHANI G SOTHMAN Z ABAKAR A A. A graph-based                             
+        ant colony optimization for association rule miningJ. Arabian Jour      
+        nal for Science and Engineering20143964651-4665.
+
+3 JIAO M HYAN PJIANG H Y. Research and application on Web in
+        formation retrieval based on improved FP-growth algorithmJ. Wu
+        han University Journal of Natural Sciences20061151065-1068.
+
+4 YUAN J BDING S L. Research and improvement on association rule
+        algorithm based on FP-growthC//Web information systems and
+
+92 2023/07/DTPT
+
