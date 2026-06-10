@@ -29,8 +29,7 @@ class AlarmWeightBuilder:
 
     def __init__(self, data_root=None):
         """
-        data_root: directory containing case subdirectories, each with
-                   nodes.json and info.json.
+        data_root: 数据集根目录，递归扫描找出所有 case（含 info.json 的目录）。
         """
         self.data_root = data_root
         self.weights = {}          # {alarm_name: float}
@@ -38,20 +37,38 @@ class AlarmWeightBuilder:
         self.case_count = 0
 
     # ── scan ──────────────────────────────────────────────────────────
+    @staticmethod
+    def _find_case_files(dirpath, filenames):
+        """
+        在目录下找到 node 文件和 info 文件。
+        兼容两种数据格式：
+          - graph_only 用的 merged_pingmesh-*-全链路.json + info.json
+          - Collector 输出的 nodes.json + info.json
+        Returns (node_file, info_file) or (None, None).
+        """
+        node_file = None
+        info_file = None
+        for f in filenames:
+            if f == "info.json":
+                info_file = f
+            elif "merged_pingmesh" in f and "全链路.json" in f:
+                node_file = f
+        # fallback: Collector 输出的 nodes.json
+        if node_file is None and "nodes.json" in filenames:
+            node_file = "nodes.json"
+        return node_file, info_file
+
     def _list_cases(self):
         """Yield (dirpath, nodes_path) for every case under data_root."""
         if not self.data_root or not os.path.isdir(self.data_root):
             return
-        for dirname in sorted(os.listdir(self.data_root)):
-            dp = os.path.join(self.data_root, dirname)
-            if not os.path.isdir(dp):
-                continue
-            np = os.path.join(dp, "nodes.json")
-            if os.path.exists(np):
-                yield dp, np
+        for dirpath, _dirnames, filenames in os.walk(self.data_root):
+            node_file, info_file = self._find_case_files(dirpath, filenames)
+            if node_file and info_file:
+                yield dirpath, os.path.join(dirpath, node_file)
 
     def _load_nodes(self, nodes_path):
-        """Load nodes.json and normalise to list-of-dicts."""
+        """Load node JSON and normalise to list-of-dicts."""
         with open(nodes_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
@@ -74,9 +91,11 @@ class AlarmWeightBuilder:
             case_alarms = set()
             for nd in nodes:
                 for evt in nd.get("alarms", []) + nd.get("logs", []):
-                    aname = evt.get("name", evt.get("alarm_name", ""))
+                    if isinstance(evt, str):
+                        aname = evt.strip()
+                    else:
+                        aname = str(evt.get("alarm_name", evt.get("name", ""))).strip()
                     if aname:
-                        aname = aname.strip()
                         seen.add(aname)
                         case_alarms.add(aname)
             for aname in case_alarms:
@@ -159,9 +178,9 @@ if __name__ == "__main__":
     import sys
 
     data_root = sys.argv[1] if len(sys.argv) > 1 else \
-        "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
+        "/home/sbp/lixinyang/pingmesh/data/nodes"
     out_path = sys.argv[2] if len(sys.argv) > 2 else \
-        "/home/sbp/lixinyang/pingmesh/data/alarm_weights.json"
+        "/home/sbp/lixinyang/pingmesh/data/weights/alarm_weights.json"
 
     builder = AlarmWeightBuilder(data_root=data_root)
     builder.build()
