@@ -58,6 +58,101 @@
 - 目标期刊：智能运维/网络方向
 - 主要短板见下方讨论
 
+## 数据管道与文件读取流程
+
+### 原始数据 → 标注数据
+
+```
+data/pingmesh_labeled/*.json          ← 华为云原始故障 JSON (104例)
+        │
+        ▼  Collector.process_network_nodes()
+        │    解析 full_link.task_topo / alarm_list / log_list / cross
+        │
+data/nodes_labeled/{timestamp}/{csn}/
+        ├── pingmesh-{csn}-全链路.json   ← 节点+告警+拓扑 (name_map)
+        ├── {csn}_info.json              ← 故障元信息 (source_ip, sink_ip, alarm_time)
+        └── label.json                   ← 人工标注 (Modifier 之后写入)
+```
+
+### 拓扑剪枝（Modifier）
+
+```
+data/nodes_labeled/**/**/*_info.json    ← glob 递归搜索所有案例
+        │
+        ▼  Modifier(file_path).run()
+        │    get_top_k_jaccard_ips(method) → Top-K 候选设备
+        │    topo_simplify(k) → 剪除无关节点
+        │
+data/nodes_labeled/{timestamp}/{csn}/
+        ├── nodes.json                   ← 剪枝后的节点数据 (覆盖写入)
+        ├── info.json                    ← 故障元信息 (从 alarm_content 提取)
+        └── label.json                   ← 人工标注 (从 alarm_content.label 提取)
+```
+
+### 各模块读取方式对照
+
+| 模块 | 遍历方式 | 节点文件匹配 | 依赖文件 |
+|------|---------|-------------|---------|
+| **Modifier** | `glob(**/**/*_info.json)` | — (读 info.json) | `*_info.json` |
+| **graph_only.py** | `os.walk` | `pingmesh-*-全链路.json` | `info.json` |
+| **LLM Analyzers** (Skilled/SkillNRefine) | `os.walk` → `generate_prompts()` | `nodes.json` | `info.json` |
+| **AlarmWeightBuilder** | `os.walk` → `_find_case_files()` | `pingmesh-*-全链路.json` / `nodes.json` | `info.json` |
+| **三个基线** (TraceRCA/NEC/BiAn) | `os.walk` → `generate_prompts()` | `nodes.json` | `info.json` |
+| **Scorer** | 读 `res.json` 中的 `dir` 字段 | — | `label.json`, `label_propath.json` |
+
+### 全局告警权重表
+
+```
+data/nodes_labeled/  (全部案例)
+        │
+        ▼  AlarmWeightBuilder.build()
+        │    遍历所有节点，提取 unique alarm_name
+        │    初始权重全 0
+        │
+data/weights/classified_alarms/all_alarms.json
+        │  格式: [{"alarm_name": "...", "alarm_priority": 0.0}, ...]
+        │
+        ▼  graph_only.py 读取
+        │    default_weights[name.lower()] = int(priority)
+        │    → PageRank personalization 向量中的告警权重项
+```
+
+### LLM 推理 → 评测
+
+```
+data/nodes_labeled/  (全部案例)
+        │
+        ▼  SkilledAnalyzer / SkillNRefineAnalyzer / CaseReviewer
+        │    generate_prompts() → batch LLM 推理
+        │
+data/res/{timestamp}/res.json
+        │  每项: {dir, prompt, draft_response, response, ...}
+        │
+        ▼  Scorer(res.json).calculate_metrics()
+        │    读取每个 case 的 label.json → GroundTruth
+        │    解析 draft_response/response → Prediction
+        │    计算 Top-1~5 / 期望步长 / 传播路径 F1
+        │
+data/res/{timestamp}/
+        ├── sum.json                      ← 汇总指标
+        ├── draft_ranking_failures.json   ← 错案详情
+        └── refined_ranking_failures.json ← refine 阶段错案
+```
+
+### 告警字段约定
+
+告警名提取优先级（全仓库统一）：
+```python
+# 事件可能是 str 或 dict
+name = event if isinstance(event, str) else event.get("alarm_name", event.get("name", ""))
+```
+
+即 `alarm_name` > `name` > 空字符串。
+
+### 统一路径
+
+所有模块默认数据根目录：`/home/sbp/lixinyang/pingmesh/data/nodes_labeled/`
+
 ## Git状态
 - 仓库存在大量已删除文件的残留索引（`git status` 显示大量D/M标记）
 - 有未跟踪的新目录：Baseline/, SkillBank/部分数据文件, docs/, Sys/CaseReviewer/FeatureExtract.py等
