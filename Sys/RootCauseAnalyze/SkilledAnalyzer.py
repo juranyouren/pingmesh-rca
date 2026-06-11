@@ -155,11 +155,11 @@ class SkilledAnalyzer:
         return refined_skills
 
     def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, dirpath: str) -> str:
-        """构建阶段二：通过证据融合层把三个 Skill 输出压缩为紧凑三段，注入 Prompt，并保留 Token 级安全网。"""
+        """构建阶段二：证据融合层产出证据表 + 候选详情；token 充足时填入完整原始数据，注入 Prompt。"""
         from Sys.RootCauseAnalyze.evidence_fusion import build_fused_evidence
 
-        # 融合层产出三段紧凑文本（已消除重复、按 IP 合并）
-        skill_ret, info_data, nodes_data = build_fused_evidence(
+        # 融合层产出：证据表 / info 概况 / 候选紧凑详情 / 候选完整原始数据
+        skill_ret, info_data, detail_compact, detail_raw = build_fused_evidence(
             node_list=self.executor.get_node_list(dirpath),
             info=self.executor.get_alarminfo(dirpath),
             dirpath=dirpath,
@@ -172,30 +172,30 @@ class SkilledAnalyzer:
         if not selected_skill_ids:
             skill_ret = "当前未调用任何专家工具，请仅依靠 Info 和候选详情进行推导。"
 
-        # ── Token 级安全网：融合后数据已很紧凑，这里仅防极端情况 ──
         tokenizer = self.llm.get_tokenizer()
         max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len * 0.8)
 
-        base_prompt_empty = SKILLED_PROMPT.format(SKILLRET="", INFO="", NODES="")
-        base_len = len(tokenizer.encode(base_prompt_empty))
+        base_len = len(tokenizer.encode(SKILLED_PROMPT.format(SKILLRET="", INFO="", NODES="")))
         remaining_tokens = max_input_tokens - base_len
 
-        # 证据表（skill_ret）最重要，优先保；info 次之；candidate detail 兜底截断
+        # 证据表（skill_ret）最重要，优先保；info 次之
         skill_tokens = tokenizer.encode(skill_ret)
         if len(skill_tokens) > remaining_tokens:
             skill_ret = tokenizer.decode(skill_tokens[:remaining_tokens]) + "\n...[证据表超长截断]..."
-            info_data, nodes_data = "", ""
-        else:
-            remaining_tokens -= len(skill_tokens)
-            info_tokens = tokenizer.encode(info_data)
-            if len(info_tokens) > remaining_tokens:
-                info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
-                nodes_data = ""
-            else:
-                remaining_tokens -= len(info_tokens)
-                nodes_tokens = tokenizer.encode(nodes_data)
-                if len(nodes_tokens) > remaining_tokens:
-                    nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
+            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES="")
+        remaining_tokens -= len(skill_tokens)
+
+        info_tokens = tokenizer.encode(info_data)
+        if len(info_tokens) > remaining_tokens:
+            info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
+            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES="")
+        remaining_tokens -= len(info_tokens)
+
+        # 候选详情：token 充足优先用完整原始数据 detail_raw，否则退回紧凑版 detail_compact
+        nodes_data = detail_raw if len(tokenizer.encode(detail_raw)) <= remaining_tokens else detail_compact
+        nodes_tokens = tokenizer.encode(nodes_data)
+        if len(nodes_tokens) > remaining_tokens:
+            nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
 
         return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=nodes_data)
 

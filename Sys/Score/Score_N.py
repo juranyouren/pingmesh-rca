@@ -103,8 +103,7 @@ class DictParser(BaseParser):
 class MetricsEvaluator:
     """纯粹的数学和统计逻辑，不涉及 IO 和 解析"""
     def __init__(self):
-        self.MISSING_PENALTY = 10 
-        self.PROBS = [0.54, 0.27, 0.18]
+        pass
 
     def evaluate_ranking(self, gt: GroundTruth, pred: Prediction) -> Dict[str, Any]:
         pred_ips = []
@@ -112,18 +111,12 @@ class MetricsEvaluator:
             if ip not in pred_ips:
                 pred_ips.append(ip)
 
-        pred_len = len(pred_ips)
-        
-        # 增加 Top-2 和 Top-4 变量
         top1_hit = 0
         top2_hit = 0
         top3_hit = 0
         top4_hit = 0
         top5_hit = 0
-        expected_steps = 0.0
-        min_cost = 0.0  # 记录理论最小步长
-        max_cost = 0.0  # 记录理论最大步长
-        
+
         if gt.ips:
             # 命中任意一个 gt_ip 即算命中：取所有 gt_ip 在预测中的最佳（最小）排名
             best_idx = None
@@ -139,19 +132,9 @@ class MetricsEvaluator:
                 if best_idx < 4: top4_hit = 1
                 if best_idx < 5: top5_hit = 1
 
-        for i, gt_ip in enumerate(gt.ips):
-            prob = self.PROBS[i] if i < len(self.PROBS) else 0.0
-            
-            steps_to_find = pred_ips.index(gt_ip) + 1 if gt_ip in pred_ips else pred_len + self.MISSING_PENALTY
-            
-            # 累加各项成本
-            expected_steps += prob * steps_to_find
-            min_cost += prob * (i + 1)
-            max_cost += prob * (pred_len + self.MISSING_PENALTY)
-
-        # 命中任意 gt_ip 即不算失败；全部未命中或期望步长过大才算失败
+        # 命中任意 gt_ip 即不算失败；全部未命中才算失败
         any_gt_hit = any(g in pred_ips for g in gt.ips) if gt.ips else False
-        is_failed = (pred_ips and gt.ips and not any_gt_hit) or expected_steps > 6
+        is_failed = bool(pred_ips and gt.ips and not any_gt_hit)
 
         return {
             "top1_hit": top1_hit,
@@ -159,52 +142,9 @@ class MetricsEvaluator:
             "top3_hit": top3_hit,
             "top4_hit": top4_hit,
             "top5_hit": top5_hit,
-            "expected_steps": expected_steps,
-            "min_cost": min_cost,  
-            "max_cost": max_cost,  
             "is_failed": is_failed,
             "pred_ips_dedup": pred_ips
         }
-
-    def evaluate_topology(self, gt: GroundTruth, pred: Prediction) -> Dict[str, float]:
-        case_path_f1, case_path_prec, case_path_rec = 0.0, 0.0, 0.0
-        
-        if not isinstance(gt.ppath, dict) or not gt.ppath:
-            return {"f1": 0.0, "prec": 0.0, "rec": 0.0, "is_valid": False}
-
-        current_gt_ips = list(gt.ppath.keys())[:3]
-        current_weights = self.PROBS[:len(current_gt_ips)]
-        weight_sum = sum(current_weights) if sum(current_weights) > 0 else 1.0
-        norm_weights = [w / weight_sum for w in current_weights]
-        
-        for i, g_ip in enumerate(current_gt_ips):
-            weight = norm_weights[i]
-            true_leaves = set(gt.ppath[g_ip].get("affected_nodes", []))
-            pred_leaves = set()
-            
-            if g_ip in pred.ppath and isinstance(pred.ppath[g_ip], dict):
-                pred_leaves = set(pred.ppath[g_ip].get("affected_nodes", []))
-            
-            if not true_leaves and not pred_leaves:
-                p, r, f = 1.0, 1.0, 1.0
-            else:
-                inter = true_leaves.intersection(pred_leaves)
-                p = len(inter) / len(pred_leaves) if pred_leaves else 0.0
-                r = len(inter) / len(true_leaves) if true_leaves else 0.0
-                f = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
-                
-            case_path_prec += weight * p
-            case_path_rec += weight * r
-            case_path_f1 += weight * f
-        
-        # 惩罚项
-        hallucinated_roots = set(pred.ppath.keys()) - set(current_gt_ips)
-        if hallucinated_roots:
-            penalty = len(hallucinated_roots) * 0.1 
-            case_path_f1 = max(0.0, case_path_f1 - penalty)
-            case_path_prec = max(0.0, case_path_prec - penalty)
-
-        return {"f1": case_path_f1, "prec": case_path_prec, "rec": case_path_rec, "is_valid": True}
 
 # ==========================================
 # 4. IO 处理模块 (Data/File Handler)
@@ -234,27 +174,17 @@ class DataIOHandler:
 
     @staticmethod
     def get_groundtruth(dir_name: str) -> GroundTruth:
-        # 获取 IPs
         label_file = os.path.join(dir_name, "label.json")
         labels = DataIOHandler.load_json(label_file) or []
         labels_sorted = sorted(labels, key=lambda x: x.get("ranking", 999))
-        
+
         gt_ips = []
         for label in labels_sorted[:3]:
             for node in label.get("abnormal_node", []):
                 if "ip" in node and node["ip"] not in gt_ips:
                     gt_ips.append(node["ip"])
-                    
-        # 获取 Topology Path
-        path_file = os.path.join(dir_name, "label_propath.json")
-        path_data = DataIOHandler.load_json(path_file) or {}
-        gt_ppath = {}
-        if isinstance(path_data, list):
-            for item in path_data: gt_ppath.update(item)
-        else:
-            gt_ppath = path_data
 
-        return GroundTruth(ips=gt_ips, ppath=gt_ppath)
+        return GroundTruth(ips=gt_ips, ppath={})
 
     @classmethod
     def is_silent_case(cls, dir_name: str) -> bool:
@@ -330,10 +260,7 @@ class Scorer:
         categories = ["all", "normal", "silent"]
         metrics = {
             c: {
-                # 新增 top2, top4 的聚合字段
-                "sum_top1": 0, "sum_top2": 0, "sum_top3": 0, "sum_top4": 0, "sum_top5": 0, 
-                "sum_expected_steps": 0.0, "sum_min_cost": 0.0, "sum_max_cost": 0.0, 
-                "valid_path_cases": 0, "sum_path_f1": 0.0, "sum_path_prec": 0.0, "sum_path_rec": 0.0,
+                "sum_top1": 0, "sum_top2": 0, "sum_top3": 0, "sum_top4": 0, "sum_top5": 0,
                 "failure_cases": [], "success_cases": []
             } for c in categories
         }
@@ -342,13 +269,12 @@ class Scorer:
             dir_name = rd.get("dir")
             raw_response = rd.get(response_key, rd.get("response", ""))
             pmt = rd.get(prompt_key, rd.get("prompt", ""))
-            
+
             gt = self.io.get_groundtruth(dir_name)
             if not gt.ips: continue
-                
+
             pred = self.parser.parse(raw_response)
             rank_res = self.evaluator.evaluate_ranking(gt, pred)
-            topo_res = self.evaluator.evaluate_topology(gt, pred)
 
             is_silent = self.io.is_silent_case(dir_name)
             cat = "silent" if is_silent else "normal"
@@ -358,14 +284,11 @@ class Scorer:
                 "is_silent": is_silent,
                 "pred_ips_dedup": rank_res["pred_ips_dedup"],
                 "gt_ips": gt.ips,
-                "expected_steps": round(rank_res["expected_steps"], 2),
                 "top1_hit": rank_res["top1_hit"],
-                "propagation_path": pred.ppath,
-                "path_f1": round(topo_res["f1"], 4) if topo_res["is_valid"] else None,
                 "pmt": pmt,
                 "response": raw_response
             }
-            
+
             for target_cat in [cat, "all"]:
                 # 累加 Top-1 ~ Top-5
                 metrics[target_cat]["sum_top1"] += rank_res["top1_hit"]
@@ -373,20 +296,10 @@ class Scorer:
                 metrics[target_cat]["sum_top3"] += rank_res["top3_hit"]
                 metrics[target_cat]["sum_top4"] += rank_res["top4_hit"]
                 metrics[target_cat]["sum_top5"] += rank_res["top5_hit"]
-                
-                metrics[target_cat]["sum_expected_steps"] += rank_res["expected_steps"]
-                metrics[target_cat]["sum_min_cost"] += rank_res["min_cost"]
-                metrics[target_cat]["sum_max_cost"] += rank_res["max_cost"]
 
-                if topo_res["is_valid"]:
-                    metrics[target_cat]["valid_path_cases"] += 1
-                    metrics[target_cat]["sum_path_f1"] += topo_res["f1"]
-                    metrics[target_cat]["sum_path_prec"] += topo_res["prec"]
-                    metrics[target_cat]["sum_path_rec"] += topo_res["rec"]
-
-                if rank_res["is_failed"]: 
+                if rank_res["is_failed"]:
                     metrics[target_cat]["failure_cases"].append(case_log)
-                else: 
+                else:
                     metrics[target_cat]["success_cases"].append(case_log)
 
         result_summary = {}
@@ -404,17 +317,6 @@ class Scorer:
             top3_acc_percent = (m["sum_top3"] / actual_eval_cases) * 100
             top4_acc_percent = (m["sum_top4"] / actual_eval_cases) * 100
             top5_acc_percent = (m["sum_top5"] / actual_eval_cases) * 100
-            avg_expected_steps = m["sum_expected_steps"] / actual_eval_cases
-            
-            # 计算归一化得分
-            avg_min_cost = m["sum_min_cost"] / actual_eval_cases
-            avg_max_cost = m["sum_max_cost"] / actual_eval_cases
-            if avg_max_cost > avg_min_cost:
-                norm_score = 1 - (avg_expected_steps - avg_min_cost) / (avg_max_cost - avg_min_cost)
-            else:
-                norm_score = 1.0 if avg_expected_steps <= avg_min_cost else 0.0
-
-            vpc = m["valid_path_cases"]
 
             result_summary[c] = {
                 "ranking_metrics": {
@@ -424,14 +326,6 @@ class Scorer:
                     "Top-3 Acc (%)": round(top3_acc_percent, 2),
                     "Top-4 Acc (%)": round(top4_acc_percent, 2),
                     "Top-5 Acc (%)": round(top5_acc_percent, 2),
-                    "期望排查步长": round(avg_expected_steps, 2),
-                    "归一化排查得分": round(max(0.0, norm_score), 4)  
-                },
-                "path_topology_metrics": {
-                    "valid_eval_cases": vpc,
-                    "weighted_path_f1_score": round(m["sum_path_f1"] / vpc if vpc > 0 else 0.0, 4),
-                    "weighted_path_precision": round(m["sum_path_prec"] / vpc if vpc > 0 else 0.0, 4),
-                    "weighted_path_recall": round(m["sum_path_rec"] / vpc if vpc > 0 else 0.0, 4)
                 },
                 "failed_cases_count": len(m["failure_cases"]),
                 "success_cases_count": len(m["success_cases"]),

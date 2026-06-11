@@ -92,7 +92,7 @@ class SkillNRefineAnalyzer:
         except Exception:
             weight_dirpath, co_occur_path, top_k = None, None, 10
 
-        skill_ret, info_data, nodes_data = build_fused_evidence(
+        skill_ret, info_data, detail_compact, detail_raw = build_fused_evidence(
             node_list=self.executor.get_node_list(dirpath),
             info=self.executor.get_alarminfo(dirpath),
             dirpath=dirpath,
@@ -105,7 +105,7 @@ class SkillNRefineAnalyzer:
         if not selected_skill_ids:
             skill_ret = "当前未调用任何专家工具，请仅依靠 Info 和候选详情进行推导。"
 
-        # ── Token 级安全网：证据表 > info > 候选详情 ──
+        # ── Token 级安全网：证据表 > info > 候选详情（token 充足优先完整原始数据）──
         tokenizer = self.llm.get_tokenizer()
         max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len * 0.7)
 
@@ -115,17 +115,19 @@ class SkillNRefineAnalyzer:
         skill_tokens = tokenizer.encode(skill_ret)
         if len(skill_tokens) > remaining_tokens:
             return tokenizer.decode(skill_tokens[:remaining_tokens]) + "\n...[证据表超长截断]...", "", ""
-
         remaining_tokens -= len(skill_tokens)
+
         info_tokens = tokenizer.encode(info_data)
         if len(info_tokens) > remaining_tokens:
             info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
-            nodes_data = ""
-        else:
-            remaining_tokens -= len(info_tokens)
-            nodes_tokens = tokenizer.encode(nodes_data)
-            if len(nodes_tokens) > remaining_tokens:
-                nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
+            return skill_ret, info_data, ""
+        remaining_tokens -= len(info_tokens)
+
+        # token 充足用完整原始数据 detail_raw，否则退回紧凑版
+        nodes_data = detail_raw if len(tokenizer.encode(detail_raw)) <= remaining_tokens else detail_compact
+        nodes_tokens = tokenizer.encode(nodes_data)
+        if len(nodes_tokens) > remaining_tokens:
+            nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
 
         return skill_ret, info_data, nodes_data
 
