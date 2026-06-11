@@ -1,8 +1,8 @@
 SKILL_META = {
-    "skill_id": "4",
-    "skill_name": "calculate_node_alarm_weights",
+    "skill_id": "2",
+    "skill_name": "co_occurrence_alarm_check",
     "target_error": """模型有时无法区分海量告警中哪些是具有决定性意义的底层告警，且面对多个关联告警时容易产生单因谬误，导致漏报或误判。""",
-    "python_executor": "calculate_node_alarm_weights",
+    "python_executor": "co_occurrence_alarm_check",
     "trigger_conditions": {
         "logic": """当需要评估 Nodes 列表中各个节点的告警严重程度，以及识别全局是否存在特定的高危【告警组合】时触发。""",
         "rules": ["node_list 数据不为空"],
@@ -14,7 +14,7 @@ SKILL_META = {
 import os
 import json
 
-def calculate_node_alarm_weights(
+def co_occurrence_alarm_check(
     node_list: list, 
     info: dict = {}, 
     dirpath="/home/sbp/lixinyang/pingmesh/data/weights/classified_alarms/all_alarms.json",
@@ -147,5 +147,5 @@ def calculate_node_alarm_weights(
     return base_res
 
 EXECUTORS = {
-    "calculate_node_alarm_weights": calculate_node_alarm_weights
+    "co_occurrence_alarm_check": co_occurrence_alarm_check
 }
