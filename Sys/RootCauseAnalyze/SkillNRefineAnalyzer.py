@@ -82,57 +82,53 @@ class SkillNRefineAnalyzer:
         return "[]"
 
     def _prepare_context(self, dirpath: str, selected_skill_ids: list) -> tuple:
-        """读取数据、执行 Skill 并进行 Token 安全截断"""
-        nodes_path = os.path.join(dirpath, "nodes.json")
-        info_path = os.path.join(dirpath, "info.json")
-        
-        nodes_data, info_data = "{}", "{}"
-        if os.path.exists(nodes_path):
-            with open(nodes_path, 'r', encoding='utf-8') as f: nodes_data = f.read()
-        if os.path.exists(info_path):
-            with open(info_path, 'r', encoding='utf-8') as f: info_data = f.read()
+        """通过证据融合层把三个 Skill 输出压缩为紧凑三段，并保留 Token 安全网。"""
+        from Sys.RootCauseAnalyze.evidence_fusion import build_fused_evidence
+        try:
+            from Sys.config import config
+            weight_dirpath = config.data.alarm_weights
+            co_occur_path = config.skills.co_occur_rules
+            top_k = config.temporal.top_k
+        except Exception:
+            weight_dirpath, co_occur_path, top_k = None, None, 10
 
-        # 执行指定 Skill
-        skill_ret = "当前未调用任何专家工具，请仅依靠 Info 和 Nodes 数据进行推导。"
-        if selected_skill_ids:
-            selected_skills = [s for s in self.skills if s["skill_id"] in [str(i) for i in selected_skill_ids]]
-            if selected_skills:
-                instructions = []
-                for s in selected_skills:
-                    if s.get("python_executor"):
-                        exec_result = self.executor.execute(s["python_executor"], dirpath)
-                        instructions.append(f"[{s['skill_name']} 执行结果]:\n{exec_result}")
-                    else:
-                        instructions.append(f"[{s['skill_name']} 规则要求]:\n" + json.dumps(s['execution_instructions'], ensure_ascii=False, indent=2))
-                skill_ret = f"{chr(10).join(instructions)}\n"
+        skill_ret, info_data, nodes_data = build_fused_evidence(
+            node_list=self.executor.get_node_list(dirpath),
+            info=self.executor.get_alarminfo(dirpath),
+            dirpath=dirpath,
+            skill_map=self.executor.skill_map,
+            weight_dirpath=weight_dirpath,
+            co_occur_path=co_occur_path,
+            top_k=top_k,
+        )
 
-        # Token 级截断
+        if not selected_skill_ids:
+            skill_ret = "当前未调用任何专家工具，请仅依靠 Info 和候选详情进行推导。"
+
+        # ── Token 级安全网：证据表 > info > 候选详情 ──
         tokenizer = self.llm.get_tokenizer()
         max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len * 0.7)
 
-        base_prompt_empty = SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES="")
-        base_len = len(tokenizer.encode(base_prompt_empty))
-        remaining_tokens = max_input_tokens - base_len
+        base_prompt_empty = SKILLED_PROMPT.format(SKILLRET="", INFO="", NODES="")
+        remaining_tokens = max_input_tokens - len(tokenizer.encode(base_prompt_empty))
 
-        if remaining_tokens <= 0:
-            truncated_skill = tokenizer.decode(tokenizer.encode(skill_ret)[:max_input_tokens])
-            return truncated_skill + "\n[警告：工具输出过长已被截断！]", "{}", "{}"
+        skill_tokens = tokenizer.encode(skill_ret)
+        if len(skill_tokens) > remaining_tokens:
+            return tokenizer.decode(skill_tokens[:remaining_tokens]) + "\n...[证据表超长截断]...", "", ""
 
+        remaining_tokens -= len(skill_tokens)
         info_tokens = tokenizer.encode(info_data)
-        nodes_tokens = tokenizer.encode(nodes_data)
-
-        if len(info_tokens) + len(nodes_tokens) > remaining_tokens:
-            max_info_tokens = int(remaining_tokens * 0.4)
-            if len(info_tokens) > max_info_tokens:
-                info_data = tokenizer.decode(info_tokens[:max_info_tokens]) + "\n...[Info 数据超长截断]..."
-                remaining_for_nodes = remaining_tokens - max_info_tokens
-            else:
-                remaining_for_nodes = remaining_tokens - len(info_tokens)
-                
-            if len(nodes_tokens) > remaining_for_nodes:
-                nodes_data = tokenizer.decode(nodes_tokens[:remaining_for_nodes]) + "\n...[Nodes 数据超长截断]..."
+        if len(info_tokens) > remaining_tokens:
+            info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
+            nodes_data = ""
+        else:
+            remaining_tokens -= len(info_tokens)
+            nodes_tokens = tokenizer.encode(nodes_data)
+            if len(nodes_tokens) > remaining_tokens:
+                nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
 
         return skill_ret, info_data, nodes_data
+
 
     def _build_safe_refine_prompt(self, skill_ret: str, info_data: str, nodes_data: str, draft_res: str) -> str:
         """专为 Refine 层设计的极限截断组装器，确保绝不爆 Token"""
