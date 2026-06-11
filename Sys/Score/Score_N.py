@@ -125,15 +125,19 @@ class MetricsEvaluator:
         max_cost = 0.0  # 记录理论最大步长
         
         if gt.ips:
-            # 严格以首个 IP 作为第一顺位的高权重根因节点
-            gt_primary = gt.ips[0]
-            if gt_primary in pred_ips:
-                idx = pred_ips.index(gt_primary)
-                if idx < 1: top1_hit = 1
-                if idx < 2: top2_hit = 1
-                if idx < 3: top3_hit = 1
-                if idx < 4: top4_hit = 1
-                if idx < 5: top5_hit = 1
+            # 命中任意一个 gt_ip 即算命中：取所有 gt_ip 在预测中的最佳（最小）排名
+            best_idx = None
+            for g in gt.ips:
+                if g in pred_ips:
+                    idx_g = pred_ips.index(g)
+                    if best_idx is None or idx_g < best_idx:
+                        best_idx = idx_g
+            if best_idx is not None:
+                if best_idx < 1: top1_hit = 1
+                if best_idx < 2: top2_hit = 1
+                if best_idx < 3: top3_hit = 1
+                if best_idx < 4: top4_hit = 1
+                if best_idx < 5: top5_hit = 1
 
         for i, gt_ip in enumerate(gt.ips):
             prob = self.PROBS[i] if i < len(self.PROBS) else 0.0
@@ -145,7 +149,9 @@ class MetricsEvaluator:
             min_cost += prob * (i + 1)
             max_cost += prob * (pred_len + self.MISSING_PENALTY)
 
-        is_failed = (pred_ips and gt.ips and gt.ips[0] not in pred_ips) or expected_steps > 6
+        # 命中任意 gt_ip 即不算失败；全部未命中或期望步长过大才算失败
+        any_gt_hit = any(g in pred_ips for g in gt.ips) if gt.ips else False
+        is_failed = (pred_ips and gt.ips and not any_gt_hit) or expected_steps > 6
 
         return {
             "top1_hit": top1_hit,

@@ -20,6 +20,43 @@ def load_json(path):
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
+
+def _extract_gt_ips(dirpath: str) -> list:
+    """从 label.json 提取 ground-truth 根因 IP（与 Score_N.get_groundtruth 同逻辑：ranking 前 3）。"""
+    label_path = os.path.join(dirpath, "label.json")
+    if not os.path.exists(label_path):
+        return []
+    try:
+        labels = load_json(label_path)
+    except Exception:
+        return []
+    if not isinstance(labels, list):
+        return []
+    labels_sorted = sorted(labels, key=lambda x: x.get("ranking", 999))
+    gt_ips = []
+    for label in labels_sorted[:3]:
+        for node in label.get("abnormal_node", []):
+            ip = node.get("ip")
+            if ip and ip not in gt_ips:
+                gt_ips.append(ip)
+    return gt_ips
+
+
+def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
+    """
+    数据/管道诊断：检查 ground-truth IP 是否出现在送入大模型的 prompt 文本中。
+    若 gt_ip 根本不在 prompt 里，大模型不可能命中——属于数据标注或管道问题，而非模型问题。
+    返回 {dir, gt_ips, missing_ips, all_missing}。
+    """
+    gt_ips = _extract_gt_ips(dirpath)
+    missing = [ip for ip in gt_ips if ip not in prompt]
+    return {
+        "dir": dirpath,
+        "gt_ips": gt_ips,
+        "missing_ips": missing,
+        "all_missing": bool(gt_ips) and len(missing) == len(gt_ips),
+    }
+
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None):
         """
@@ -216,8 +253,9 @@ class SkilledAnalyzer:
 def generate_prompts(root_path: str) -> tuple:
     dirpath_list = []
     prompt_list = []
+    gt_check_reports = []   # gt_ip 是否在 prompt 中的诊断
     print(f"开始扫描目录 {root_path} 并构造 Prompt...")
-    
+
     for dirpath, dirnames, filenames in os.walk(root_path):
         if "nodes.json" in filenames and "info.json" in filenames:
             node_path = os.path.join(dirpath, "nodes.json")
@@ -228,10 +266,50 @@ def generate_prompts(root_path: str) -> tuple:
                 prompt = PROMPT.format(NODES=node, INFO=info)
                 dirpath_list.append(dirpath)
                 prompt_list.append(prompt)
+                # 数据诊断：检查 gt_ip 是否真的在 prompt 里
+                gt_check_reports.append(check_gt_in_prompt(dirpath, prompt))
             except Exception as e:
                 print(f"\n[错误] 读取/解析目录 {dirpath} 时发生异常: {e}")
-                
+
+    # 汇总并落盘 gt_ip 缺失诊断
+    _report_gt_check(root_path, gt_check_reports)
+
     return dirpath_list, prompt_list
+
+
+def _report_gt_check(root_path: str, reports: list):
+    """打印并保存 gt_ip 缺失诊断：哪些 case 的根因 IP 根本不在 prompt 中。"""
+    if not reports:
+        return
+    no_gt = [r for r in reports if not r["gt_ips"]]
+    all_missing = [r for r in reports if r["all_missing"]]
+    partial_missing = [r for r in reports if r["missing_ips"] and not r["all_missing"]]
+
+    print("=" * 60)
+    print(f"[GT 诊断] 共 {len(reports)} 个 case")
+    print(f"  - 无 gt_ip 标注:        {len(no_gt)}")
+    print(f"  - gt_ip 全部不在 prompt: {len(all_missing)}  ← 大模型不可能命中")
+    print(f"  - gt_ip 部分不在 prompt: {len(partial_missing)}")
+    if all_missing:
+        print("  [全缺失案例]:")
+        for r in all_missing:
+            print(f"    {r['dir']}  gt={r['gt_ips']}")
+    print("=" * 60)
+
+    out_path = os.path.join(root_path, "gt_in_prompt_check.json")
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "total": len(reports),
+                "no_gt_label": len(no_gt),
+                "all_missing": len(all_missing),
+                "partial_missing": len(partial_missing),
+                "all_missing_cases": all_missing,
+                "partial_missing_cases": partial_missing,
+            }, f, ensure_ascii=False, indent=2)
+        print(f"[GT 诊断] 详情已保存至: {out_path}")
+    except Exception as e:
+        print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
 def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0) -> dict:
