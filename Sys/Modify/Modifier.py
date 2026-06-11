@@ -30,8 +30,15 @@ class Modifier:
         self.alarm_content.pop("all_tag")
 
         self.json_file=os.path.dirname(alarm_content_path)
-        #self.json_file=os.path.join(self.json_file,f"merged_pingmesh-{self.alarm_content['csn']}-全链路.json")
-        self.json_file=os.path.join(self.json_file,f"pingmesh-{self.alarm_content['csn']}-全链路.json")
+        # 兼容两种命名: pingmesh-*-全链路.json 和 merged_pingmesh-*-全链路.json
+        candidate_pingmesh = os.path.join(self.json_file, f"pingmesh-{self.alarm_content['csn']}-全链路.json")
+        candidate_merged   = os.path.join(self.json_file, f"merged_pingmesh-{self.alarm_content['csn']}-全链路.json")
+        if os.path.exists(candidate_pingmesh):
+            self.json_file = candidate_pingmesh
+        elif os.path.exists(candidate_merged):
+            self.json_file = candidate_merged
+        else:
+            self.json_file = candidate_pingmesh  # 默认尝试 pingmesh- 前缀
         self.nodes = load_json(self.json_file)
         self.destip=self.alarm_content["dst_tunnel_ip"]
         self.srcip=self.alarm_content["src_tunnel_ip"]

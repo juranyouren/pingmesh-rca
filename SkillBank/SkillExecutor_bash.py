@@ -9,8 +9,13 @@ def load_json(path):
 def generate_target_path(source_dir):
     # 提取最后一级目录名 (去除末尾可能的斜杠以防出错)
     node_id = os.path.basename(source_dir.rstrip(os.sep))
-    filename = f"merged_pingmesh-{node_id}-全链路.json"
-    return os.path.join(source_dir, filename)
+    # 兼容两种命名: merged_pingmesh-*-全链路.json (Modifier 输出) 和 pingmesh-*-全链路.json (Collector 直接输出)
+    for prefix in ("merged_pingmesh-", "pingmesh-"):
+        path = os.path.join(source_dir, f"{prefix}{node_id}-全链路.json")
+        if os.path.exists(path):
+            return path
+    # 默认返回 merged_pingmesh 前缀（向后兼容）
+    return os.path.join(source_dir, f"merged_pingmesh-{node_id}-全链路.json")
 
 class SkillExecutor:
     def __init__(self, skills_folder="/home/sbp/lixinyang/pingmesh/SkillBank/skills"):
