@@ -418,38 +418,58 @@ def get_dirpaths_from_fcases(fcase_path):
     return res
 
 if __name__ == "__main__":
-    available_npus = config.model.npu_groups[0]  # 第一个 NPU 组, e.g. [0, 1]
-    target_skill_ids = [str(sid) for sid in config.skill.skill_ids]  # ["1", "2", "3"]
+    import argparse
 
-    root_path = config.data.nodes_labeled
-    dirpaths, prompts = generate_prompts(root_path)
+    p = argparse.ArgumentParser(description="SkilledAnalyzer — Skill 触发的 LLM RCA 推理")
+    p.add_argument("--data-root", "-d", default=config.data.nodes_labeled,
+                   help="数据根目录 (含 nodes.json + info.json 的 case 目录)")
+    p.add_argument("--output-dir", "-o", default=None,
+                   help="结果输出目录（默认: {config.data.results}/{timestamp}）")
+    p.add_argument("--npu-cards", "-n", default="0,1",
+                   help="使用的 NPU 卡号，逗号分隔 (default: 0,1)")
+    p.add_argument("--skills", "-s", nargs="*", type=int, default=config.skill.skill_ids,
+                   help="启用的 Skill ID 列表 (default: [1,2,3])")
+    p.add_argument("--batch-size", "-b", type=int, default=config.model.batch_size,
+                   help="批量推理大小 (default: 8)")
+    p.add_argument("--short", type=int, default=config.skill.short_mode, choices=[0, 1],
+                   help="short=1 不传入原始节点数据省 Token (default: 0)")
+    p.add_argument("--failures-from", default=None,
+                   help="只跑指定 failures JSON 中的错案 (debug/回归用)")
+    args = p.parse_args()
 
-    # dirpaths=get_dirpaths_from_fcases("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/ranking_failures.json")
-    # prompts=generate_partial_prompts(dirpaths)
+    target_skill_ids = [str(sid) for sid in args.skills]
+
+    if args.failures_from:
+        # 只跑指定错案列表
+        dirpaths = get_dirpaths_from_fcases(args.failures_from)
+        prompts = generate_partial_prompts(dirpaths)
+    else:
+        dirpaths, prompts = generate_prompts(args.data_root)
 
     if prompts:
-        print(f"共生成 {len(prompts)} 个任务，开始分配并行推理...")
+        print(f"共生成 {len(prompts)} 个任务，Skills={target_skill_ids}...")
 
+        available_npus = [int(x.strip()) for x in args.npu_cards.split(",")]
         start_time = time.time()
         final_results = distribute_inference_tasks(
             dirpath_list=dirpaths,
             prompt_list=prompts,
             npu_list=available_npus,
             target_skill_ids=target_skill_ids,
-            batch_size=config.model.batch_size,
-            short=config.skill.short_mode
+            batch_size=args.batch_size,
+            short=args.short,
         )
-        end_time = time.time()
+        print(f"所有并行推理已完成！总耗时: {time.time() - start_time:.2f} 秒")
 
-        print(f"所有并行推理已完成！总耗时: {end_time - start_time:.2f} 秒")
-
-        timenow = int(time.time())
-        save_dir = os.path.join(config.data.results, str(timenow))
+        if args.output_dir:
+            save_dir = args.output_dir
+        else:
+            save_dir = os.path.join(config.data.results, str(int(time.time())))
         os.makedirs(save_dir, exist_ok=True)
 
         if final_results:
             save_path = os.path.join(save_dir, "res.json")
             save_json(final_results, save_path)
-            print(f"最终结果已合并并保存至: {save_path}")
+            print(f"最终结果已保存至: {save_path}")
     else:
         print("没有找到需要推理的任务。")

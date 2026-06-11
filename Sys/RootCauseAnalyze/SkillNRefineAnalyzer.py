@@ -365,39 +365,68 @@ def generate_prompts(root_path: str) -> tuple:
     return dirpath_list, prompt_list
 
 if __name__ == "__main__":
-    # 配置
-    available_npus = [0,1,2,3,4,5,6,7]
-    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes"
-    
-    # 配置本次运行需调用的专家工具 ID 列表
-    TARGET_SKILLS = [1,2]
-    
-    dirpaths, prompts = generate_prompts(root_path)
-    
+    import argparse
+
+    # 尝试从 config 读取默认值，不存在就用硬编码兜底
+    try:
+        from Sys.config import config
+        _data = config.data.nodes_labeled
+        _skills = config.skill.skill_ids
+        _short = config.skill.short_mode
+        _batch = config.model.batch_size
+    except Exception:
+        _data = "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
+        _skills = [1, 2]
+        _short = 0
+        _batch = 8
+
+    p = argparse.ArgumentParser(description="SkillNRefineAnalyzer — Skill + Refine 双阶段 RCA 推理")
+    p.add_argument("--data-root", "-d", default=_data,
+                   help="数据根目录")
+    p.add_argument("--output-dir", "-o", default=None,
+                   help="结果输出目录（默认: {data.results}/{timestamp}）")
+    p.add_argument("--npu-cards", "-n", default="0,1,2,3,4,5,6,7",
+                   help="使用的 NPU 卡号，逗号分隔 (default: 0,1,2,3,4,5,6,7)")
+    p.add_argument("--skills", "-s", nargs="*", type=int, default=_skills,
+                   help="启用的 Skill ID 列表 (default: [1,2,3])")
+    p.add_argument("--batch-size", "-b", type=int, default=_batch,
+                   help="批量推理大小 (default: 8)")
+    p.add_argument("--short", type=int, default=_short, choices=[0, 1],
+                   help="short=1 不传入原始节点数据省 Token (default: 0)")
+    args = p.parse_args()
+
+    available_npus = [int(x.strip()) for x in args.npu_cards.split(",")]
+
+    dirpaths, prompts = generate_prompts(args.data_root)
+
     if prompts:
-        print(f"共生成 {len(prompts)} 个任务，开始分配并发执行 (应用 Skills: {TARGET_SKILLS})...")
+        print(f"共生成 {len(prompts)} 个任务，Skills={args.skills}...")
         start_time = time.time()
-        
+
         final_results = distribute_inference_tasks(
-            dirpath_list=dirpaths, 
-            prompt_list=prompts, 
+            dirpath_list=dirpaths,
+            prompt_list=prompts,
             npu_list=available_npus,
-            batch_size=8,
-            short=0,
-            skill_ids_to_use=TARGET_SKILLS # <--- 在最外层统一传入
+            batch_size=args.batch_size,
+            short=args.short,
+            skill_ids_to_use=args.skills,
         )
-        
-        end_time = time.time()
-        print(f"所有并行推理已完成！总耗时: {end_time - start_time:.2f} 秒")
-        
-        timenow = int(time.time())
-        save_dir = f"/home/sbp/lixinyang/pingmesh/data/res/{timenow}"
+
+        print(f"所有并行推理已完成！总耗时: {time.time() - start_time:.2f} 秒")
+
+        if args.output_dir:
+            save_dir = args.output_dir
+        else:
+            try:
+                save_dir = os.path.join(config.data.results, str(int(time.time())))
+            except Exception:
+                save_dir = f"/home/sbp/lixinyang/pingmesh/data/res/{int(time.time())}"
         os.makedirs(save_dir, exist_ok=True)
-        
+
         if final_results:
             save_path = os.path.join(save_dir, "res.json")
             save_json(final_results, save_path)
             print(f"最终结果已保存至: {save_path}")
-            print("您现在可以查看 res.json 对比 'draft_response' 和 'response' 以评估 Refine 层的干预效果！")
+            print("对比 draft_response 和 response 评估 Refine 层干预效果")
     else:
         print("没有找到需要推理的任务。")
