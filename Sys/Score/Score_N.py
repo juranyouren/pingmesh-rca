@@ -5,6 +5,8 @@ from typing import List, Dict, Any, Tuple, Optional
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from Sys.config import config
+
 # ==========================================
 # 1. 数据模型 (Data Models)
 # ==========================================
@@ -271,7 +273,7 @@ class DataIOHandler:
         if csn in cls._silent_cache:
             return cls._silent_cache[csn]
 
-        original_dir = "/home/sbp/lixinyang/pingmesh/data/pingmesh_original"
+        original_dir = config.data.pingmesh_raw
         target_file_path = None
         if os.path.exists(original_dir):
             for filename in os.listdir(original_dir):
@@ -501,7 +503,7 @@ class Scorer:
 
 # ================= 使用示例 =================
 if __name__ == "__main__":
-    file_path = "/home/sbp/lixinyang/pingmesh/data/res/1778218041/res.json"
+    file_path = os.path.join(config.data.results, "1778218041", "res.json")
     
     parser_llm = LlmTextParser()
     scorer = Scorer(res_file_path=file_path, parser=parser_llm)

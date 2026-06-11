@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 sys.path.append("/home/sbp/lixinyang/pingmesh")
 from utils.prompts import PROMPT,SKILLED_PROMPT
 from SkillBank.SkillExecutor import SkillExecutor
+from Sys.config import config
 
 def save_json(data, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -20,41 +21,51 @@ def load_json(path):
         return json.load(f)
 
 class SkilledAnalyzer:
-    def __init__(self, model_path="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B", ASCEND_RT_VISIBLE_DEVICES="0,1",skill_json_path="/home/sbp/lixinyang/pingmesh/SkillBank/skills.json",short=0):
+    def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None):
         """
-        初始化基于 vllm.LLM 的技能型根因分析器
+        初始化基于 vllm.LLM 的技能型根因分析器。
+        所有参数可选，默认从 Sys.config 读取。
         """
+        if model_path is None:
+            model_path = config.model.model_path
+        if ASCEND_RT_VISIBLE_DEVICES is None:
+            ASCEND_RT_VISIBLE_DEVICES = config.model.npu_cards
+        if skill_json_path is None:
+            skill_json_path = config.skills.skills_json
+        if short is None:
+            short = config.skill.short_mode
+
         print(f"[{os.getpid()}] 正在初始化 vLLM 引擎，使用的 NPU 卡号为: {ASCEND_RT_VISIBLE_DEVICES}")
-        
+
         self.model_path = model_path
         self.ASCEND_RT_VISIBLE_DEVICES = ASCEND_RT_VISIBLE_DEVICES
         print("loading skills")
-        self.executor=SkillExecutor()
-        
+        self.executor=SkillExecutor(skills_folder=config.skills.skills_folder)
+
         self.skills = self.executor.get_skill_conf()
         self.short=short#short为1则不传入源数据
-        
+
         # 将 skill_id 统一转换为 string 方便检索
         print(self.skills)
         for s in self.skills:
             s["skill_id"] = str(s["skill_id"])
-            
+
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.ASCEND_RT_VISIBLE_DEVICES
-        
+
         from vllm import LLM, SamplingParams
-        
+
         self.llm = LLM(
             model=self.model_path,
-            tensor_parallel_size=2,  
-            gpu_memory_utilization=0.85,
-            max_model_len=int(65536/4),
-            trust_remote_code=True
+            tensor_parallel_size=2,
+            gpu_memory_utilization=config.model.gpu_memory_utilization,
+            max_model_len=config.model.max_model_len,
+            trust_remote_code=config.model.trust_remote_code
         )
-        
+
         self.sampling_params = SamplingParams(
-            temperature=0.6,
-            max_tokens=2048,
-            repetition_penalty=1.05
+            temperature=config.model.temperature,
+            max_tokens=config.model.max_tokens,
+            repetition_penalty=config.model.repetition_penalty
         )
 
     def _load_skill(self, skill_path: str) -> list:
@@ -349,39 +360,35 @@ def get_dirpaths_from_fcases(fcase_path):
     return res
 
 if __name__ == "__main__":
-    # 配置
-    available_npus = [0,1]
+    available_npus = config.model.npu_groups[0]  # 第一个 NPU 组, e.g. [0, 1]
+    target_skill_ids = [str(sid) for sid in config.skill.skill_ids]  # ["1", "2", "3"]
 
-    # [MODIFIED] 定义要指定的全局 target_skill_ids
-    # 填入你希望模型调用的 ID，例如 ["1", "3", "5"] (必须是字符串格式)
-    target_skill_ids = ["1", "2"] 
-    
-    root_path = "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
+    root_path = config.data.nodes_labeled
     dirpaths, prompts = generate_prompts(root_path)
 
     # dirpaths=get_dirpaths_from_fcases("/home/sbp/lixinyang/pingmesh/data/res/exeskilled5/ranking_failures.json")
     # prompts=generate_partial_prompts(dirpaths)
-    
+
     if prompts:
         print(f"共生成 {len(prompts)} 个任务，开始分配并行推理...")
-        
+
         start_time = time.time()
         final_results = distribute_inference_tasks(
-            dirpath_list=dirpaths, 
-            prompt_list=prompts, 
+            dirpath_list=dirpaths,
+            prompt_list=prompts,
             npu_list=available_npus,
-            target_skill_ids=target_skill_ids, # [MODIFIED] 将固定 list 传进去
-            batch_size=8,
-            short=0
+            target_skill_ids=target_skill_ids,
+            batch_size=config.model.batch_size,
+            short=config.skill.short_mode
         )
         end_time = time.time()
-        
+
         print(f"所有并行推理已完成！总耗时: {end_time - start_time:.2f} 秒")
-        
+
         timenow = int(time.time())
-        save_dir = f"/home/sbp/lixinyang/pingmesh/data/res/{timenow}"
+        save_dir = os.path.join(config.data.results, str(timenow))
         os.makedirs(save_dir, exist_ok=True)
-        
+
         if final_results:
             save_path = os.path.join(save_dir, "res.json")
             save_json(final_results, save_path)
