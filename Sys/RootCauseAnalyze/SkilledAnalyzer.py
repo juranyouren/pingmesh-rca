@@ -157,12 +157,12 @@ class SkilledAnalyzer:
             
         return refined_skills
 
-    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, dirpath: str) -> str:
-        """构建阶段二：证据融合层产出证据表 + 候选详情；token 充足时填入完整原始数据，注入 Prompt。"""
+    def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, dirpath: str):
+        """返回 (final_prompt, skill_ips)。skill_ips 是算法综合分排名（LLM 未介入）。"""
         from Sys.RootCauseAnalyze.evidence_fusion import build_fused_evidence
 
-        # 融合层产出：证据表 / info 概况 / 候选紧凑详情 / 候选完整原始数据
-        skill_ret, info_data, detail_compact, detail_raw = build_fused_evidence(
+        # 融合层产出：证据表 / info 概况 / 候选紧凑详情 / 候选原始数据 / 算法排名 IP
+        skill_ret, info_data, detail_compact, detail_raw, skill_ips = build_fused_evidence(
             node_list=self.executor.get_node_list(dirpath),
             info=self.executor.get_alarminfo(dirpath),
             dirpath=dirpath,
@@ -181,31 +181,28 @@ class SkilledAnalyzer:
         base_len = len(tokenizer.encode(SKILLED_PROMPT.format(SKILLRET="", INFO="", NODES="")))
         remaining_tokens = max_input_tokens - base_len
 
-        # 证据表（skill_ret）最重要，优先保；info 次之
         skill_tokens = tokenizer.encode(skill_ret)
         if len(skill_tokens) > remaining_tokens:
             skill_ret = tokenizer.decode(skill_tokens[:remaining_tokens]) + "\n...[证据表超长截断]..."
-            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES="")
+            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES=""), skill_ips
         remaining_tokens -= len(skill_tokens)
 
         info_tokens = tokenizer.encode(info_data)
         if len(info_tokens) > remaining_tokens:
             info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
-            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES="")
+            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=""), skill_ips
         remaining_tokens -= len(info_tokens)
 
-        # 候选详情：默认紧凑版（证据表已有全部结构化信息），short=0 且 token 极充足时才用 raw
         if self.short:
             nodes_data = detail_compact
         else:
             raw_tokens = len(tokenizer.encode(detail_raw))
-            # raw 超过剩余 token 30% 就不打扰 LLM（紧凑版足够）
             nodes_data = detail_raw if raw_tokens <= remaining_tokens * 0.3 else detail_compact
         nodes_tokens = tokenizer.encode(nodes_data)
         if len(nodes_tokens) > remaining_tokens:
             nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
 
-        return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=nodes_data)
+        return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=nodes_data), skill_ips
 
     def _safe_truncate(self, text: str) -> str:
         tokenizer = self.llm.get_tokenizer()
@@ -217,6 +214,7 @@ class SkilledAnalyzer:
 
     # [MODIFIED] 增加 target_skill_ids 参数
     def batch_infer(self, dirpaths: list, prompts: list, target_skill_ids: list, batch_size: int = 8) -> list:
+        """返回 (responses, prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list)"""
         print(f"[{os.getpid()}] 正在执行技能推理 (直接使用传入的技能集 {target_skill_ids}) (共 {len(prompts)} 条, Batch Size: {batch_size})...")
 
         def vllm_invoke(llm, inputs:list, sampling_params, desc="Inferring", b_size=1):
@@ -230,32 +228,60 @@ class SkilledAnalyzer:
                 outputs_w_prompts = llm.chat(applied_prompts, sampling_params)
                 all_responses.extend([item.outputs[0].text for item in outputs_w_prompts])
             return all_responses
-            
+
         try:
-            # [MODIFIED] 跳过 Stage 1，直接构建 Final Prompts
             final_prompts = []
             skill_ids_list = []
-            retrieval_responses = ["Skipped Retrieval Stage"] * len(prompts) # 使用占位符保持向下兼容结构
+            skill_ips_list = []
+            gt_ips_list = []
+            retrieval_responses = ["Skipped Retrieval Stage"] * len(prompts)
 
             for dirpath, original_p in zip(dirpaths, prompts):
-                # 直接使用传入的 target_skill_ids
                 skill_ids_list.append(target_skill_ids)
-                final_p = self._build_final_prompt(original_p, target_skill_ids, dirpath)
+                final_p, skill_ips = self._build_final_prompt(original_p, target_skill_ids, dirpath)
                 final_prompts.append(final_p)
+                skill_ips_list.append(skill_ips)
+                # 读取 gt_ips
+                gt_ips_list.append(self._read_gt_ips(dirpath))
 
-            # Stage 2: 模型调用 - 基于 Skill 执行根因分析
             final_responses = vllm_invoke(
-                llm=self.llm, 
-                inputs=final_prompts, 
-                sampling_params=self.sampling_params, 
+                llm=self.llm,
+                inputs=final_prompts,
+                sampling_params=self.sampling_params,
                 desc="Stage 2: Root Cause Analysis",
                 b_size=batch_size
             )
-            return final_responses, final_prompts, retrieval_responses, skill_ids_list
-            
+            return final_responses, final_prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list
+
         except Exception as e:
             print(f"\n[Error {os.getpid()}] vLLM 批量推理执行异常: {str(e)}")
-            return ["模型未返回有效推理内容或发生异常。"] * len(prompts)
+            return (["模型未返回有效推理内容或发生异常。"] * len(prompts),
+                    [""] * len(prompts),
+                    [""] * len(prompts),
+                    [[]] * len(prompts),
+                    [[]] * len(prompts),
+                    [[]] * len(prompts))
+
+    @staticmethod
+    def _read_gt_ips(dirpath: str) -> list:
+        """从 label.json 提取 ground-truth 根因 IP。"""
+        label_path = os.path.join(dirpath, "label.json")
+        if not os.path.exists(label_path):
+            return []
+        try:
+            labels = load_json(label_path)
+        except Exception:
+            return []
+        if not isinstance(labels, list):
+            return []
+        labels_sorted = sorted(labels, key=lambda x: x.get("ranking", 999))
+        gt_ips = []
+        for lb in labels_sorted[:3]:
+            for an in lb.get("abnormal_node", []):
+                ip = an.get("ip")
+                if ip and ip not in gt_ips:
+                    gt_ips.append(ip)
+        return gt_ips
 
 
 def _find_full_link_file(dirpath: str, filenames: list) -> str:
@@ -339,7 +365,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
 
     analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus, short=short, top_k=top_k)
     # [MODIFIED] 将 target_skill_ids 传入 batch_infer
-    responses, prmpts, ret_ress, skills = analyzer.batch_infer(
+    (responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls) = analyzer.batch_infer(
         dirpaths=dirpaths_chunk, 
         prompts=prompts_chunk, 
         target_skill_ids=target_skill_ids, 
@@ -347,10 +373,12 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     )
     
     resls=[]
-    for dp, res, pmt, ret_res, skill in zip(dirpaths_chunk, responses, prmpts, ret_ress, skills):
+    for dp, res, pmt, ret_res, skill, sips, gips in zip(dirpaths_chunk, responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls):
         clean_res = res.strip() if isinstance(res, str) else str(res)
         result_dict = {
-            "dir":dp,
+            "dir": dp,
+            "skill_ips": sips,
+            "gt_ips": gips,
             "ret_response":ret_res,
             "skills_used":skill,
             "prompt":pmt,

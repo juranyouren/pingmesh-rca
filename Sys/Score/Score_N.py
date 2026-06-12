@@ -302,37 +302,82 @@ class Scorer:
                 else:
                     metrics[target_cat]["success_cases"].append(case_log)
 
+        return self._build_summary(metrics, categories)
+
+    def _evaluate_skill(self, res_data: List[Dict]) -> Dict[str, Any]:
+        """评测纯算法排名（skill_ips），不依赖 LLM 输出。"""
+        categories = ["all", "normal", "silent"]
+        metrics = {
+            c: {
+                "sum_top1": 0, "sum_top2": 0, "sum_top3": 0, "sum_top4": 0, "sum_top5": 0,
+                "failure_cases": [], "success_cases": []
+            } for c in categories
+        }
+
+        for rd in res_data:
+            # skill_pipeline 输出或 SkilledAnalyzer 写入的 skill_ips
+            skill_ips = rd.get("skill_ips", [])
+            if not skill_ips:
+                # fallback: 尝试从 response 中提取（兼容旧 res.json）
+                continue
+            dir_name = rd.get("dir")
+            gt = self.io.get_groundtruth(dir_name)
+            if not gt.ips:
+                continue
+
+            pred = Prediction(ips=skill_ips, ppath={})
+            rank_res = self.evaluator.evaluate_ranking(gt, pred)
+
+            is_silent = self.io.is_silent_case(dir_name)
+            cat = "silent" if is_silent else "normal"
+
+            case_log = {
+                "name": dir_name,
+                "is_silent": is_silent,
+                "pred_ips_dedup": rank_res["pred_ips_dedup"],
+                "gt_ips": gt.ips,
+                "top1_hit": rank_res["top1_hit"],
+            }
+
+            for target_cat in [cat, "all"]:
+                metrics[target_cat]["sum_top1"] += rank_res["top1_hit"]
+                metrics[target_cat]["sum_top2"] += rank_res["top2_hit"]
+                metrics[target_cat]["sum_top3"] += rank_res["top3_hit"]
+                metrics[target_cat]["sum_top4"] += rank_res["top4_hit"]
+                metrics[target_cat]["sum_top5"] += rank_res["top5_hit"]
+                if rank_res["is_failed"]:
+                    metrics[target_cat]["failure_cases"].append(case_log)
+                else:
+                    metrics[target_cat]["success_cases"].append(case_log)
+
+        return self._build_summary(metrics, categories)
+
+    @staticmethod
+    def _build_summary(metrics, categories):
+        """将聚合指标转为百分比 summary dict。"""
         result_summary = {}
         for c in categories:
             m = metrics[c]
-            actual_eval_cases = len(m["failure_cases"]) + len(m["success_cases"])
-            
-            if actual_eval_cases == 0:
+            actual = len(m["failure_cases"]) + len(m["success_cases"])
+            if actual == 0:
                 result_summary[c] = {"status": f"No {c} cases found."}
                 continue
-
-            # 计算百分比
-            top1_acc_percent = (m["sum_top1"] / actual_eval_cases) * 100
-            top2_acc_percent = (m["sum_top2"] / actual_eval_cases) * 100
-            top3_acc_percent = (m["sum_top3"] / actual_eval_cases) * 100
-            top4_acc_percent = (m["sum_top4"] / actual_eval_cases) * 100
-            top5_acc_percent = (m["sum_top5"] / actual_eval_cases) * 100
-
+            top1 = round((m["sum_top1"] / actual) * 100, 2)
+            top2 = round((m["sum_top2"] / actual) * 100, 2)
+            top3 = round((m["sum_top3"] / actual) * 100, 2)
+            top4 = round((m["sum_top4"] / actual) * 100, 2)
+            top5 = round((m["sum_top5"] / actual) * 100, 2)
             result_summary[c] = {
                 "ranking_metrics": {
-                    "Total Evaluated Cases": actual_eval_cases,
-                    "Top-1 Acc (%)": round(top1_acc_percent, 2),
-                    "Top-2 Acc (%)": round(top2_acc_percent, 2),
-                    "Top-3 Acc (%)": round(top3_acc_percent, 2),
-                    "Top-4 Acc (%)": round(top4_acc_percent, 2),
-                    "Top-5 Acc (%)": round(top5_acc_percent, 2),
+                    "Total Evaluated Cases": actual,
+                    "Top-1 Acc (%)": top1, "Top-2 Acc (%)": top2,
+                    "Top-3 Acc (%)": top3, "Top-4 Acc (%)": top4, "Top-5 Acc (%)": top5,
                 },
                 "failed_cases_count": len(m["failure_cases"]),
                 "success_cases_count": len(m["success_cases"]),
                 "_raw_failures": m["failure_cases"],
-                "_raw_successes": m["success_cases"]
+                "_raw_successes": m["success_cases"],
             }
-        
         return result_summary
 
     @staticmethod
@@ -351,8 +396,10 @@ class Scorer:
         if not res_data:
             raise ValueError(f"未能加载测试数据: {self.res_file_path}")
 
+        # 纯算法排名评测（skill_ips — LLM 未介入）
+        skill_res = self._evaluate_skill(res_data)
+
         d_res = self._evaluate_stage(res_data, "draft_response", "draft_prompt")
-        # 仅当数据中存在非空 refine 结果时才评估，避免基线输出全 0
         if self._has_stage_data(res_data, "response"):
             r_res = self._evaluate_stage(res_data, "response", "refine_prompt")
         else:
@@ -370,7 +417,8 @@ class Scorer:
 
         overall_summary = {
             "total_cases_in_file": len(res_data),
-            "draft_evaluation": extract_pure_metrics(d_res),
+            "skill_evaluation": extract_pure_metrics(skill_res),
+            "llm_evaluation": extract_pure_metrics(d_res),
             "refined_evaluation": extract_pure_metrics(r_res)
         }
 

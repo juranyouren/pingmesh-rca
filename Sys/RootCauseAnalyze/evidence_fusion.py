@@ -117,8 +117,8 @@ def build_fused_evidence(node_list, info, dirpath,
         top_k: 证据表与候选详情保留的候选数。
 
     Returns:
-        (evidence_str, info_brief, candidate_detail, candidate_raw) 四段文本。
-        前三段紧凑；candidate_raw 是 Top-K 候选的完整原始数据（较大，供 token 充足时使用）。
+        (evidence_str, info_brief, candidate_detail, candidate_raw, skill_ips)
+        skill_ips: 综合分排序后的候选 IP 列表（算法排名，LLM 未介入）。
     """
     if not node_list:
         node_list = _load_nodes(dirpath)
@@ -155,7 +155,7 @@ def build_fused_evidence(node_list, info, dirpath,
     candidate_detail = _build_candidate_detail(candidate_ips_sorted, node_by_ip)
     candidate_raw = _build_candidate_raw(candidate_ips_sorted, node_by_ip)
 
-    return evidence_str, info_brief, candidate_detail, candidate_raw
+    return evidence_str, info_brief, candidate_detail, candidate_raw, candidate_ips_sorted
 
 
 def _lazy_load_skill_map():
