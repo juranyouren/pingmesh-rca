@@ -127,31 +127,34 @@ def build_fused_evidence(node_list, info, dirpath,
     if skill_map is None:
         skill_map = _lazy_load_skill_map()
 
-    # ── 1. 跑三个 skill ──────────────────────────────────────────
-    topo_ranking = _run_topo(skill_map, node_list, info, weight_dirpath)
-    temporal_scores = _run_temporal(skill_map, node_list, info, dirpath)
+    # ── 1. 核心评分：用 skill_pipeline 函数直接算（与消融实验完全一致）──
+    from Sys.RootCauseAnalyze.skill_pipeline import _score_topo, _score_temporal
+    norm_pr = _score_topo(node_list, info, weight_dirpath=weight_dirpath, directed=True)
+    norm_ts = _score_temporal(node_list, info, dirpath=dirpath)
+
+    # ── 2. Skill executor 输出：仅用于证据表的展示列（PR原始分/role等）──
+    topo_ranking = _run_topo(skill_map, node_list, info, weight_dirpath)  # 仅展示用
     co_occur_text = _run_co_occur(skill_map, node_list, info, weight_dirpath, co_occur_path)
 
-    # ── 2. 候选 IP 顺序：以 topo 排名为主 ────────────────────────
-    if topo_ranking:
-        candidate_ips = [r.get("ip") for r in topo_ranking[:top_k] if r.get("ip")]
-    else:
-        # topo 失败兜底：用节点原始顺序
-        candidate_ips = [_get_device_ip(n) for n in node_list][:top_k]
+    # ── 3. 综合分（与 skill_pipeline._combine_scores 等权平均一致）──
+    all_ips = list({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
+    combined = {}
+    for ip in all_ips:
+        vals = [norm_pr.get(ip, 0), norm_ts.get(ip, 0)]
+        combined[ip] = sum(vals) / len(vals)
+    candidate_ips_sorted = sorted(combined, key=lambda ip: combined[ip], reverse=True)[:top_k]
 
-    # ── 3. 告警权重 + 关键告警名（直接从节点扫，比抠字符串稳）──
+    # ── 4. 告警权重 + 关键告警名 ────────────────────────────────
     weights_dict = _load_alarm_weights(weight_dirpath)
     node_by_ip = {_get_device_ip(n): n for n in node_list}
 
-    # ── 4. 拼证据表（内部计算综合分并重排 candidate_ips）───────────
-    evidence_str, candidate_ips_sorted = _build_evidence_table(
-        candidate_ips, topo_ranking, temporal_scores,
+    # ── 5. 拼证据表 ──────────────────────────────────────────────
+    evidence_str = _build_evidence_table(
+        candidate_ips_sorted, topo_ranking, combined, norm_ts,
         node_by_ip, weights_dict, co_occur_text)
 
-    # ── 5. info 概况 ─────────────────────────────────────────────
+    # ── 6. info 概况 + 候选详情 ──────────────────────────────────
     info_brief = _build_info_brief(info)
-
-    # ── 6. Top-K 候选详情：按综合分排序 ──────────────────────────
     candidate_detail = _build_candidate_detail(candidate_ips_sorted, node_by_ip)
     candidate_raw = _build_candidate_raw(candidate_ips_sorted, node_by_ip)
 
@@ -259,67 +262,35 @@ def _run_co_occur(skill_map, node_list, info, weight_dirpath, co_occur_path):
 
 
 # ── 拼证据表 ──────────────────────────────────────────────────────
-def _build_evidence_table(candidate_ips, topo_ranking, temporal_scores,
+def _build_evidence_table(candidate_ips, topo_ranking, combined_scores, norm_ts,
                           node_by_ip, weights_dict, co_occur_text):
+    """candidate_ips 已按综合分排序；combined_scores 是 {ip: [0-1]} 的综合分。"""
     topo_by_ip = {r.get("ip"): r for r in topo_ranking}
 
-    # ── 计算综合分（与 skill_pipeline 归一化等权平均一致）──
-    combined = {}
-    for ip in candidate_ips:
-        vals = []
-        # PR 有向
-        tr = topo_by_ip.get(ip, {})
-        pr_dir = tr.get("score_directed", tr.get("score", 0))
-        if isinstance(pr_dir, (int, float)):
-            vals.append(pr_dir)
-        # PR 无向
-        pr_undir = tr.get("score_undirected", 0)
-        if isinstance(pr_undir, (int, float)):
-            vals.append(pr_undir)
-        # 时序
-        ts = temporal_scores.get(ip, 0)
-        if isinstance(ts, (int, float)):
-            vals.append(ts)
-        # 告警权重
-        max_w, _ = _node_max_weight(node_by_ip.get(ip, {}), weights_dict)
-        if max_w > 0:
-            vals.append(max_w)
-        combined[ip] = round(sum(vals) / len(vals), 1) if vals else 0
-
-    # 综合分归一到 0-100 便于 LLM 直观比较
-    max_comb = max(combined.values()) if combined else 1
-    if max_comb > 0:
-        for ip in combined:
-            combined[ip] = round(combined[ip] / max_comb * 100, 1)
-
-    # ── 按综合分重新排序候选列表 ──
-    candidate_ips_sorted = sorted(candidate_ips, key=lambda ip: combined.get(ip, 0), reverse=True)
-
-    header = "排名 | IP | 角色 | 综合分 | PR(有向) | PR(无向) | 时序 | 告警权重 | Cross | 关键告警"
+    header = "排名 | IP | 角色 | 综合分 | PR(有向) | PR(无向) | 时序(归一化) | 告警权重 | Cross | 关键告警"
     sep = "-" * len(header)
     rows = [header, sep]
 
-    for rank, ip in enumerate(candidate_ips_sorted, 1):
+    for rank, ip in enumerate(candidate_ips, 1):
         tr = topo_by_ip.get(ip, {})
         node = node_by_ip.get(ip, {})
         role = tr.get("role") or node.get("role", "UNKNOWN")
-        pr_dir = tr.get("score_directed", tr.get("score", "—"))
-        pr_undir = tr.get("score_undirected", "—")
-        ts = temporal_scores.get(ip, "—")
-        if isinstance(ts, (int, float)):
-            ts = round(ts, 3)
-        cross = node.get("cross", tr.get("cross", "—"))
+        combined = round(combined_scores.get(ip, 0) * 100, 1)  # → 0-100
+        pr_dir = tr.get("score_directed", tr.get("score", "-"))
+        pr_undir = tr.get("score_undirected", "-")
+        ts = round(norm_ts.get(ip, 0), 3)
+        cross = node.get("cross", tr.get("cross", "-"))
         max_w, hit_alarms = _node_max_weight(node, weights_dict)
-        w_str = max_w if max_w > 0 else "—"
-        alarm_str = ", ".join(hit_alarms[:3]) if hit_alarms else "—"
-        rows.append(f"{rank} | {ip} | {role} | {combined.get(ip, '—')} | {pr_dir} | {pr_undir} | {ts} | {w_str} | {cross} | {alarm_str}")
+        w_str = max_w if max_w > 0 else "-"
+        alarm_str = ", ".join(hit_alarms[:3]) if hit_alarms else "-"
+        rows.append(f"{rank} | {ip} | {role} | {combined} | {pr_dir} | {pr_undir} | {ts} | {w_str} | {cross} | {alarm_str}")
 
     table = "\n".join(rows)
 
     if co_occur_text:
         table += "\n\n【高危告警组合警告（历史错案反思生成）】\n" + co_occur_text
 
-    return table, candidate_ips_sorted
+    return table
 
 
 # ── Top-K 候选原始详情 ────────────────────────────────────────────
