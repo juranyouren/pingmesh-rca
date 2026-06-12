@@ -320,16 +320,25 @@ def _find_full_link_file(dirpath, filenames):
 
 
 def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2, 3),
-                       directed=True, top_k=5):
+                       directed=True, top_k=5, weight_path=None):
     """
     遍历数据集，对每个 case 运行指定 skill 组合，输出 res.json。
+
+    Args:
+        weight_path: 告警权重文件路径，None 则从 config 读默认值
     """
+    if weight_path:
+        _wpath = weight_path
+    else:
+        try:
+            from Sys.config import config
+            _wpath = config.data.alarm_weights
+        except Exception:
+            _wpath = None
     try:
         from Sys.config import config
-        _wpath = config.data.alarm_weights
         _copath = config.skills.co_occur_rules
     except Exception:
-        _wpath = None
         _copath = None
 
     skill_names = {1: "topo", 2: "co_occur", 3: "temporal"}
@@ -414,10 +423,16 @@ if __name__ == "__main__":
                    help="Skill 1 使用有向 PageRank（默认: 无向）")
     p.add_argument("--top-k", "-k", type=int, default=5,
                    help="输出的预测 IP 数量 (default: 5)")
+    p.add_argument("--weight-file", "-w", default=None,
+                   help="告警权重文件路径（默认: config.data.alarm_weights）")
     args = p.parse_args()
 
     variant = "dir" if args.directed else "undir"
     skill_tag = "_".join(str(s) for s in args.skills)
+    # 权重文件名短标识
+    if args.weight_file:
+        wtag = os.path.splitext(os.path.basename(args.weight_file))[0]
+        skill_tag += f"__{wtag}"
     timenow = int(time.time())
 
     if args.output_dir:
@@ -428,4 +443,5 @@ if __name__ == "__main__":
     run_skill_pipeline(args.data_root, out_dir,
                        skill_ids=args.skills,
                        directed=args.directed,
-                       top_k=args.top_k)
+                       top_k=args.top_k,
+                       weight_path=args.weight_file)

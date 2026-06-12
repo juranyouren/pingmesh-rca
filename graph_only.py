@@ -11,7 +11,8 @@ import time
 from Sys.RootCauseAnalyze.skill_pipeline import run_skill_pipeline
 
 
-def run_ablation_experiment(root_path: str, output_dir: str, directed: bool = False):
+def run_ablation_experiment(root_path: str, output_dir: str, directed: bool = False,
+                           weight_path=None):
     """
     遍历数据集，只跑图算法（无向 PageRank 或有向 PageRank）。
     此函数保留向后兼容性，实际逻辑已迁移到 skill_pipeline。
@@ -22,6 +23,7 @@ def run_ablation_experiment(root_path: str, output_dir: str, directed: bool = Fa
         skill_ids=[1],        # ← 只跑 topo
         directed=directed,
         top_k=5,
+        weight_path=weight_path,
     )
 
 
@@ -42,9 +44,13 @@ if __name__ == "__main__":
                    help="结果输出子目录名（相对于 results）")
     p.add_argument("--directed", action="store_true", default=False,
                    help="使用有向 PageRank（默认: 无向）")
+    p.add_argument("--weight-file", "-w", default=None,
+                   help="告警权重文件路径（默认: config.data.alarm_weights）")
     args = p.parse_args()
 
     variant = "_dir" if args.directed else "_undir"
+    if args.weight_file:
+        variant += f"__{os.path.splitext(os.path.basename(args.weight_file))[0]}"
     timenow = int(time.time())
 
     if args.output_dir:
@@ -52,4 +58,5 @@ if __name__ == "__main__":
     else:
         out_dir = os.path.join(_res, f"graph_only{variant}_{timenow}")
 
-    run_ablation_experiment(args.data_root, out_dir, directed=args.directed)
+    run_ablation_experiment(args.data_root, out_dir, directed=args.directed,
+                           weight_path=args.weight_file)
