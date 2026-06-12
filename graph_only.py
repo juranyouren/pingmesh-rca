@@ -259,7 +259,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="graph_only — 纯图算法消融实验 (不依赖 LLM)")
     p.add_argument("--data-root", "-d", default=_data, help="数据根目录")
     p.add_argument("--output-dir", "-o", default=None,
-                   help="结果输出目录（默认: {results}/graph_only_{variant}_{timestamp}）")
+                   help="结果输出子目录名（相对于 results，默认用 graph_only_{variant}_{timestamp}）")
     p.add_argument("--directed", action="store_true", default=False,
                    help="使用有向 PageRank（默认: 无向）")
     args = p.parse_args()
@@ -268,7 +268,7 @@ if __name__ == "__main__":
     timenow = int(time.time())
 
     if args.output_dir:
-        out_dir = args.output_dir
+        out_dir = os.path.join(_res, args.output_dir)
     else:
         out_dir = os.path.join(_res, f"graph_only_{variant}_{timenow}")
 

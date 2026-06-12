@@ -424,7 +424,7 @@ if __name__ == "__main__":
     p.add_argument("--data-root", "-d", default=config.data.nodes_labeled,
                    help="数据根目录 (含 nodes.json + info.json 的 case 目录)")
     p.add_argument("--output-dir", "-o", default=None,
-                   help="结果输出目录（默认: {config.data.results}/{timestamp}）")
+                   help="结果输出子目录名（相对于 results，默认用当前时间戳）")
     p.add_argument("--npu-cards", "-n", default="0,1",
                    help="使用的 NPU 卡号，逗号分隔 (default: 0,1)")
     p.add_argument("--skills", "-s", nargs="*", type=int, default=config.skill.skill_ids,
@@ -462,7 +462,7 @@ if __name__ == "__main__":
         print(f"所有并行推理已完成！总耗时: {time.time() - start_time:.2f} 秒")
 
         if args.output_dir:
-            save_dir = args.output_dir
+            save_dir = os.path.join(config.data.results, args.output_dir)
         else:
             save_dir = os.path.join(config.data.results, str(int(time.time())))
         os.makedirs(save_dir, exist_ok=True)
