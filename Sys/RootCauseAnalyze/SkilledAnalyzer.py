@@ -58,7 +58,7 @@ def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
     }
 
 class SkilledAnalyzer:
-    def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None):
+    def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None):
         """
         初始化基于 vllm.LLM 的技能型根因分析器。
         所有参数可选，默认从 Sys.config 读取。
@@ -71,6 +71,8 @@ class SkilledAnalyzer:
             skill_json_path = config.skills.skills_json
         if short is None:
             short = config.skill.short_mode
+        if top_k is None:
+            top_k = config.temporal.top_k
 
         print(f"[{os.getpid()}] 正在初始化 vLLM 引擎，使用的 NPU 卡号为: {ASCEND_RT_VISIBLE_DEVICES}")
 
@@ -81,6 +83,7 @@ class SkilledAnalyzer:
 
         self.skills = self.executor.get_skill_conf()
         self.short=short#short为1则不传入源数据
+        self.top_k = top_k      # 传给证据融合层的候选数
 
         # 将 skill_id 统一转换为 string 方便检索
         print(self.skills)
@@ -166,7 +169,7 @@ class SkilledAnalyzer:
             skill_map=self.executor.skill_map,
             weight_dirpath=config.data.alarm_weights,
             co_occur_path=config.skills.co_occur_rules,
-            top_k=config.temporal.top_k,
+            top_k=self.top_k,
         )
 
         if not selected_skill_ids:
@@ -191,8 +194,13 @@ class SkilledAnalyzer:
             return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES="")
         remaining_tokens -= len(info_tokens)
 
-        # 候选详情：token 充足优先用完整原始数据 detail_raw，否则退回紧凑版 detail_compact
-        nodes_data = detail_raw if len(tokenizer.encode(detail_raw)) <= remaining_tokens else detail_compact
+        # 候选详情：默认紧凑版（证据表已有全部结构化信息），short=0 且 token 极充足时才用 raw
+        if self.short:
+            nodes_data = detail_compact
+        else:
+            raw_tokens = len(tokenizer.encode(detail_raw))
+            # raw 超过剩余 token 30% 就不打扰 LLM（紧凑版足够）
+            nodes_data = detail_raw if raw_tokens <= remaining_tokens * 0.3 else detail_compact
         nodes_tokens = tokenizer.encode(nodes_data)
         if len(nodes_tokens) > remaining_tokens:
             nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
@@ -322,14 +330,14 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
     sleep_time = (worker_id - 1) * 60
     time.sleep(sleep_time)
-    
-    analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus,short=short)
+
+    analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus, short=short, top_k=top_k)
     # [MODIFIED] 将 target_skill_ids 传入 batch_infer
     responses, prmpts, ret_ress, skills = analyzer.batch_infer(
         dirpaths=dirpaths_chunk, 
@@ -353,7 +361,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -391,7 +399,8 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     prompts_chunk=prompt_chunks[i],
                     target_skill_ids=target_skill_ids, # [MODIFIED] 注入到子进程
                     batch_size=batch_size,
-                    short=short
+                    short=short,
+                    top_k=top_k
                 )
                 futures.append(future)
 
@@ -443,6 +452,8 @@ if __name__ == "__main__":
                    help="批量推理大小 (default: 8)")
     p.add_argument("--short", type=int, default=config.skill.short_mode, choices=[0, 1],
                    help="short=1 不传入原始节点数据省 Token (default: 0)")
+    p.add_argument("--top-k", "-k", type=int, default=config.temporal.top_k,
+                   help="展示给 LLM 的候选设备数 (default: 10)")
     p.add_argument("--failures-from", default=None,
                    help="只跑指定 failures JSON 中的错案 (debug/回归用)")
     args = p.parse_args()
@@ -468,6 +479,7 @@ if __name__ == "__main__":
             target_skill_ids=target_skill_ids,
             batch_size=args.batch_size,
             short=args.short,
+            top_k=args.top_k,
         )
         print(f"所有并行推理已完成！总耗时: {time.time() - start_time:.2f} 秒")
 

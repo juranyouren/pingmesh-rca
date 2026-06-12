@@ -2,10 +2,11 @@
 # ============================================================
 # 单次推理 + 评分
 # 用法:
-#   ./scripts/run_inference.sh                    # 全部默认
-#   ./scripts/run_inference.sh my_test            # 指定输出目录名
-#   ./scripts/run_inference.sh my_test "1 2 3"    # 指定目录 + Skill
-#   ./scripts/run_inference.sh my_test "1" 0,1,2,3  # 指定目录 + Skill + NPU
+#   ./scripts/run_inference.sh                        # 全部默认
+#   ./scripts/run_inference.sh my_test                # 指定输出目录名
+#   ./scripts/run_inference.sh my_test "1 3"          # 指定目录 + Skill
+#   ./scripts/run_inference.sh my_test "1 3" 0,1      # 指定 Skill + NPU
+#   ./scripts/run_inference.sh my_test "1 3" 0,1 8 5  # 指定全部 + top-k=5
 # ============================================================
 set -euo pipefail
 
@@ -13,16 +14,17 @@ PROJECT_ROOT="/home/sbp/lixinyang/pingmesh"
 DATA="${PROJECT_ROOT}/data/nodes_labeled"
 
 OUTDIR="${1:-}"
-SKILLS="${2:-1 2 3}"
+SKILLS="${2:-1 3}"
 NPU="${3:-0,1}"
 BATCH="${4:-8}"
+TOPK="${5:-5}"
 
 cd "${PROJECT_ROOT}"
 
 echo "============================================"
 echo "  单次推理"
-echo "  数据:    ${DATA}"
 echo "  Skill:   ${SKILLS}"
+echo "  Top-K:   ${TOPK}"
 echo "  NPU:     ${NPU}"
 echo "  Batch:   ${BATCH}"
 echo "  输出:    ${OUTDIR:-<timestamp>}"
@@ -38,6 +40,7 @@ python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
     -s ${SKILLS} \
     -n "${NPU}" \
     -b "${BATCH}" \
+    -k "${TOPK}" \
     -o "${OUTDIR}"
 
 # ── 评分 ──

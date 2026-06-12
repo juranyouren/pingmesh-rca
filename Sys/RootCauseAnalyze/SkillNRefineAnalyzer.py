@@ -22,25 +22,27 @@ def load_json(path):
 
 class SkillNRefineAnalyzer:
     def __init__(
-        self, 
-        model_path="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B", 
+        self,
+        model_path="/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B",
         ASCEND_RT_VISIBLE_DEVICES="0,1",
         checklist_path="/home/sbp/lixinyang/pingmesh/SkillBank/check_list.json",
         short=0,
-        skill_ids_to_use=None  # <--- 在此暴露配置
+        skill_ids_to_use=None,  # <--- 在此暴露配置
+        top_k=10,
     ):
         """
         初始化具有【固定技能调用】+【Refine 审查层】双阶段推理的分析器
         """
         print(f"[{os.getpid()}] 正在初始化 vLLM 引擎，使用的 NPU 卡号为: {ASCEND_RT_VISIBLE_DEVICES}")
-        
+
         self.model_path = model_path
         self.ASCEND_RT_VISIBLE_DEVICES = ASCEND_RT_VISIBLE_DEVICES
         self.short = short
-        
+        self.top_k = top_k
+
         # 接收外部传入的技能 ID 列表，如果为空则默认使用 [1]
         self.skill_ids_to_use = skill_ids_to_use if skill_ids_to_use is not None else [1]
-        
+
         # 1. 加载技能库执行器
         print(f"[{os.getpid()}] Loading skills...")
         self.executor = SkillExecutor()
@@ -88,9 +90,8 @@ class SkillNRefineAnalyzer:
             from Sys.config import config
             weight_dirpath = config.data.alarm_weights
             co_occur_path = config.skills.co_occur_rules
-            top_k = config.temporal.top_k
         except Exception:
-            weight_dirpath, co_occur_path, top_k = None, None, 10
+            weight_dirpath, co_occur_path = None, None
 
         skill_ret, info_data, detail_compact, detail_raw = build_fused_evidence(
             node_list=self.executor.get_node_list(dirpath),
@@ -99,7 +100,7 @@ class SkillNRefineAnalyzer:
             skill_map=self.executor.skill_map,
             weight_dirpath=weight_dirpath,
             co_occur_path=co_occur_path,
-            top_k=top_k,
+            top_k=self.top_k,
         )
 
         if not selected_skill_ids:
@@ -123,8 +124,9 @@ class SkillNRefineAnalyzer:
             return skill_ret, info_data, ""
         remaining_tokens -= len(info_tokens)
 
-        # token 充足用完整原始数据 detail_raw，否则退回紧凑版
-        nodes_data = detail_raw if len(tokenizer.encode(detail_raw)) <= remaining_tokens else detail_compact
+        # 默认紧凑版（证据表已有全部结构化信息），raw 超过剩余 30% 就不侵扰 LLM
+        raw_tokens = len(tokenizer.encode(detail_raw))
+        nodes_data = detail_raw if raw_tokens <= remaining_tokens * 0.3 else detail_compact
         nodes_tokens = tokenizer.encode(nodes_data)
         if len(nodes_tokens) > remaining_tokens:
             nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
@@ -262,16 +264,17 @@ class SkillNRefineAnalyzer:
                 ["异常"] * len(prompts), ["异常"] * len(prompts)
             )
 
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, batch_size: int = 8, short=0, skill_ids_to_use=None) -> list:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, batch_size: int = 8, short=0, skill_ids_to_use=None, top_k=10) -> list:
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
     time.sleep((worker_id - 1) * 60)
-    
+
     # 初始化分析器时传入 skill_ids_to_use
     analyzer = SkillNRefineAnalyzer(
-        ASCEND_RT_VISIBLE_DEVICES=npus, 
+        ASCEND_RT_VISIBLE_DEVICES=npus,
         short=short,
-        skill_ids_to_use=skill_ids_to_use
+        skill_ids_to_use=skill_ids_to_use,
+        top_k=top_k,
     )
     
     responses, drafts, draft_pmts, refine_pmts = analyzer.batch_infer(
@@ -296,7 +299,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
 
     return resls
 
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8, short=0, skill_ids_to_use=None) -> list:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, batch_size: int = 8, short=0, skill_ids_to_use=None, top_k=10) -> list:
     total_tasks = len(prompt_list)
     if total_tasks == 0: return []
 
@@ -331,7 +334,8 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     prompts_chunk=prompt_chunks[i],
                     batch_size=batch_size,
                     short=short,
-                    skill_ids_to_use=skill_ids_to_use # <--- 继续透传
+                    skill_ids_to_use=skill_ids_to_use, # <--- 继续透传
+                    top_k=top_k
                 )
                 futures.append(future)
 
@@ -403,6 +407,8 @@ if __name__ == "__main__":
                    help="批量推理大小 (default: 8)")
     p.add_argument("--short", type=int, default=_short, choices=[0, 1],
                    help="short=1 不传入原始节点数据省 Token (default: 0)")
+    p.add_argument("--top-k", "-k", type=int, default=10,
+                   help="展示给 LLM 的候选设备数 (default: 10)")
     args = p.parse_args()
 
     available_npus = [int(x.strip()) for x in args.npu_cards.split(",")]
@@ -420,6 +426,7 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             short=args.short,
             skill_ids_to_use=args.skills,
+            top_k=args.top_k,
         )
 
         print(f"所有并行推理已完成！总耗时: {time.time() - start_time:.2f} 秒")
