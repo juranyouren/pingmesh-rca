@@ -20,14 +20,16 @@
 | `Sys/RootCauseAnalyze/SkilledAnalyzer.py` | Skill 触发的 LLM RCA 分析器 |
 | `Sys/RootCauseAnalyze/SkillNRefineAnalyzer.py` | Skill + Refine 双阶段分析器 |
 | `Sys/RootCauseAnalyze/evidence_fusion.py` | **证据融合层**：三个 Skill 输出 → 紧凑「候选设备综合证据表」+ Top-K 详情，解决 prompt 超长截断 |
-| `Sys/Score/Score_N.py` | 评分模块（Top-1~5、期望步长、路径 F1） |
+| `Sys/RootCauseAnalyze/skill_pipeline.py` | **纯算法流水线**：任意 Skill 组合评分融合（不依赖 LLM/NPU），端到端评测 |
+| `Sys/RootCauseAnalyze/llm_alarm_scorer.py` | **LLM 告警打分**：对缺失告警去重后用 LLM 语义打分 1-100，补全权重表 |
+| `Sys/Score/Score_N.py` | 评分模块（Top-1~5） |
 | `Sys/AlarmWeightBuilder.py` | 全局告警权重构建器：`build()` 初始化 / `learn_from_labels()` 基于 P(root\|alarm) 学习 |
 | `SkillBank/SkillExecutor.py` | 动态 Python Skill 插件系统：LLM 反思 → 自动生成插件 → 热加载 |
 | `SkillBank/skills/topo.py` | **Skill 1** — `topology_pagerank_rank`：无向 + 有向 PageRank + Top-K 数据提取 |
 | `SkillBank/skills/co_occur.py` | **Skill 2** — `co_occurrence_alarm_check`：告警权重 + 共现规则匹配 |
 | `SkillBank/skills/temporal_score.py` | **Skill 3** — `temporal_score_devices`：Burst + Early Bird + Density |
-| `graph_only.py` | 消融实验：无向/有向 PageRank 纯图算法（`--directed` 切换） |
-| `utils/prompts.py` | 全量 Prompt 模板（约 15 个）：RCA 定位、错案反思、规则蒸馏等 |
+| `graph_only.py` | 消融实验：无向/有向 PageRank（`--directed`，内部委托给 skill_pipeline） |
+| `scripts/` | Bash 推理/消融脚本：单次推理、全量消融(22组)、LLM 告警打分 |
 | `Baseline/` | 基线方法：TraceRCA、NetEventCause、BiAn（待补 FP-Growth / DBSCAN / Random Walk） |
 | `docs/毕业论文/` | 毕设论文 LaTeX 源码（已完成） |
 | `docs/papers/` | 参考文献 PDF + TXT + summary |
@@ -198,6 +200,44 @@ config.skill.skill_ids  # [1, 2, 3]
 
 集成点：`SkilledAnalyzer._build_final_prompt`、`SkillNRefineAnalyzer._prepare_context` 改用融合层 + 证据表优先的安全网截断。`SKILLED_PROMPT` 三个占位符语义重定义（Info / 证据表 / Top-K 详情）。
 
+### Skill Pipeline 纯算法流水线（`Sys/RootCauseAnalyze/skill_pipeline.py`）
+不依赖 LLM/NPU，对任意 Skill 组合评分融合（归一化后等权平均），输出 `res.json` 可直接评测。
+
+```bash
+python Sys/RootCauseAnalyze/skill_pipeline.py -s 1 3 --directed -k 5 -o my_test
+```
+
+### LLM 前置告警打分（`Sys/RootCauseAnalyze/llm_alarm_scorer.py`）
+对权重表中缺失的告警名去重后，由 LLM 根据网络运维严重程度打出 1-100 分，合并后输出 enriched 权重文件供 PageRank 使用。
+
+### 推理脚本 CLI
+
+| 脚本 | 依赖 | 用途 |
+|------|------|------|
+| `scripts/run_inference.sh` | NPU | 单次推理 + 评分（默认 skills=[1,3] k=5） |
+| `scripts/run_full_ablation.sh` | 无 | 22 组纯算法消融 (11 Skill × 2 权重来源) |
+| `scripts/run_skill_ablation.sh` | 无 | 8 组纯算法消融 |
+| `scripts/run_llm_alarm_scoring.sh` | NPU | LLM 告警去重打分 → 新权重 → skill_pipeline 评测 |
+
+### 关键发现（146 例人工标注数据，2026-06-12 消融结果）
+
+| 等级 | 组合 | Top-1 | Top-5 | 发现 |
+|------|------|-------|-------|------|
+| S | `[1,3]` topo+temporal dir (llm权重) | **87.41%** | 89.51% | 纯算法天花板，时序是压倒性最强信号 |
+| A | `[3]` temporal only | 76.22% | 88.81% | 3/4 的 DCN 故障中根因设备告警最先爆发 |
+| C | `[1]` topo only | 14-17% | 28-33% | 人工标注数据上 PageRank 单独很弱（旧数据 39% 因标注偏拓扑） |
+| D | `[2]` co_occur only | 1-8% | 3-20% | 告警权重单独几乎无用，需绑定 topo/temporal |
+
+**核心结论**：
+- 时序 + 拓扑协同：topo 把时序抓不到的 ~13 个 case 补上了（76→87%）
+- co_occur（Skill 2）在等权融合中拖后腿 — 每个加它的组合都掉分
+- LLM 复核从 87% 目前的 dropout（→35%），因候选详情给 LLM 的信息量过大（K=10 + raw JSON），已修复为紧凑版 + 可调 K
+
+### 后续实验方向
+
+1. **Test 1: LLM 复核** — 调 K（3→5→10），紧凑版详情（`-k` 参数）
+2. **Test 2: LLM 前置告警打分** — 去重后用 LLM 给缺失告警打分 → 补全权重表 → topo+temporal 对比
+3. **新方案**：LLM 前置打分 → topo+temp 排名 → LLM 复核 Top-K（三阶段）
 
 ---
 
