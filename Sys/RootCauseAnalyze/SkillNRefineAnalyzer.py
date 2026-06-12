@@ -344,14 +344,24 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
 
     return all_results
 
+def _find_full_link_file(dirpath: str, filenames: list) -> str:
+    """在目录下找到全链路 JSON 文件（兼容两种命名），优先级高于 nodes.json。"""
+    for f in filenames:
+        if "全链路.json" in f and "pingmesh" in f:
+            return f
+    return None
+
+
 def generate_prompts(root_path: str) -> tuple:
     dirpath_list = []
     prompt_list = []
     print(f"开始扫描目录 {root_path} 并构造基础 Prompt...")
-    
+
     for dirpath, dirnames, filenames in os.walk(root_path):
-        if "nodes.json" in filenames and "info.json" in filenames:
-            node_path = os.path.join(dirpath, "nodes.json")
+        info_file = "info.json" in filenames
+        full_link_file = _find_full_link_file(dirpath, filenames)
+        if info_file and full_link_file:
+            node_path = os.path.join(dirpath, full_link_file)
             info_path = os.path.join(dirpath, "info.json")
             try:
                 node = load_json(node_path)
@@ -361,7 +371,7 @@ def generate_prompts(root_path: str) -> tuple:
                 prompt_list.append(prompt)
             except Exception as e:
                 print(f"\n[错误] 读取/解析目录 {dirpath} 时发生异常: {e}")
-                
+
     return dirpath_list, prompt_list
 
 if __name__ == "__main__":

@@ -250,6 +250,14 @@ class SkilledAnalyzer:
             return ["模型未返回有效推理内容或发生异常。"] * len(prompts)
 
 
+def _find_full_link_file(dirpath: str, filenames: list) -> str:
+    """在目录下找到全链路 JSON 文件（兼容两种命名），优先级高于 nodes.json。"""
+    for f in filenames:
+        if "全链路.json" in f and "pingmesh" in f:
+            return f
+    return None
+
+
 def generate_prompts(root_path: str) -> tuple:
     dirpath_list = []
     prompt_list = []
@@ -257,8 +265,10 @@ def generate_prompts(root_path: str) -> tuple:
     print(f"开始扫描目录 {root_path} 并构造 Prompt...")
 
     for dirpath, dirnames, filenames in os.walk(root_path):
-        if "nodes.json" in filenames and "info.json" in filenames:
-            node_path = os.path.join(dirpath, "nodes.json")
+        info_file = "info.json" in filenames
+        full_link_file = _find_full_link_file(dirpath, filenames)
+        if info_file and full_link_file:
+            node_path = os.path.join(dirpath, full_link_file)
             info_path = os.path.join(dirpath, "info.json")
             try:
                 node = load_json(node_path)
