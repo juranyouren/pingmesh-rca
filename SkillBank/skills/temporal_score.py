@@ -13,7 +13,6 @@ SKILL_META = {
 
 import os
 import json
-from collections import defaultdict
 
 
 def _get_device_ip(node):
@@ -37,40 +36,6 @@ def _extract_timestamps_from_node(node):
             except (ValueError, TypeError):
                 pass
     return sorted(timestamps)
-
-
-def _read_label_timestamps(dirpath):
-    """
-    Fallback: read alarm timestamps from label.json for root cause devices only.
-    Returns {device_ip: [timestamps]}.
-    """
-    result = defaultdict(list)
-    label_path = os.path.join(dirpath, "label.json")
-    if not os.path.exists(label_path):
-        return result
-    try:
-        with open(label_path, "r", encoding="utf-8") as f:
-            labels = json.load(f)
-    except Exception:
-        return result
-    if not isinstance(labels, list):
-        return result
-
-    for item in labels:
-        for node in item.get("abnormal_node", []):
-            ip = node.get("ip", "")
-            if not ip:
-                continue
-            for evt in node.get("alarms", []) + node.get("syslogs", []):
-                if not isinstance(evt, dict):
-                    continue
-                ts = evt.get("alarm_time")
-                if ts:
-                    try:
-                        result[ip].append(int(ts))
-                    except (ValueError, TypeError):
-                        pass
-    return result
 
 
 def _compute_burst_score(timestamps, ref_time, window_ms=300000):
@@ -134,7 +99,7 @@ def temporal_score_devices(
     Args:
         node_list: list of device node dicts
         info: case info dict (contains alarm_time as fault reference)
-        dirpath: path to case directory (for fallback label.json reading)
+        dirpath: path to case directory (reserved, currently unused)
         ref_time_ms: override reference timestamp (default: info["alarm_time"])
         window_ms: burst detection window in ms (default 5 min)
 
@@ -164,15 +129,6 @@ def temporal_score_devices(
             continue
         tss = _extract_timestamps_from_node(nd)
         device_timestamps[ip] = tss
-
-    # fallback: enrich with label.json
-    if dirpath:
-        label_ts = _read_label_timestamps(dirpath)
-        for ip, tss in label_ts.items():
-            if ip in device_timestamps:
-                device_timestamps[ip] = sorted(set(device_timestamps[ip] + tss))
-            else:
-                device_timestamps[ip] = sorted(tss)
 
     # ── 3. Compute global reference values ───────────────────────
     all_first_ts = []
