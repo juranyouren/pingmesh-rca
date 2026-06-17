@@ -40,7 +40,7 @@ python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
 echo ""
 echo "--- 评分 ---"
 python -c "
-from Sys.Score.Score_N import Scorer, LlmTextParser
+from Sys.Score.Score_N import Scorer, ResponseParser
 s = Scorer('${PROJECT_ROOT}/data/res/${OUTDIR}/res.json')
 s.calculate_metrics()
 "

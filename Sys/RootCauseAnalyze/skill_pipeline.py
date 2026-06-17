@@ -285,6 +285,23 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
 # Batch pipeline + CLI
 # ══════════════════════════════════════════════════════════════════════
 
+def _read_gt_ips(dirpath: str):
+    """从 label.json 提取 gt IP（与 Score_N 一致）。"""
+    label_path = os.path.join(dirpath, "label.json")
+    if not os.path.exists(label_path): return []
+    try:
+        labels = json.load(open(label_path, encoding="utf-8"))
+    except Exception: return []
+    if not isinstance(labels, list): return []
+    labels_sorted = sorted(labels, key=lambda x: x.get("ranking", 999))
+    gt_ips = []
+    for lb in labels_sorted[:3]:
+        for an in lb.get("abnormal_node", []):
+            ip = an.get("ip")
+            if ip and ip not in gt_ips: gt_ips.append(ip)
+    return gt_ips
+
+
 def _find_full_link_file(dirpath, filenames):
     for f in filenames:
         if "全链路.json" in f and "pingmesh" in f:
@@ -309,7 +326,7 @@ def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2),
         except Exception:
             _wpath = None
 
-    skill_names = {1: "topo", 2: "co_occur", 3: "temporal"}
+    skill_names = {1: "topo", 2: "temporal"}
     mode_desc = "+".join(skill_names.get(s, str(s)) for s in sorted(skill_ids))
     if 1 in skill_ids:
         mode_desc += f"_{'dir' if directed else 'undir'}"
@@ -351,6 +368,8 @@ def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2),
                 "prompt": f"SKILL_PIPELINE_{mode_desc.upper()}",
                 "draft_response": mock_str,
                 "response": mock_str,
+                "skill_ips": predicted_ips,
+                "gt_ips": _read_gt_ips(dirpath),
             })
             case_count += 1
 

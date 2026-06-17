@@ -48,7 +48,7 @@ for skills in "1" "1 2" "1 3" "1 2 3"; do
         echo ""
         echo "--- ${tag} ---"
         python -c "
-from Sys.Score.Score_N import Scorer, LlmTextParser
+from Sys.Score.Score_N import Scorer, ResponseParser
 s = Scorer('${res_json}')
 s.calculate_metrics()
 "

@@ -73,10 +73,10 @@ for combo in "${COMBOS[@]}"; do
         python -c "
 import json, os, sys
 sys.path.insert(0, '${PROJECT_ROOT}')
-from Sys.Score.Score_N import Scorer, LlmTextParser
+from Sys.Score.Score_N import Scorer, ResponseParser
 s = Scorer('${res_json}')
 summary = s.calculate_metrics()
-m = summary['draft_evaluation']['all']['ranking_metrics']
+m = summary['skill_evaluation']['all']['ranking_metrics']
 
 with open('${RES}/${out_dir}/_metrics.json', 'w') as f:
     json.dump({
@@ -90,7 +90,7 @@ with open('${RES}/${out_dir}/_metrics.json', 'w') as f:
         'top3': m.get('Top-3 Acc (%)', 0),
         'top4': m.get('Top-4 Acc (%)', 0),
         'top5': m.get('Top-5 Acc (%)', 0),
-        'failed_count': summary['draft_evaluation'].get('all', {}).get('failed_cases_count', 0),
+        'failed_count': summary['skill_evaluation'].get('all', {}).get('failed_cases_count', 0),
     }, f, ensure_ascii=False, indent=2)
 " 2>&1 | tail -3
 
