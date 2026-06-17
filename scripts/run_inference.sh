@@ -2,11 +2,9 @@
 # ============================================================
 # 单次推理 + 评分
 # 用法:
-#   ./scripts/run_inference.sh                        # 全部默认
+#   ./scripts/run_inference.sh                        # topo+temp, k=5
 #   ./scripts/run_inference.sh my_test                # 指定输出目录名
-#   ./scripts/run_inference.sh my_test "1 3"          # 指定目录 + Skill
-#   ./scripts/run_inference.sh my_test "1 3" 0,1      # 指定 Skill + NPU
-#   ./scripts/run_inference.sh my_test "1 3" 0,1 8 5  # 指定全部 + top-k=5
+#   ./scripts/run_inference.sh my_test "1 2" 0,1 8 5  # 全部参数
 # ============================================================
 set -euo pipefail
 
@@ -14,7 +12,7 @@ PROJECT_ROOT="/home/sbp/lixinyang/pingmesh"
 DATA="${PROJECT_ROOT}/data/nodes_labeled"
 
 OUTDIR="${1:-}"
-SKILLS="${2:-1 3}"
+SKILLS="${2:-1 2}"
 NPU="${3:-0,1}"
 BATCH="${4:-8}"
 TOPK="${5:-5}"
@@ -23,18 +21,14 @@ cd "${PROJECT_ROOT}"
 
 echo "============================================"
 echo "  单次推理"
-echo "  Skill:   ${SKILLS}"
+echo "  Skill:   ${SKILLS} (1=topo, 2=temporal)"
 echo "  Top-K:   ${TOPK}"
 echo "  NPU:     ${NPU}"
 echo "  Batch:   ${BATCH}"
-echo "  输出:    ${OUTDIR:-<timestamp>}"
 echo "============================================"
 
-if [ -z "${OUTDIR}" ]; then
-    OUTDIR="inference_$(date +%s)"
-fi
+if [ -z "${OUTDIR}" ]; then OUTDIR="inference_$(date +%s)"; fi
 
-# ── 推理 ──
 python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
     -d "${DATA}" \
     -s ${SKILLS} \
@@ -43,7 +37,6 @@ python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
     -k "${TOPK}" \
     -o "${OUTDIR}"
 
-# ── 评分 ──
 echo ""
 echo "--- 评分 ---"
 python -c "

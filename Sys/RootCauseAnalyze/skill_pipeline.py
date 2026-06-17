@@ -184,29 +184,6 @@ def _score_topo(node_list, infodta, weight_dirpath=None, directed=True):
 
 # ── Skill 2: co_occurrence_alarm_check ──────────────────────────
 
-def _score_co_occur(node_list, infodta=None, weight_dirpath=None, co_occur_path=None):
-    """
-    co_occur 输出文本而非分数表；这里只提取每设备的告警权重作为分数。
-    同上证据融合层的 _node_max_weight 方法。
-    """
-    weights_dict = _load_alarm_weights(weight_dirpath)
-    scores = {}
-    for nd in node_list:
-        ip = _get_device_ip(nd)
-        if not ip or ip == "unknown":
-            continue
-        max_w = 0
-        for evt in nd.get("alarms", []) + nd.get("logs", []):
-            name = evt if isinstance(evt, str) else evt.get("alarm_name", evt.get("name", ""))
-            if name and (name_lower := str(name).lower()) in weights_dict:
-                if (w := weights_dict[name_lower]) > max_w:
-                    max_w = w
-        scores[ip] = max_w
-    if not scores:
-        return {}
-    max_s = max(scores.values())
-    return {ip: s / max_s for ip, s in scores.items()} if max_s > 0 else {}
-
 
 # ── Skill 3: temporal_score_devices ─────────────────────────────
 
@@ -236,8 +213,7 @@ def _score_temporal(node_list, infodta=None, dirpath=""):
 
 SKILL_SCORER = {
     1: _score_topo,
-    2: _score_co_occur,
-    3: _score_temporal,
+    2: _score_temporal,
 }
 
 
@@ -259,7 +235,7 @@ def _combine_scores(skill_id_to_scores, node_ips):
 
 def rank_devices_by_skills(node_list, infodta, dirpath="",
                            skill_ids=(1, 2, 3), directed=True,
-                           weight_dirpath=None, co_occur_path=None, top_k=5):
+                           weight_dirpath=None, top_k=5):
     """
     核心函数：对一组 skill 运行评分并融合排名。
 
@@ -267,7 +243,7 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
         node_list: 设备节点列表
         infodta: 故障 info dict
         dirpath: case 目录（temporal 需要）
-        skill_ids: 要使用的 skill ID 列表 [1, 2, 3]
+        skill_ids: 要使用的 skill ID 列表 [1, 2]
         directed: Skill 1 是否用有向 PageRank
         weight_dirpath: 告警权重文件路径
         co_occur_path: 共现规则库路径
@@ -288,9 +264,6 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
                 scores = scorer(node_list, infodta,
                                 weight_dirpath=weight_dirpath, directed=directed)
             elif sid == 2:
-                scores = scorer(node_list, infodta,
-                                weight_dirpath=weight_dirpath, co_occur_path=co_occur_path)
-            elif sid == 3:
                 scores = scorer(node_list, infodta, dirpath=dirpath)
             else:
                 scores = scorer(node_list, infodta)
@@ -319,7 +292,7 @@ def _find_full_link_file(dirpath, filenames):
     return None
 
 
-def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2, 3),
+def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2),
                        directed=True, top_k=5, weight_path=None):
     """
     遍历数据集，对每个 case 运行指定 skill 组合，输出 res.json。
@@ -335,11 +308,6 @@ def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2, 3),
             _wpath = config.data.alarm_weights
         except Exception:
             _wpath = None
-    try:
-        from Sys.config import config
-        _copath = config.skills.co_occur_rules
-    except Exception:
-        _copath = None
 
     skill_names = {1: "topo", 2: "co_occur", 3: "temporal"}
     mode_desc = "+".join(skill_names.get(s, str(s)) for s in sorted(skill_ids))
@@ -368,7 +336,7 @@ def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2, 3),
             predicted_ips, details = rank_devices_by_skills(
                 node_list, info, dirpath,
                 skill_ids=skill_ids, directed=directed,
-                weight_dirpath=_wpath, co_occur_path=_copath, top_k=top_k)
+                weight_dirpath=_wpath, top_k=top_k)
 
             mock_response = json.dumps({
                 "reasoning": f"纯算法流水线 ({mode_desc})，skill_ids={list(skill_ids)}。",
@@ -411,16 +379,16 @@ if __name__ == "__main__":
     except Exception:
         _data = "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
         _res = "/home/sbp/lixinyang/pingmesh/data/res"
-        _default_skills = [1, 2, 3]
+        _default_skills = [1, 2]
 
     p = argparse.ArgumentParser(description="Skill Pipeline — 纯算法 Skill 评分流水线（不依赖 LLM）")
     p.add_argument("--data-root", "-d", default=_data, help="数据根目录")
     p.add_argument("--output-dir", "-o", default=None,
                    help="结果输出子目录名（相对于 results）")
     p.add_argument("--skills", "-s", nargs="*", type=int, default=_default_skills,
-                   help=f"启用的 Skill ID 列表 (default: {_default_skills})")
-    p.add_argument("--directed", action="store_true", default=False,
-                   help="Skill 1 使用有向 PageRank（默认: 无向）")
+                   help="启用的 Skill ID 列表")
+    p.add_argument("--directed", action="store_true", default=True,
+                   help="Skill 1 使用有向 PageRank（默认: 有向）")
     p.add_argument("--top-k", "-k", type=int, default=5,
                    help="输出的预测 IP 数量 (default: 5)")
     p.add_argument("--weight-file", "-w", default=None,

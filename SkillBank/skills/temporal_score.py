@@ -1,5 +1,5 @@
 SKILL_META = {
-    "skill_id": "3",
+    "skill_id": "2",
     "skill_name": "temporal_score_devices",
     "target_error": "纯拓扑 PageRank 忽略了告警的时间维度——根因设备的告警往往最先触发且集中爆发，而级联设备的告警延迟出现且分散。缺少时间信号导致根因设备排名偏低。",
     "python_executor": "temporal_score_devices",

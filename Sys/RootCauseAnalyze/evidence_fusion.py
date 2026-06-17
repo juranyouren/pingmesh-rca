@@ -1,19 +1,18 @@
 """
 Evidence Fusion Layer
 =====================
-将三个 Skill（topology_pagerank_rank / temporal_score_devices /
-co_occurrence_alarm_check）的输出融合为紧凑的三段文本，消除重复，
+将两个 Skill（topology_pagerank_rank / temporal_score_devices）的输出融合为紧凑的文本，消除重复，
 彻底解决拼接进 SKILLED_PROMPT 后超长截断的问题。
 
 设计原则：
   - Skill 本身不改（standalone / 消融实验保持完整），压缩只发生在这一层
-  - 三个 skill 按 IP 合并成一张「候选设备综合证据表」
+  - 两个 skill 按 IP 合并成一张「候选设备综合证据表」
   - Top-K 候选设备只给告警/日志的名称（去重），不给完整 dict
   - info.json 只取关键字段，不再整体 dump
 
 输出三段，分别填入 SKILLED_PROMPT 的 {INFO} / {SKILLRET} / {NODES}：
   - info_brief        → 故障概况
-  - evidence_str      → 候选设备综合证据表 + 共现告警警告
+  - evidence_str      → 候选设备综合证据表
   - candidate_detail  → Top-K 候选设备详细信息（角色/Cross/拓扑/告警名去重列表）
 """
 
@@ -21,7 +20,6 @@ import os
 import json
 
 # ── 融合层常量 ────────────────────────────────────────────────────
-CO_OCCUR_MAX_CHARS = 2000        # co_occurrence 警告文本上限
 DETAIL_MAX_ALARMS_PER_NODE = 30  # 每个候选节点最多列多少条告警/日志名
 RAW_DROP_FIELDS = ("node_sign", "type", "devicetype", "verified_hops_to")  # 原始 dump 时剔除的无用字段
 INFO_KEYS = [                    # info.json 只保留这些关键字段
@@ -113,7 +111,6 @@ def build_fused_evidence(node_list, info, dirpath,
         skill_map: {executor_name: func}，通常传 SkillExecutor.skill_map。
                    缺省时尝试动态加载 SkillBank/skills。
         weight_dirpath: 告警权重文件路径。
-        co_occur_path: 共现规则库路径。
         top_k: 证据表与候选详情保留的候选数。
 
     Returns:
@@ -134,7 +131,6 @@ def build_fused_evidence(node_list, info, dirpath,
 
     # ── 2. Skill executor 输出：仅用于证据表的展示列（PR原始分/role等）──
     topo_ranking = _run_topo(skill_map, node_list, info, weight_dirpath)  # 仅展示用
-    co_occur_text = _run_co_occur(skill_map, node_list, info, weight_dirpath, co_occur_path)
 
     # ── 3. 综合分（与 skill_pipeline._combine_scores 等权平均一致）──
     all_ips = list({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
@@ -151,7 +147,7 @@ def build_fused_evidence(node_list, info, dirpath,
     # ── 5. 拼证据表 ──────────────────────────────────────────────
     evidence_str = _build_evidence_table(
         candidate_ips_sorted, topo_ranking, combined, norm_ts,
-        node_by_ip, weights_dict, co_occur_text)
+        node_by_ip, weights_dict)
 
     # ── 6. info 概况 + 候选详情 ──────────────────────────────────
     info_brief = _build_info_brief(info)
@@ -226,44 +222,11 @@ def _run_topo(skill_map, node_list, info, weight_dirpath):
     return []
 
 
-def _run_temporal(skill_map, node_list, info, dirpath):
-    fn = skill_map.get("temporal_score_devices")
-    if not fn:
-        return {}
-    try:
-        out = fn(node_list, info, dirpath=dirpath)
-    except Exception:
-        return {}
-    parsed = _safe_json_loads(out)
-    if isinstance(parsed, dict):
-        return parsed.get("device_scores", {}) or {}
-    return {}
-
-
-def _run_co_occur(skill_map, node_list, info, weight_dirpath, co_occur_path):
-    fn = skill_map.get("co_occurrence_alarm_check")
-    if not fn:
-        return ""
-    try:
-        kwargs = {}
-        if weight_dirpath:
-            kwargs["dirpath"] = weight_dirpath
-        if co_occur_path:
-            kwargs["co_occur_path"] = co_occur_path
-        out = fn(node_list, info, **kwargs)
-    except Exception:
-        return ""
-    if not isinstance(out, str):
-        return ""
-    # 只保留命中共现规则的警告段（含 🚨 / ⚠️ 标记），否则丢弃（证据表已含权重列）
-    if "🚨" in out or "⚠️" in out:
-        return out[:CO_OCCUR_MAX_CHARS]
-    return ""
 
 
 # ── 拼证据表 ──────────────────────────────────────────────────────
 def _build_evidence_table(candidate_ips, topo_ranking, combined_scores, norm_ts,
-                          node_by_ip, weights_dict, co_occur_text):
+                          node_by_ip, weights_dict):
     """candidate_ips 已按综合分排序；combined_scores 是 {ip: [0-1]} 的综合分。"""
     topo_by_ip = {r.get("ip"): r for r in topo_ranking}
 
@@ -287,8 +250,6 @@ def _build_evidence_table(candidate_ips, topo_ranking, combined_scores, norm_ts,
 
     table = "\n".join(rows)
 
-    if co_occur_text:
-        table += "\n\n【高危告警组合警告（历史错案反思生成）】\n" + co_occur_text
 
     return table
 

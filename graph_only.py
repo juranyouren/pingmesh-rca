@@ -42,8 +42,8 @@ if __name__ == "__main__":
     p.add_argument("--data-root", "-d", default=_data, help="数据根目录")
     p.add_argument("--output-dir", "-o", default=None,
                    help="结果输出子目录名（相对于 results）")
-    p.add_argument("--directed", action="store_true", default=False,
-                   help="使用有向 PageRank（默认: 无向）")
+    p.add_argument("--directed", action="store_true", default=True,
+                   help="使用有向 PageRank（默认: 有向）")
     p.add_argument("--weight-file", "-w", default=None,
                    help="告警权重文件路径（默认: config.data.alarm_weights）")
     args = p.parse_args()

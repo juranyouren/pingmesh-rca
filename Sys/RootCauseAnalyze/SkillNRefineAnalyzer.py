@@ -89,9 +89,8 @@ class SkillNRefineAnalyzer:
         try:
             from Sys.config import config
             weight_dirpath = config.data.alarm_weights
-            co_occur_path = config.skills.co_occur_rules
         except Exception:
-            weight_dirpath, co_occur_path = None, None
+            weight_dirpath = None
 
         skill_ret, info_data, detail_compact, detail_raw = build_fused_evidence(
             node_list=self.executor.get_node_list(dirpath),
@@ -99,7 +98,6 @@ class SkillNRefineAnalyzer:
             dirpath=dirpath,
             skill_map=self.executor.skill_map,
             weight_dirpath=weight_dirpath,
-            co_occur_path=co_occur_path,
             top_k=self.top_k,
         )
 

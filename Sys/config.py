@@ -65,7 +65,6 @@ class SkillPaths:
 
         # 告警共现经验库（历史错案反思生成）
         # 常用: "SkillBank/alarm_co_occurrence_rules.json"
-        self.co_occur_rules = os.path.join(root, "SkillBank", "alarm_co_occurrence_rules.json")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -171,18 +170,17 @@ class SkillConfig:
 
     当前可用:
       [1] topology_pagerank_rank     — 拓扑 PageRank + 告警权重 + Top-K 数据提取
-      [2] co_occurrence_alarm_check  — 告警权重 + 共现规则匹配
       [3] temporal_score_devices     — 时序 Burst/EarlyBird/Density 评分
 
     常用组合:
-      - [1]            ← 仅拓扑（消融实验）
-      - [1, 2]         ← 拓扑 + 共现规则
-      - [1, 3]         ← 拓扑 + 时序
-      - [1, 2, 3]      ← 全量（推荐）
-      - [3]            ← 仅时序（消融实验）
+      - 
+      - 
+      - [1]           ← 仅拓扑
+      - [1, 2]        ← 当前方案
+      - [2]           ← 仅时序
     """
     def __init__(self):
-        self.skill_ids = [1, 2, 3]              # 默认启用全部 3 个 Skill
+        self.skill_ids = [1, 2]              # 默认启用全部 3 个 Skill
         self.short_mode = 0                     # 1=不传入原始节点数据（省 Token）
 
 
