@@ -22,19 +22,19 @@ Pingmesh 告警 → ┬─ Topo: 有向 PageRank ─┐
 
 ---
 
-## 二、消融结果（146 例人工标注，2026-06-17）
+## 二、消融结果（146 例人工标注）
 
-```
-run_full_ablation.sh — 移除 label.json 泄漏后重新评测
-```
+**最新**：`ablation_20260617_184232` — 移除 label.json 泄漏后，pycache 已清。
 
 | 组合 | Top-1 | Top-3 | Top-5 | 
 |------|-------|-------|-------|
-| **[1,2] topo+temporal (llm 权重)** | **55.94%** | 60.14% | 64.34% |
-| [1,2] topo+temporal (manual 权重) | 54.55% | 58.04% | 64.34% |
-| [2] temporal only | 49.65% | 58.04% | 58.74% |
-| [1] topo only (manual 权重) | 42.66% | 54.55% | 60.14% |
-| [1] topo only (llm 权重) | 39.16% | 51.75% | 60.84% |
+| **[1,2] topo+temporal (llm 权重)** | **56.64%** | 59.44% | 62.24% |
+| [1,2] topo+temporal (manual 权重) | 54.55% | 58.74% | 64.34% |
+| [2] temporal only | 49.65% | 57-58% | 58-61% |
+| [1] topo only (manual 权重) | 42.66% | 53.85% | 57.34% |
+| [1] topo only (llm 权重) | 38.46% | 52.45% | 60.14% |
+
+> 注：之前一份 LLM 推理结果 skill_evaluation=85%。消融=56%，差距 30pp。已确认代码路径完全一致（`compare_all.py` 全量 match）。差异来源为**数据不一致**——LLM 推理跑在了回填后的数据上，消融跑在原始数据上。待统一数据后重跑。
 
 **原始 JSON**：
 ```json
@@ -53,6 +53,18 @@ run_full_ablation.sh — 移除 label.json 泄漏后重新评测
 ```
 
 ### 分析
+
+**原始 JSON**：
+```json
+{"tag":"topo_temporal","skills":"1 2","weight_source":"llm","top1":56.64,"top3":59.44,"top5":62.24}
+{"tag":"topo_temporal","skills":"1 2","weight_source":"manual","top1":54.55,"top3":58.74,"top5":64.34}
+{"tag":"temporal","skills":"2","weight_source":"llm","top1":49.65,"top3":58.04,"top5":60.84}
+{"tag":"temporal","skills":"2","weight_source":"manual","top1":49.65,"top3":57.34,"top5":58.04}
+{"tag":"topo","skills":"1","weight_source":"manual","top1":42.66,"top3":53.85,"top5":57.34}
+{"tag":"topo","skills":"1","weight_source":"llm","top1":38.46,"top3":52.45,"top5":60.14}
+```
+
+**1. 数据泄漏的影响**
 
 **1. 数据泄漏的影响**
 
