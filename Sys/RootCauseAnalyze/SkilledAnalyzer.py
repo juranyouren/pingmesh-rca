@@ -192,11 +192,8 @@ class SkilledAnalyzer:
             return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=""), skill_ips
         remaining_tokens -= len(info_tokens)
 
-        if self.short:
-            nodes_data = detail_compact
-        else:
-            raw_tokens = len(tokenizer.encode(detail_raw))
-            nodes_data = detail_raw if raw_tokens <= remaining_tokens * 0.3 else detail_compact
+        # 候选详情: 始终用结构化 JSON (detail_compact)，token 不够截断
+        nodes_data = detail_compact
         nodes_tokens = tokenizer.encode(nodes_data)
         if len(nodes_tokens) > remaining_tokens:
             nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."

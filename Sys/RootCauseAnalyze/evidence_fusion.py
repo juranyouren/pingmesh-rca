@@ -1,295 +1,233 @@
 """
 Evidence Fusion Layer
 =====================
-将两个 Skill（topology_pagerank_rank / temporal_score_devices）的输出融合为紧凑的文本，消除重复，
-彻底解决拼接进 SKILLED_PROMPT 后超长截断的问题。
+将两个 Skill（topology_pagerank_rank / temporal_score_devices）的输出融合为结构化 JSON，
+三个独立字典块注入 SKILLED_PROMPT，便于 LLM 解析。
 
-设计原则：
-  - Skill 本身不改（standalone / 消融实验保持完整），压缩只发生在这一层
-  - 两个 skill 按 IP 合并成一张「候选设备综合证据表」
-  - Top-K 候选设备只给告警/日志的名称（去重），不给完整 dict
-  - info.json 只取关键字段，不再整体 dump
-
-输出三段，分别填入 SKILLED_PROMPT 的 {INFO} / {SKILLRET} / {NODES}：
+输出三段（填入 {INFO} / {SKILLRET} / {NODES}）：
   - info_brief        → 故障概况
-  - evidence_str      → 候选设备综合证据表
-  - candidate_detail  → Top-K 候选设备详细信息（角色/Cross/拓扑/告警名去重列表）
+  - skill_ret         → JSON: {"topo": {...}, "temporal": {...}}  算法分析
+  - candidate_detail  → JSON: {"devices": [{ip, role, cross, alarms, topology}]}  候选详情
 """
 
 import os
 import json
 
-# ── 融合层常量 ────────────────────────────────────────────────────
-DETAIL_MAX_ALARMS_PER_NODE = 30  # 每个候选节点最多列多少条告警/日志名
-RAW_DROP_FIELDS = ("node_sign", "type", "devicetype", "verified_hops_to")  # 原始 dump 时剔除的无用字段
-INFO_KEYS = [                    # info.json 只保留这些关键字段
+DETAIL_MAX_ALARMS_PER_NODE = 30
+RAW_DROP_FIELDS = ("node_sign", "type", "devicetype", "verified_hops_to")
+INFO_KEYS = [
     "alarm_name", "alarm_time", "source_ip", "sink_ip",
     "src_tunnel_ip", "dst_tunnel_ip", "scenario_code",
     "analysis_type", "task_num", "alarm_description",
 ]
 
+TOPO_DESC = (
+    "Personalized PageRank (directed) on physical topology graph. "
+    "Initial weight = max alarm weight hits + cross_count * multiplier + source/sink proximity bonus. "
+    "Higher score = device at topology bottleneck traversed by multiple anomaly paths."
+)
+
+TEMPORAL_DESC = (
+    "Temporal suspicion score (0-1): "
+    "Burst (0.40): alarms within +/-5min of fault time; "
+    "Early Bird (0.35): 1/rank of device first alarm; "
+    "Temporal Density (0.25): alarms/min capped at 20. "
+    "Higher = alarms earlier, more concentrated = likely root cause."
+)
 
 def _get_device_ip(node):
     return node.get("mgmt_ip", node.get("ip", node.get("name", "unknown")))
 
 
 def _load_nodes(dirpath):
-    """读 nodes.json，归一化为 list。"""
     path = os.path.join(dirpath, "nodes.json")
-    if not os.path.exists(path):
-        return []
+    if not os.path.exists(path): return []
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.load(open(path, "r", encoding="utf-8"))
     except Exception:
         return []
-    if isinstance(data, dict):
-        return list(data.values())
-    return data if isinstance(data, list) else []
+    return list(data.values()) if isinstance(data, dict) else (data if isinstance(data, list) else [])
 
 
 def _load_info(dirpath):
     path = os.path.join(dirpath, "info.json")
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _safe_json_loads(text):
-    """skill 返回值可能是 JSON 串，也可能是错误提示串；解析失败返回 None。"""
-    if not isinstance(text, str):
-        return text if isinstance(text, dict) else None
-    try:
-        return json.loads(text)
-    except Exception:
-        return None
+    if not os.path.exists(path): return {}
+    try: return json.load(open(path, "r", encoding="utf-8"))
+    except Exception: return {}
 
 
 def _extract_alarm_names(node):
-    """提取节点的告警/日志名称（去重，保序）。"""
-    names = []
-    seen = set()
+    names, seen = [], set()
     for evt in node.get("alarms", []) + node.get("logs", []):
-        if isinstance(evt, str):
-            name = evt.strip()
-        elif isinstance(evt, dict):
-            name = str(evt.get("alarm_name", evt.get("name", ""))).strip()
-        else:
-            name = ""
+        name = evt.strip() if isinstance(evt, str) else str(evt.get("alarm_name", evt.get("name", ""))).strip()
         if name and name not in seen:
-            seen.add(name)
-            names.append(name)
+            seen.add(name); names.append(name)
     return names
 
 
 def _build_info_brief(info):
-    """从 info.json 只取关键字段，拼成紧凑文本。"""
-    if not isinstance(info, dict):
-        return "（无故障概况）"
-    lines = []
-    for k in INFO_KEYS:
-        v = info.get(k)
-        if v not in (None, "", "[]", "--"):
-            lines.append(f"- {k}: {v}")
+    if not isinstance(info, dict): return "（无故障概况）"
+    lines = [f"- {k}: {v}" for k in INFO_KEYS if (v := info.get(k)) not in (None, "", "[]", "--")]
     return "\n".join(lines) if lines else "（无故障概况）"
 
 
-def build_fused_evidence(node_list, info, dirpath,
-                         skill_map=None, weight_dirpath=None,
-                         co_occur_path=None, top_k=10):
-    """
-    融合三个 skill 的输出。
-
-    Args:
-        node_list: 节点列表（已归一化为 list）。为空则自动从 dirpath/nodes.json 读。
-        info: info dict。为空则自动从 dirpath/info.json 读。
-        dirpath: case 目录（temporal 需要它做时间戳 fallback）。
-        skill_map: {executor_name: func}，通常传 SkillExecutor.skill_map。
-                   缺省时尝试动态加载 SkillBank/skills。
-        weight_dirpath: 告警权重文件路径。
-        top_k: 证据表与候选详情保留的候选数。
-
-    Returns:
-        (evidence_str, info_brief, candidate_detail, candidate_raw, skill_ips)
-        skill_ips: 综合分排序后的候选 IP 列表（算法排名，LLM 未介入）。
-    """
-    if not node_list:
-        node_list = _load_nodes(dirpath)
-    if not info:
-        info = _load_info(dirpath)
-    if skill_map is None:
-        skill_map = _lazy_load_skill_map()
-
-    # ── 1. 核心评分：用 skill_pipeline 函数直接算（与消融实验完全一致）──
-    from Sys.RootCauseAnalyze.skill_pipeline import _score_topo, _score_temporal
-    norm_pr = _score_topo(node_list, info, weight_dirpath=weight_dirpath, directed=True)
-    norm_ts = _score_temporal(node_list, info, dirpath=dirpath)
-
-    # ── 2. Skill executor 输出：仅用于证据表的展示列（PR原始分/role等）──
-    topo_ranking = _run_topo(skill_map, node_list, info, weight_dirpath)  # 仅展示用
-
-    # ── 3. 综合分（与 skill_pipeline._combine_scores 等权平均一致）──
-    all_ips = list({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
-    combined = {}
-    for ip in all_ips:
-        vals = [norm_pr.get(ip, 0), norm_ts.get(ip, 0)]
-        combined[ip] = sum(vals) / len(vals)
-    candidate_ips_sorted = sorted(combined, key=lambda ip: combined[ip], reverse=True)[:top_k]
-
-    # ── 4. 告警权重 + 关键告警名 ────────────────────────────────
-    weights_dict = _load_alarm_weights(weight_dirpath)
-    node_by_ip = {_get_device_ip(n): n for n in node_list}
-
-    # ── 5. 拼证据表 ──────────────────────────────────────────────
-    evidence_str = _build_evidence_table(
-        candidate_ips_sorted, topo_ranking, combined, norm_ts,
-        node_by_ip, weights_dict)
-
-    # ── 6. info 概况 + 候选详情 ──────────────────────────────────
-    info_brief = _build_info_brief(info)
-    candidate_detail = _build_candidate_detail(candidate_ips_sorted, node_by_ip)
-    candidate_raw = _build_candidate_raw(candidate_ips_sorted, node_by_ip)
-
-    return evidence_str, info_brief, candidate_detail, candidate_raw, candidate_ips_sorted
-
-
-def _lazy_load_skill_map():
-    """缺省路径动态加载 skills，返回 {executor_name: func}。"""
-    import importlib.util
-    skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                              "..", "SkillBank", "skills")
-    skills_dir = os.path.normpath(skills_dir)
-    skill_map = {}
-    if not os.path.isdir(skills_dir):
-        return skill_map
-    for fn in os.listdir(skills_dir):
-        if fn.endswith(".py") and not fn.startswith("__"):
-            try:
-                spec = importlib.util.spec_from_file_location(fn[:-3], os.path.join(skills_dir, fn))
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                if hasattr(mod, "EXECUTORS"):
-                    skill_map.update(mod.EXECUTORS)
-            except Exception:
-                pass
-    return skill_map
-
-
-# ── 告警权重加载（与 topo._load_alarm_weights 同逻辑）─────────────
 def _load_alarm_weights(weight_dirpath):
     weights = {"stachg_todwn": 100, "trunkdown": 100, "vlan接口down(dcn)": 100}
     if weight_dirpath and os.path.exists(weight_dirpath):
         try:
-            with open(weight_dirpath, "r", encoding="utf-8") as f:
-                for item in json.load(f):
-                    if "alarm_name" in item and "alarm_priority" in item:
-                        weights[str(item["alarm_name"]).lower()] = int(item["alarm_priority"])
-        except Exception:
-            pass
+            for item in json.load(open(weight_dirpath, "r", encoding="utf-8")):
+                if "alarm_name" in item and "alarm_priority" in item:
+                    weights[str(item["alarm_name"]).lower()] = int(item["alarm_priority"])
+        except Exception: pass
     return weights
 
 
 def _node_max_weight(node, weights_dict):
-    """返回 (最大告警权重, 命中的关键告警名列表)。"""
-    max_w = 0
-    hit = []
+    max_w, hit = 0, []
     for name in _extract_alarm_names(node):
-        w = weights_dict.get(str(name).lower(), 0)
-        if w > 0:
-            if w > max_w:
-                max_w = w
+        if (w := weights_dict.get(str(name).lower(), 0)) > 0:
+            if w > max_w: max_w = w
             hit.append(name)
     return max_w, hit
 
 
-# ── 三个 skill 的调用封装（解析失败均安全降级）──────────────────
-def _run_topo(skill_map, node_list, info, weight_dirpath):
-    fn = skill_map.get("topology_pagerank_rank")
-    if not fn:
-        return []
-    try:
-        out = fn(node_list, info, weight_dirpath=weight_dirpath) if weight_dirpath \
-            else fn(node_list, info)
-    except Exception:
-        return []
-    parsed = _safe_json_loads(out)
-    if isinstance(parsed, dict):
-        return parsed.get("ranking", []) or []
-    return []
+# ══════════════════════════════════════════════════════════════════
+# Main
+# ══════════════════════════════════════════════════════════════════
 
+def build_fused_evidence(node_list, info, dirpath,
+                         skill_map=None, weight_dirpath=None, top_k=10):
+    """
+    Returns: (skill_ret, info_brief, candidate_detail, candidate_raw, skill_ips)
+    skill_ret 和 candidate_detail 是 JSON 字符串。
+    """
+    if not node_list: node_list = _load_nodes(dirpath)
+    if not info: info = _load_info(dirpath)
+    if skill_map is None: skill_map = _lazy_load_skill_map()
 
+    # ── 1. 核心评分（与 skill_pipeline 一致）──
+    from Sys.RootCauseAnalyze.skill_pipeline import _score_topo, _score_temporal
+    norm_pr = _score_topo(node_list, info, weight_dirpath=weight_dirpath, directed=True)
+    norm_ts = _score_temporal(node_list, info, dirpath=dirpath)
 
+    # ── 2. 综合分 & 排序 ──
+    all_ips = list({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
+    combined = {ip: (norm_pr.get(ip, 0) + norm_ts.get(ip, 0)) / 2.0 for ip in all_ips}
+    candidate_ips = sorted(combined, key=combined.get, reverse=True)[:top_k]
 
-# ── 拼证据表 ──────────────────────────────────────────────────────
-def _build_evidence_table(candidate_ips, topo_ranking, combined_scores, norm_ts,
-                          node_by_ip, weights_dict):
-    """candidate_ips 已按综合分排序；combined_scores 是 {ip: [0-1]} 的综合分。"""
+    # ── 3. 告警权重 & node lookup ──
+    weights_dict = _load_alarm_weights(weight_dirpath)
+    node_by_ip = {_get_device_ip(n): n for n in node_list}
+
+    # ── 4. Topo 结构化字典 ──
+    topo_ranking = _run_topo(skill_map, node_list, info, weight_dirpath)
     topo_by_ip = {r.get("ip"): r for r in topo_ranking}
-
-    header = "排名 | IP | 角色 | 综合分 | PR(有向) | PR(无向) | 时序(归一化) | 告警权重 | Cross | 关键告警"
-    sep = "-" * len(header)
-    rows = [header, sep]
-
+    topo_list = []
     for rank, ip in enumerate(candidate_ips, 1):
         tr = topo_by_ip.get(ip, {})
         node = node_by_ip.get(ip, {})
-        role = tr.get("role") or node.get("role", "UNKNOWN")
-        combined = round(combined_scores.get(ip, 0) * 100, 1)  # → 0-100
-        pr_dir = tr.get("score_directed", tr.get("score", "-"))
-        pr_undir = tr.get("score_undirected", "-")
-        ts = round(norm_ts.get(ip, 0), 3)
-        cross = node.get("cross", tr.get("cross", "-"))
-        max_w, hit_alarms = _node_max_weight(node, weights_dict)
-        w_str = max_w if max_w > 0 else "-"
-        alarm_str = ", ".join(hit_alarms[:3]) if hit_alarms else "-"
-        rows.append(f"{rank} | {ip} | {role} | {combined} | {pr_dir} | {pr_undir} | {ts} | {w_str} | {cross} | {alarm_str}")
+        topo_list.append({
+            "rank": rank,
+            "ip": ip,
+            "role": tr.get("role") or node.get("role", "UNKNOWN"),
+            "pr_score": round(norm_pr.get(ip, 0) * 100, 1),
+            "cross": node.get("cross", tr.get("cross", 0)),
+        })
 
-    table = "\n".join(rows)
+    # ── 5. Temporal 结构化字典 ──
+    from Sys.RootCauseAnalyze.skill_pipeline import _score_temporal as _ts
+    temporal_list = []
+    for rank, ip in enumerate(candidate_ips, 1):
+        node = node_by_ip.get(ip, {})
+        raw_vals = _compute_temporal_raw(node)
+        temporal_list.append({
+            "rank": rank,
+            "ip": ip,
+            "score": round(norm_ts.get(ip, 0) * 100, 1),
+        } | raw_vals)
 
+    # ── 6. 组装 skill_ret JSON ──
+    skill_ret = json.dumps({
+        "topo": {"description": TOPO_DESC, "rankings": topo_list},
+        "temporal": {"description": TEMPORAL_DESC, "rankings": temporal_list},
+        "combined_score_rankings": [{
+            "rank": i + 1,
+            "ip": ip,
+            "combined_score": round(combined[ip] * 100, 1),
+            "role": (topo_by_ip.get(ip, {}) or {}).get("role") or node_by_ip.get(ip, {}).get("role", "UNKNOWN"),
+        } for i, ip in enumerate(candidate_ips)],
+    }, ensure_ascii=False, indent=2)
 
-    return table
+    # ── 7. info 概况 ──
+    info_brief = _build_info_brief(info)
 
-
-# ── Top-K 候选原始详情 ────────────────────────────────────────────
-def _build_candidate_detail(candidate_ips, node_by_ip):
-    """紧凑版：告警/日志名 + 拓扑连接（linked_from/linked_to）。"""
-    blocks = []
+    # ── 8. 候选设备详情 JSON ──
+    devices_detail = []
     for ip in candidate_ips:
         node = node_by_ip.get(ip)
-        if not node:
-            continue
+        if not node: continue
         names = _extract_alarm_names(node)
-        if not names:
-            detail = "（无告警/日志）"
-        else:
-            shown = names[:DETAIL_MAX_ALARMS_PER_NODE]
-            detail = "; ".join(shown)
-            if len(names) > DETAIL_MAX_ALARMS_PER_NODE:
-                detail += f" ...（共 {len(names)} 条，已截断）"
-        # 拓扑连接对根因推理至关重要，紧凑版也带上
-        lf = node.get("linked_from", [])
-        lt = node.get("linked_to", [])
-        topo = ""
-        if lf or lt:
-            topo = f" | 上游={lf} 下游={lt}"
-        blocks.append(f"[{ip}] (role={node.get('role', 'UNKNOWN')}, cross={node.get('cross', 0)}): 告警=[{detail}]{topo}")
-    return "\n".join(blocks) if blocks else "（无候选设备详情）"
+        max_w, high_alarms = _node_max_weight(node, weights_dict)
+        devices_detail.append({
+            "ip": ip,
+            "role": node.get("role", "UNKNOWN"),
+            "cross": node.get("cross", 0),
+            "alarm_count": len(names),
+            "alarms": names[:DETAIL_MAX_ALARMS_PER_NODE],
+            "high_severity_alarms": high_alarms[:10],
+            "topology": {
+                "upstream": node.get("linked_from", [])[:10],
+                "downstream": node.get("linked_to", [])[:10],
+            },
+        })
+    candidate_detail = json.dumps({"devices": devices_detail}, ensure_ascii=False, indent=2)
+
+    # ── 9. raw 版本（token 充足时备用）──
+    candidate_raw = _build_candidate_raw(candidate_ips, node_by_ip)
+
+    return skill_ret, info_brief, candidate_detail, candidate_raw, candidate_ips
+
+
+# ══════════════════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════════════════
+
+def _compute_temporal_raw(node):
+    """简单统计: 设备上的告警/日志数量。"""
+    alarms = node.get("alarms", []) if isinstance(node, dict) else []
+    logs = node.get("logs", []) if isinstance(node, dict) else []
+    return {"total_alarms": len(alarms), "total_logs": len(logs)}
+
+
+def _lazy_load_skill_map():
+    import importlib.util
+    skills_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "SkillBank", "skills"))
+    skill_map = {}
+    if not os.path.isdir(skills_dir): return skill_map
+    for fn in os.listdir(skills_dir):
+        if fn.endswith(".py") and not fn.startswith("__"):
+            try:
+                spec = importlib.util.spec_from_file_location(fn[:-3], os.path.join(skills_dir, fn))
+                mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+                if hasattr(mod, "EXECUTORS"): skill_map.update(mod.EXECUTORS)
+            except Exception: pass
+    return skill_map
+
+
+def _run_topo(skill_map, node_list, info, weight_dirpath):
+    fn = skill_map.get("topology_pagerank_rank")
+    if not fn: return []
+    try:
+        out = fn(node_list, info, weight_dirpath=weight_dirpath) if weight_dirpath else fn(node_list, info)
+    except Exception: return []
+    if isinstance(out, dict): return out.get("ranking", out.get("ip", [])) or []
+    try:
+        parsed = json.loads(out)
+        return parsed.get("ranking", parsed.get("ip", [])) if isinstance(parsed, dict) else []
+    except Exception: return []
 
 
 def _build_candidate_raw(candidate_ips, node_by_ip):
-    """完整版：Top-K 候选节点的完整原始 dict（剔除无用字段），供 token 充足时填入 prompt。"""
-    raw = {}
-    for ip in candidate_ips:
-        node = node_by_ip.get(ip)
-        if not node:
-            continue
-        raw[ip] = {k: v for k, v in node.items() if k not in RAW_DROP_FIELDS}
-    if not raw:
-        return "（无候选设备详情）"
-    return json.dumps(raw, ensure_ascii=False, indent=2)
-
-
+    raw = {ip: {k: v for k, v in node_by_ip.get(ip, {}).items() if k not in RAW_DROP_FIELDS}
+           for ip in candidate_ips if ip in node_by_ip}
+    return json.dumps(raw, ensure_ascii=False, indent=2) if raw else "{}"

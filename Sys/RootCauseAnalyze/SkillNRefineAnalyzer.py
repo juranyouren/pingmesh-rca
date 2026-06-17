@@ -122,9 +122,8 @@ class SkillNRefineAnalyzer:
             return skill_ret, info_data, ""
         remaining_tokens -= len(info_tokens)
 
-        # 默认紧凑版（证据表已有全部结构化信息），raw 超过剩余 30% 就不侵扰 LLM
-        raw_tokens = len(tokenizer.encode(detail_raw))
-        nodes_data = detail_raw if raw_tokens <= remaining_tokens * 0.3 else detail_compact
+        # 始终用结构化 JSON (detail_compact)
+        nodes_data = detail_compact
         nodes_tokens = tokenizer.encode(nodes_data)
         if len(nodes_tokens) > remaining_tokens:
             nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
