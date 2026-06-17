@@ -2,12 +2,10 @@
 Score_N — 根因定位评测模块
 =========================
 从 res.json 读取结果，计算 Top-1~5 命中率。
-支持分层评测：skill_evaluation (纯算法) / llm_evaluation (LLM 重排)。
+输出 sum.json: {skill_evaluation, llm_evaluation}
 
 用法:
-    from Sys.Score.Score_N import Scorer
-    s = Scorer("path/to/res.json")
-    s.calculate_metrics()  # -> sum.json + failures/success json
+    python Sys/Score/Score_N.py path/to/res.json
 """
 
 import json
@@ -46,16 +44,12 @@ class ResponseParser:
     def parse(self, text: str) -> Prediction:
         if not text or not isinstance(text, str):
             return Prediction(ips=[])
-
-        # 1. try JSON code block
         blocks = self._json_block.findall(text)
         if blocks:
-            for block in reversed(blocks):  # last block wins
+            for block in reversed(blocks):
                 ips = self._try_json_block(block)
                 if ips is not None:
                     return Prediction(ips=ips)
-
-        # 2. fallback: regex
         ips = self._ip_quoted.findall(text)
         if not ips:
             ips = [ip for ip in self._ip_loose.findall(text)
@@ -85,7 +79,7 @@ class MetricsEvaluator:
     """计算 Top-1~5 命中。"""
 
     def evaluate(self, gt: GroundTruth, pred: Prediction) -> Dict[str, Any]:
-        pred_ips = list(dict.fromkeys(pred.ips))  # dedup, preserve order
+        pred_ips = list(dict.fromkeys(pred.ips))
 
         hits = {f"top{i}_hit": 0 for i in range(1, 6)}
         if gt.ips:
@@ -152,14 +146,9 @@ class Scorer:
     # ── core eval ──────────────────────────────────────────────────
 
     def _eval_ips(self, res_data: List[Dict], ip_source: str) -> Dict[str, Any]:
-        """
-        ip_source:
-          "skill_ips"   → 从 res.json 的 skill_ips 字段读（纯算法排名）
-          "response"    → 从 LLM 的 response 文本解析 IP
-        """
-        metrics = {c: {f"sum_top{i}": 0 for i in range(1, 6)}
-                     | {"failure_cases": [], "success_cases": []}
-                   for c in ["all"]}
+        """ip_source: "skill_ips" (纯算法) 或 "response" (LLM 解析)。"""
+        sums = {f"sum_top{i}": 0 for i in range(1, 6)}
+        n = 0
 
         for rd in res_data:
             dir_name = rd.get("dir")
@@ -171,49 +160,22 @@ class Scorer:
                 ips = rd.get("skill_ips", [])
                 pred = Prediction(ips=ips if isinstance(ips, list) else [])
             else:
-                text = rd.get(ip_source, "")
-                pred = self.parser.parse(text)
+                pred = self.parser.parse(rd.get(ip_source, ""))
 
             res = self.evaluator.evaluate(gt, pred)
+            n += 1
+            for i in range(1, 6):
+                sums[f"sum_top{i}"] += res[f"top{i}_hit"]
 
-            case_log = {
-                "name": dir_name,
-                "gt_ips": gt.ips,
-                "pred_ips": res["pred_ips"],
-                "top1_hit": res["top1_hit"],
-            }
-
-            for c in ["all"]:
-                for i in range(1, 6):
-                    metrics[c][f"sum_top{i}"] += res[f"top{i}_hit"]
-                if res["is_failed"]:
-                    metrics[c]["failure_cases"].append(case_log)
-                else:
-                    metrics[c]["success_cases"].append(case_log)
-
-        return self._build_summary(metrics)
-
-    @staticmethod
-    def _build_summary(metrics):
-        result = {}
-        for c in metrics:
-            m = metrics[c]
-            n = len(m["failure_cases"]) + len(m["success_cases"])
-            if n == 0:
-                result[c] = {"status": "No cases"}
-                continue
-            result[c] = {
-                "ranking_metrics": {
-                    "Total Evaluated Cases": n,
-                    **{f"Top-{i} Acc (%)": round(m[f"sum_top{i}"] / n * 100, 2)
-                       for i in range(1, 6)},
-                },
-                "failed_cases_count": len(m["failure_cases"]),
-                "success_cases_count": len(m["success_cases"]),
-                "_raw_failures": m["failure_cases"],
-                "_raw_successes": m["success_cases"],
-            }
-        return result
+        if n == 0:
+            return {}
+        return {
+            "ranking_metrics": {
+                "Total Evaluated Cases": n,
+                **{f"Top-{i} Acc (%)": round(sums[f"sum_top{i}"] / n * 100, 2)
+                   for i in range(1, 6)},
+            },
+        }
 
     # ── main entry ─────────────────────────────────────────────────
 
@@ -222,51 +184,16 @@ class Scorer:
         if not res_data:
             raise ValueError(f"empty: {self.res_path}")
 
-        skill_res = self._eval_ips(res_data, "skill_ips")
-        llm_res = self._eval_ips(res_data, "response")
-
-        # refine stage — only if response field has content
-        has_refine = any(len(str(rd.get("response", ""))) > 10 for rd in res_data[:5])
-        refine_res = self._eval_ips(res_data, "response") if has_refine else None
-
         summary = {
             "total_cases_in_file": len(res_data),
-            "skill_evaluation": self._clean(skill_res),
-            "llm_evaluation": self._clean(llm_res),
+            "skill_evaluation": self._eval_ips(res_data, "skill_ips"),
+            "llm_evaluation": self._eval_ips(res_data, "response"),
         }
-        if refine_res:
-            summary["refined_evaluation"] = self._clean(refine_res)
 
         sum_path = os.path.join(self.out_dir, "sum.json")
         self._save_json(summary, sum_path)
-
-        # save failures/success detail files
-        self._save_detail(skill_res, "skill")
-        self._save_detail(llm_res, "llm")
-        if refine_res:
-            self._save_detail(refine_res, "refined")
-
-        print(f"评测完成 → {sum_path}")
+        print(f"评测完成 -> {sum_path}")
         return summary
-
-    @staticmethod
-    def _clean(stage_res):
-        if not stage_res:
-            return {}
-        return {c: {k: v for k, v in d.items() if not k.startswith("_raw")}
-                for c, d in stage_res.items()}
-
-    def _save_detail(self, stage_res, prefix):
-        if not stage_res or "all" not in stage_res or "status" in stage_res["all"]:
-            return
-        fail_data = stage_res["all"]["_raw_failures"]
-        succ_data = stage_res["all"]["_raw_successes"]
-        if fail_data:
-            self._save_json(fail_data,
-                            os.path.join(self.out_dir, f"{prefix}_ranking_failures.json"))
-        if succ_data:
-            self._save_json(succ_data,
-                            os.path.join(self.out_dir, f"{prefix}_ranking_success.json"))
 
 
 # ══════════════════════════════════════════════════════════════════
