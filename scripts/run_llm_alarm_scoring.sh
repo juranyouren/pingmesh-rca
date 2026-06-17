@@ -101,8 +101,8 @@ for dflag in "" "--directed"; do
     if [ -f "${res_json}" ]; then
         python -c "
 import json, sys; sys.path.insert(0, '${PROJECT_ROOT}')
-from Sys.Score.Score_N import Scorer, ResponseParser
-m = Scorer('${res_json}').calculate_metrics()['skill_evaluation']['all']['ranking_metrics']
+from Sys.Score.Score_N import Scorer
+m = Scorer('${res_json}').calculate_metrics()['skill_evaluation']['ranking_metrics']
 print(f'  [LLM enriched] ${dname} Top-1={m[\"Top-1 Acc (%)\"]} Top-3={m[\"Top-3 Acc (%)\"]} Top-5={m[\"Top-5 Acc (%)\"]}')
 " 2>&1
     fi
