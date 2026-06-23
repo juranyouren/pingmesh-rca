@@ -39,16 +39,19 @@ for fname in sorted(os.listdir(SRC)):
 
     # 提取 csn
     parts = fname.replace(".json", "").split("-")
-    csn = parts[1] if len(parts) >= 2 else fname.replace(".json", "")
+    csn = parts[1] if len(parts) >= 2 else ""
+    if not csn or not csn.strip():
+        print(f"  skip {fname}: 无法提取 csn")
+        continue
 
     # ── 必填字段校验 ──
     full_link = raw.get("full_link")
-    if not isinstance(full_link, dict):
-        print(f"  skip {csn}: 缺少 full_link")
+    if not isinstance(full_link, dict) or not full_link:
+        print(f"  skip {csn}: full_link 缺失或为空")
         continue
 
     task_info = full_link.get("task_info")
-    if not isinstance(task_info, dict):
+    if not isinstance(task_info, dict) or not task_info:
         print(f"  skip {csn}: 缺少 task_info")
         continue
 
@@ -62,17 +65,19 @@ for fname in sorted(os.listdir(SRC)):
         print(f"  skip {csn}: 缺少 task_topo.value")
         continue
 
-    # source_ip / sink_ip（info.json 必需）
-    if not task_info.get("source_ip") or not task_info.get("sink_ip"):
-        print(f"  skip {csn}: 缺少 source_ip 或 sink_ip")
+    # source_ip / sink_ip（info.json 必需，且必须是有效非空值）
+    src = task_info.get("source_ip")
+    snk = task_info.get("sink_ip")
+    if not src or not snk or (isinstance(src, list) and not src) or (isinstance(snk, list) and not snk):
+        print(f"  skip {csn}: source_ip 或 sink_ip 缺失/为空")
         continue
 
     # gt
     gt_label = full_link.get("groud_truth",
                full_link.get("ground_truth",
                full_link.get("grond_truth")))
-    if not isinstance(gt_label, dict):
-        print(f"  skip {csn}: 缺少 ground_truth")
+    if not isinstance(gt_label, dict) or not gt_label:
+        print(f"  skip {csn}: ground_truth 缺失或为空")
         continue
 
     abnormal = gt_label.get("abnormal_node")
