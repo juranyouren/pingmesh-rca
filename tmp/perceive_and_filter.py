@@ -76,8 +76,17 @@ for fname in sorted(os.listdir(SRC)):
     gt_label = full_link.get("groud_truth",
                full_link.get("ground_truth",
                full_link.get("grond_truth")))
+
+    # fallback: 若 gt 为空, 尝试 rootcause_analysis[0]
     if not isinstance(gt_label, dict) or not gt_label:
-        print(f"  skip {csn}: ground_truth 缺失或为空")
+        rca = full_link.get("rootcause_analysis")
+        if isinstance(rca, list) and len(rca) > 0 and isinstance(rca[0], dict):
+            gt_label = rca[0]
+            print(f"  info {csn}: gt 为空, 已从 rootcause_analysis[0] 填入")
+
+    if not isinstance(gt_label, dict) or not gt_label:
+        print(f"  skip {csn}: ground_truth 缺失或为空（且 rootcause_analysis 不可用）")
+        continue
         continue
 
     abnormal = gt_label.get("abnormal_node")
@@ -295,11 +304,15 @@ if WRITE and passed:
         json.dump(alarm_content, open(os.path.join(case_dir, "info.json"), "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
 
-        # ── 构造 label.json（从 ground_truth 提取）──
+        # ── 构造 label.json（从 ground_truth 提取, 同入口校验的 fallback 逻辑）──
         gt = full_link.get("groud_truth",
               full_link.get("ground_truth",
-              full_link.get("grond_truth", {})))
-        if isinstance(gt, dict):
+              full_link.get("grond_truth")))
+        if not isinstance(gt, dict) or not gt:
+            rca = full_link.get("rootcause_analysis")
+            if isinstance(rca, list) and len(rca) > 0 and isinstance(rca[0], dict):
+                gt = rca[0]
+        if isinstance(gt, dict) and gt:
             labels = [{
                 "ranking": gt.get("ranking", 1),
                 "abnormal_node": gt.get("abnormal_node", []),
