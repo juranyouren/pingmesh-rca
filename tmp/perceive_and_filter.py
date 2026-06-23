@@ -34,19 +34,62 @@ for fname in sorted(os.listdir(SRC)):
     try:
         raw = json.load(open(fpath, "r", encoding="utf-8"))
     except Exception as e:
-        print(f"  skip {fname}: 解析失败 ({e})")
+        print(f"  skip {fname}: JSON 解析失败 ({e})")
         continue
 
     # 提取 csn
     parts = fname.replace(".json", "").split("-")
     csn = parts[1] if len(parts) >= 2 else fname.replace(".json", "")
 
-    full_link = raw.get("full_link", {})
-    task_info = full_link.get("task_info", {})
-    alarm_time = task_info.get("alarm_time")
+    # ── 必填字段校验 ──
+    full_link = raw.get("full_link")
+    if not isinstance(full_link, dict):
+        print(f"  skip {csn}: 缺少 full_link")
+        continue
 
+    task_info = full_link.get("task_info")
+    if not isinstance(task_info, dict):
+        print(f"  skip {csn}: 缺少 task_info")
+        continue
+
+    alarm_time = task_info.get("alarm_time")
     if not alarm_time:
-        print(f"  skip {csn}: 无 alarm_time")
+        print(f"  skip {csn}: 缺少 alarm_time")
+        continue
+
+    topo_value = full_link.get("task_topo", {}).get("value")
+    if not isinstance(topo_value, list) or not topo_value:
+        print(f"  skip {csn}: 缺少 task_topo.value")
+        continue
+
+    # source_ip / sink_ip（info.json 必需）
+    if not task_info.get("source_ip") or not task_info.get("sink_ip"):
+        print(f"  skip {csn}: 缺少 source_ip 或 sink_ip")
+        continue
+
+    # gt
+    gt_label = full_link.get("groud_truth",
+               full_link.get("ground_truth",
+               full_link.get("grond_truth")))
+    if not isinstance(gt_label, dict):
+        print(f"  skip {csn}: 缺少 ground_truth")
+        continue
+
+    abnormal = gt_label.get("abnormal_node")
+    if not isinstance(abnormal, list) or not abnormal:
+        print(f"  skip {csn}: 缺少 abnormal_node")
+        continue
+
+    # 每个 abnormal_node 必须有 ip 或 mgmt_ip
+    has_valid_gt = False
+    for an in abnormal:
+        if not isinstance(an, dict):
+            continue
+        if an.get("ip") or an.get("mgmt_ip"):
+            has_valid_gt = True
+            break
+    if not has_valid_gt:
+        print(f"  skip {csn}: abnormal_node 中无有效 IP")
         continue
 
     # ── 统计 ──
@@ -87,19 +130,12 @@ for fname in sorted(os.listdir(SRC)):
             if isinstance(l, dict):
                 n_logs += 1
 
-    # ── gt ──
-    gt_label = full_link.get("groud_truth",
-               full_link.get("ground_truth",
-               full_link.get("grond_truth", {})))
-
+    # ── gt（复用上面已验证的变量）──
     gt_ips = []
-    if isinstance(gt_label, dict):
-        abnormal = gt_label.get("abnormal_node", [])
-        if isinstance(abnormal, list):
-            for an in abnormal:
-                ip = an.get("ip", an.get("mgmt_ip", ""))
-                if ip:
-                    gt_ips.append(ip)
+    for an in abnormal:
+        ip = an.get("ip", an.get("mgmt_ip", ""))
+        if ip:
+            gt_ips.append(ip)
 
     gt_in_topo = all(g in all_device_ips for g in gt_ips) if gt_ips else False
 
