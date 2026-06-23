@@ -1,36 +1,36 @@
 #!/usr/bin/env bash
 # ============================================================
 # 单次推理 + 评分
+# 配置来自 scripts/common.sh (环境变量或默认值)
+#
 # 用法:
-#   ./scripts/run_inference.sh                        # topo+temp, k=5
-#   ./scripts/run_inference.sh my_test                # 指定输出目录名
-#   ./scripts/run_inference.sh my_test "1 2" 0,1 8 5  # 全部参数
+#   ./scripts/run_inference.sh                    # 全部默认
+#   ./scripts/run_inference.sh my_test            # 指定输出目录名
+#   PINGMESH_DATA=/path/to/data ./scripts/run_inference.sh  # 切换数据
 # ============================================================
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
-PROJECT_ROOT="/home/sbp/lixinyang/pingmesh"
-DATA="${PROJECT_ROOT}/data/nodes_labeled"
+source scripts/common.sh
 
 OUTDIR="${1:-}"
-SKILLS="${2:-1 2}"
-NPU="${3:-0,1}"
-BATCH="${4:-8}"
-TOPK="${5:-5}"
-
-cd "${PROJECT_ROOT}"
+SKILLS="${2:-${PINGMESH_SKILLS}}"
+NPU="${3:-${PINGMESH_NPU_CARDS}}"
+BATCH="${4:-${PINGMESH_BATCH_SIZE}}"
+TOPK="${5:-${PINGMESH_TOP_K}}"
 
 echo "============================================"
 echo "  单次推理"
+echo "  数据:    ${PINGMESH_DATA}"
 echo "  Skill:   ${SKILLS} (1=topo, 2=temporal)"
 echo "  Top-K:   ${TOPK}"
 echo "  NPU:     ${NPU}"
-echo "  Batch:   ${BATCH}"
 echo "============================================"
 
 if [ -z "${OUTDIR}" ]; then OUTDIR="inference_$(date +%s)"; fi
 
 python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
-    -d "${DATA}" \
+    -d "${PINGMESH_DATA}" \
     -s ${SKILLS} \
     -n "${NPU}" \
     -b "${BATCH}" \
@@ -41,7 +41,7 @@ echo ""
 echo "--- 评分 ---"
 python -c "
 from Sys.Score.Score_N import Scorer
-s = Scorer('${PROJECT_ROOT}/data/res/${OUTDIR}/res.json')
+s = Scorer('${PINGMESH_RESULTS}/${OUTDIR}/res.json')
 s.calculate_metrics()
 "
-echo "完成。结果: ${PROJECT_ROOT}/data/res/${OUTDIR}/"
+echo "完成。结果: ${PINGMESH_RESULTS}/${OUTDIR}/"

@@ -14,10 +14,9 @@ import os
 # Base paths
 # ══════════════════════════════════════════════════════════════════════════════
 
-# 项目根目录（服务器部署路径 / 本地 Windows 路径）
-# 常用: "/home/sbp/lixinyang/pingmesh"
-# 本地: r"D:\DESKTOP\aiops\华为DCN&数通\pingmeshPaper"
-PROJECT_ROOT = "/home/sbp/lixinyang/pingmesh"
+# 项目根目录
+# 优先级: 环境变量 PINGMESH_PROJECT_ROOT > 此处硬编码
+PROJECT_ROOT = os.environ.get("PINGMESH_PROJECT_ROOT", "/home/sbp/lixinyang/pingmesh")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -25,24 +24,23 @@ PROJECT_ROOT = "/home/sbp/lixinyang/pingmesh"
 # ══════════════════════════════════════════════════════════════════════════════
 
 class DataPaths:
-    """数据目录配置"""
+    """数据目录配置 — 环境变量优先，见 scripts/common.sh"""
     def __init__(self, root=PROJECT_ROOT):
-        # 原始华为云故障 JSON（Collector 输入）
-        # 常用: "data/pingmesh_labeled", "data/pingmesh_original"
+        root = os.environ.get("PINGMESH_PROJECT_ROOT", root)
+
         self.pingmesh_raw = os.path.join(root, "data", "pingmesh_labeled")
 
-        # 预处理后的标注数据（Collector 输出 / 各模块输入）
-        # 常用: "data/nodes_labeled", "data/nodes", "data/cnodes_silent_2"
-        self.nodes_labeled = os.path.join(root, "data", "nodes_labeled")
+        # 主数据路径: 环境变量 PINGMESH_DATA 优先
+        self.nodes_labeled = os.environ.get("PINGMESH_DATA",
+                              os.path.join(root, "data", "nodes_labeled"))
 
-        # 推理结果输出
-        # 常用: "data/res"
-        self.results = os.path.join(root, "data", "res")
+        # 结果输出: 环境变量 PINGMESH_RESULTS 优先
+        self.results = os.environ.get("PINGMESH_RESULTS",
+                        os.path.join(root, "data", "res"))
 
-        # 告警权重文件
-        # 常用: "data/weights/classified_alarms/all_alarms.json"
-        #       "data/weights/alarm_weights.json" (learn_from_labels 输出)
-        self.alarm_weights = os.path.join(root, "data", "weights", "classified_alarms", "all_alarms.json")
+        # 告警权重 (人工): 环境变量 PINGMESH_WEIGHTS_MANUAL 优先
+        self.alarm_weights = os.environ.get("PINGMESH_WEIGHTS_MANUAL",
+                              os.path.join(root, "data", "weights", "classified_alarms", "all_alarms.json"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -180,7 +178,9 @@ class SkillConfig:
       - [2]           ← 仅时序
     """
     def __init__(self):
-        self.skill_ids = [1, 2]              # 默认启用全部 3 个 Skill
+        # PINGMESH_SKILLS 环境变量优先 (如 "1 2")
+        env_skills = os.environ.get("PINGMESH_SKILLS", "")
+        self.skill_ids = [int(x) for x in env_skills.split()] if env_skills else [1, 2]
         self.short_mode = 0                     # 1=不传入原始节点数据（省 Token）
 
 
