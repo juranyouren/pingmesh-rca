@@ -10,7 +10,7 @@ nodes 数据集预处理
 """
 
 import os, json, sys, shutil
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else "/home/sbp/lixinyang/pingmesh/data/nodes"
 DST = "/home/sbp/lixinyang/pingmesh/data/nodes_extend"
