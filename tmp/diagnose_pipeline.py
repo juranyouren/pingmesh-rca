@@ -234,6 +234,78 @@ else:
 
 
 # ============================================================
+# 4. 告警覆盖度 — 多少设备实际有告警/时间戳？
+# ============================================================
+print()
+print("=" * 60)
+print("4. 每 case 中存在告警/日志的设备数（时序有效候选池）")
+print("=" * 60)
+
+alarm_counts = []  # 每个 case 中有告警的设备数
+alarm_ratios = []  # ratio of devices with alarms
+
+for dirpath, _, filenames in os.walk(data_root):
+    node_files = [f for f in filenames if "全链路.json" in f and "pingmesh" in f]
+    if not node_files or "info.json" not in filenames:
+        continue
+    try:
+        raw = json.load(open(os.path.join(dirpath, node_files[0]), "r", encoding="utf-8"))
+        nodes = list(raw.values()) if isinstance(raw, dict) else raw
+    except Exception:
+        continue
+
+    n_total = len(nodes)
+    n_with_alarms = 0
+    n_with_timestamps = 0  # alarms that actually have alarm_time
+    for nd in nodes:
+        has = False
+        has_ts = False
+        for evt in nd.get("alarms", []) + nd.get("logs", []):
+            if not isinstance(evt, dict):
+                continue
+            has = True
+            if evt.get("alarm_time") or evt.get("time"):
+                has_ts = True
+        if has:
+            n_with_alarms += 1
+        if has_ts:
+            n_with_timestamps += 1
+
+    alarm_counts.append(n_with_alarms)
+    alarm_ratios.append(n_with_alarms / max(1, n_total))
+    if n_with_alarms <= 3 and n_total >= 50:
+        if len([x for x in alarm_counts if x <= 3]) <= 5:
+            print(f"  ⚠️ {os.path.basename(dirpath)}: {n_with_alarms}/{n_total} 设备有告警")
+
+if alarm_counts:
+    sorted_ac = sorted(alarm_counts)
+    print(f"  有告警的设备数: min={min(alarm_counts)}  median={sorted_ac[len(sorted_ac)//2]}  max={max(alarm_counts)}")
+    # distribution
+    dist = Counter()
+    for a in alarm_counts:
+        if a == 0: dist["0"] += 1
+        elif a <= 2: dist["1-2"] += 1
+        elif a <= 5: dist["3-5"] += 1
+        elif a <= 10: dist["6-10"] += 1
+        elif a <= 20: dist["11-20"] += 1
+        else: dist["20+"] += 1
+    print("  分布 (有告警的设备数):")
+    for k in ["0", "1-2", "3-5", "6-10", "11-20", "20+"]:
+        if dist[k]:
+            print(f"    {k:>6}: {dist[k]} ({100*dist[k]//max(1,len(alarm_counts))}%)")
+
+    # 关键指标: 多少 case 只有 ≤5 台设备有告警
+    few = sum(1 for a in alarm_counts if a <= 5)
+    pct = 100 * few // max(1, len(alarm_counts))
+    print(f"\n  ≤5 台设备有告警: {few}/{len(alarm_counts)} ({pct}%)")
+    if pct >= 30:
+        print(f"  ⚠️ 超过 30% 的 case 有效时序候选 ≤5 → temporal 只能给 5 台设备排分")
+        print(f"  >> 这便是 Top-3 和 Top-5 接近的根本原因:")
+        print(f"  >> temporal 把有告警的 3-5 台设备排前面, 其余 200+ 台全是 0 分")
+        print(f"  >> 等权融合后, topo 信号无法在 temporal=0 的设备间制造区分度")
+
+
+# ============================================================
 # 汇总
 # ============================================================
 print()
@@ -266,4 +338,6 @@ else:
         if min(sizes) >= 20:
             print(f"  → 候选集足够大, Top-3 和 Top-5 不会因 pool 太小而重合")
         print(f"  推理路径无 label.json 泄漏")
-        print(f"  → 如果 Top-3 和 Top-5 依然接近, 原因是 {100 - 56.64:.0f}% 的失败 case 中根因不在任何算法的 Top-5, 而非 pool 或泄漏问题")
+        print(f"  → 如果 Top-3 和 Top-5 依然接近, 原因:")
+        print(f"    ① 大量 case 只有少数设备有告警 → temporal 有效候选池极小")
+        print(f"    ② {100 - 56.64:.0f}% 的失败 case 中根因不在任何算法的 Top-5")
