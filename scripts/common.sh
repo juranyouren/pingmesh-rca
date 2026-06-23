@@ -11,7 +11,7 @@
 export PINGMESH_PROJECT_ROOT="${PINGMESH_PROJECT_ROOT:-/home/sbp/lixinyang/pingmesh}"
 
 # ── 数据路径 ──
-export PINGMESH_DATA="${PINGMESH_DATA:-${PINGMESH_PROJECT_ROOT}/data/nodes_labeled}"
+export PINGMESH_DATA="${PINGMESH_DATA:-${PINGMESH_PROJECT_ROOT}/data/nika_nodes}"
 export PINGMESH_RESULTS="${PINGMESH_RESULTS:-${PINGMESH_PROJECT_ROOT}/data/res}"
 
 # ── 权重文件 ──
