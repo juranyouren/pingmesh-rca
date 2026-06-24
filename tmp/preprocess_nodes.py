@@ -108,10 +108,8 @@ if WRITE:
         if merged is None:
             continue
 
-        case_dir = os.path.join(DST, csn)
-        os.makedirs(case_dir, exist_ok=True)
         out_name = f"pingmesh-{csn}-全链路.json"
-        json.dump(merged, open(os.path.join(case_dir, out_name), "w", encoding="utf-8"),
+        json.dump(merged, open(os.path.join(DST, out_name), "w", encoding="utf-8"),
                   ensure_ascii=False)
         ok += 1
 
