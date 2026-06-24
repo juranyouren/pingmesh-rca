@@ -1,5 +1,5 @@
 """
-将 rootcause_analysis[0].abnormal_node 中的 alarms/syslogs 追加到
+将 rootcause_analysis 所有条目中 abnormal_node 的 alarms/syslogs 追加到
 full_link.alarm_list 和 full_link.log_list.data。
 
 用法:
@@ -30,7 +30,7 @@ for fname in sorted(files):
 
     fl = data.get("full_link", {})
     rca = fl.get("rootcause_analysis")
-    if not isinstance(rca, list) or not rca or not isinstance(rca[0], dict):
+    if not isinstance(rca, list) or not rca:
         skip += 1
         continue
 
@@ -38,15 +38,18 @@ for fname in sorted(files):
     alarm_list = fl.setdefault("alarm_list", [])
     log_data = fl.setdefault("log_list", {}).setdefault("data", [])
 
-    for an in rca[0].get("abnormal_node", []):
-        if not isinstance(an, dict):
+    for item in rca:
+        if not isinstance(item, dict):
             continue
-        for evt in an.get("alarms", []):
-            if evt not in alarm_list:
-                alarm_list.append(evt); added += 1
-        for evt in an.get("syslogs", []):
-            if evt not in log_data:
-                log_data.append(evt); added += 1
+        for an in item.get("abnormal_node", []):
+            if not isinstance(an, dict):
+                continue
+            for evt in an.get("alarms", []):
+                if evt not in alarm_list:
+                    alarm_list.append(evt); added += 1
+            for evt in an.get("syslogs", []):
+                if evt not in log_data:
+                    log_data.append(evt); added += 1
 
     ok += 1; total_added += added
 
