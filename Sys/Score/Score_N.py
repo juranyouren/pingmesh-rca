@@ -97,6 +97,7 @@ class MetricsEvaluator:
         any_hit = any(g in pred_ips for g in gt.ips) if gt.ips else False
         return {
             **hits,
+            "best_rank": (best + 1) if (gt.ips and best is not None) else None,  # 1-based, None=未命中
             "is_failed": bool(pred_ips and gt.ips and not any_hit),
             "pred_ips": pred_ips,
         }
@@ -149,6 +150,10 @@ class Scorer:
         """ip_source: "skill_ips" (纯算法) 或 "response" (LLM 解析)。"""
         sums = {f"sum_top{i}": 0 for i in range(1, 6)}
         n = 0
+        # Top-1 失败案例 (按 gt 实际落点分桶)
+        fail_in_top3 = []   # Top-1 未命中, 但 gt 在 rank 2-3
+        fail_in_top5 = []   # gt 在 rank 4-5
+        fail_miss = []      # gt 不在 Top-5
 
         for rd in res_data:
             dir_name = rd.get("dir")
@@ -167,6 +172,21 @@ class Scorer:
             for i in range(1, 6):
                 sums[f"sum_top{i}"] += res[f"top{i}_hit"]
 
+            # 收集 Top-1 失败案例
+            if not res["top1_hit"]:
+                rec = {
+                    "dir": dir_name,
+                    "gt_ips": gt.ips,
+                    "pred_ips": res["pred_ips"][:10],
+                    "best_rank": res["best_rank"],
+                }
+                if res["top3_hit"]:
+                    fail_in_top3.append(rec)
+                elif res["top5_hit"]:
+                    fail_in_top5.append(rec)
+                else:
+                    fail_miss.append(rec)
+
         if n == 0:
             return {}
         return {
@@ -174,6 +194,11 @@ class Scorer:
                 "Total Evaluated Cases": n,
                 **{f"Top-{i} Acc (%)": round(sums[f"sum_top{i}"] / n * 100, 2)
                    for i in range(1, 6)},
+            },
+            "_top1_failures": {
+                "in_top3 (rank 2-3)": fail_in_top3,
+                "in_top5 (rank 4-5)": fail_in_top5,
+                "miss (not in top5)": fail_miss,
             },
         }
 
@@ -184,14 +209,32 @@ class Scorer:
         if not res_data:
             raise ValueError(f"empty: {self.res_path}")
 
+        skill_eval = self._eval_ips(res_data, "skill_ips")
+        llm_eval = self._eval_ips(res_data, "response")
+
+        # 分离失败案例详情, 单独存盘, sum.json 只留指标
+        failures = {}
+        for name, ev in [("skill", skill_eval), ("llm", llm_eval)]:
+            if ev and "_top1_failures" in ev:
+                failures[name] = ev.pop("_top1_failures")
+
         summary = {
             "total_cases_in_file": len(res_data),
-            "skill_evaluation": self._eval_ips(res_data, "skill_ips"),
-            "llm_evaluation": self._eval_ips(res_data, "response"),
+            "skill_evaluation": skill_eval,
+            "llm_evaluation": llm_eval,
         }
 
         sum_path = os.path.join(self.out_dir, "sum.json")
         self._save_json(summary, sum_path)
+
+        # Top-1 失败案例详情 (标注 gt 落在 top3 / top5 / miss)
+        if failures:
+            fail_path = os.path.join(self.out_dir, "top1_failures.json")
+            self._save_json(failures, fail_path)
+            for name, buckets in failures.items():
+                counts = {k: len(v) for k, v in buckets.items()}
+                print(f"  [{name}] Top-1 失败分布: {counts}")
+
         print(f"评测完成 -> {sum_path}")
         return summary
 
