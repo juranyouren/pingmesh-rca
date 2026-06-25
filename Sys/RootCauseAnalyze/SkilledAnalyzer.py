@@ -58,10 +58,12 @@ def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
     }
 
 class SkilledAnalyzer:
-    def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None):
+    def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
+                 alarm_taxonomy=None):
         """
         初始化基于 vllm.LLM 的技能型根因分析器。
-        所有参数可选，默认从 Sys.config 读取。
+        alarm_taxonomy: 告警分类字典 {name: {type, severity}}。
+                        None 或空字典 → 原方案不变。
         """
         if model_path is None:
             model_path = config.model.model_path
@@ -82,8 +84,9 @@ class SkilledAnalyzer:
         self.executor=SkillExecutor(skills_folder=config.skills.skills_folder)
 
         self.skills = self.executor.get_skill_conf()
-        self.short=short#short为1则不传入源数据
-        self.top_k = top_k      # 传给证据融合层的候选数
+        self.short=short
+        self.top_k = top_k
+        self.alarm_taxonomy = alarm_taxonomy or {}
 
         # 将 skill_id 统一转换为 string 方便检索
         print(self.skills)
@@ -169,6 +172,7 @@ class SkilledAnalyzer:
             skill_map=self.executor.skill_map,
             weight_dirpath=config.data.alarm_weights,
             top_k=self.top_k,
+            alarm_taxonomy=(self.alarm_taxonomy if self.alarm_taxonomy else None),
         )
 
         if not selected_skill_ids:
@@ -352,14 +356,14 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
     sleep_time = (worker_id - 1) * 60
     time.sleep(sleep_time)
 
-    analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus, short=short, top_k=top_k)
+    analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus, short=short, top_k=top_k, alarm_taxonomy=alarm_taxonomy)
     # [MODIFIED] 将 target_skill_ids 传入 batch_infer
     (responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls) = analyzer.batch_infer(
         dirpaths=dirpaths_chunk, 
@@ -385,7 +389,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -481,6 +485,10 @@ if __name__ == "__main__":
     p.add_argument("--failures-from", default=None,
                    help="只跑指定 failures JSON 中的错案 (debug/回归用)")
     args = p.parse_args()
+    taxonomy = None
+    if args.taxonomy and os.path.exists(args.taxonomy):
+        taxonomy = json.load(open(args.taxonomy, "r", encoding="utf-8"))
+        print(f"已加载 taxonomy: {len(taxonomy)} 条")
 
     target_skill_ids = [str(sid) for sid in args.skills]
 
@@ -504,6 +512,7 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             short=args.short,
             top_k=args.top_k,
+            alarm_taxonomy=taxonomy,
         )
         print(f"所有并行推理已完成！总耗时: {time.time() - start_time:.2f} 秒")
 

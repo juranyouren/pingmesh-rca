@@ -96,10 +96,11 @@ def _node_max_weight(node, weights_dict):
 # ══════════════════════════════════════════════════════════════════
 
 def build_fused_evidence(node_list, info, dirpath,
-                         skill_map=None, weight_dirpath=None, top_k=10):
+                         skill_map=None, weight_dirpath=None, top_k=10,
+                         alarm_taxonomy=None):
     """
     Returns: (skill_ret, info_brief, candidate_detail, candidate_raw, skill_ips)
-    skill_ret 和 candidate_detail 是 JSON 字符串。
+    alarm_taxonomy: 告警分类字典 {name: {type, severity}}, None 时原方案不变
     """
     if not node_list: node_list = _load_nodes(dirpath)
     if not info: info = _load_info(dirpath)
@@ -107,8 +108,10 @@ def build_fused_evidence(node_list, info, dirpath,
 
     # ── 1. 核心评分（与 skill_pipeline 一致）──
     from Sys.RootCauseAnalyze.skill_pipeline import _score_topo, _score_temporal
-    norm_pr = _score_topo(node_list, info, weight_dirpath=weight_dirpath, directed=True)
-    norm_ts = _score_temporal(node_list, info, dirpath=dirpath)
+    norm_pr = _score_topo(node_list, info, weight_dirpath=weight_dirpath, directed=True,
+                          alarm_taxonomy=alarm_taxonomy)
+    norm_ts = _score_temporal(node_list, info, dirpath=dirpath,
+                              alarm_taxonomy=alarm_taxonomy)
 
     # ── 2. 综合分 & 排序 ──
     all_ips = list({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
