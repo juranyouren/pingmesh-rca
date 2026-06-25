@@ -12,8 +12,8 @@ import os, json, sys
 from collections import Counter
 
 
-def stats_node(data_root):
-    """统计 node 数据集的关键指标。"""
+def stats_node(data_root, count_logs=False):
+    """统计 node 数据集的关键指标。count_logs: 是否把 log 也算作告警。"""
     cases = []
     skip = 0
 
@@ -35,7 +35,7 @@ def stats_node(data_root):
 
         n_total = len(nodes)
         n_with_alarms = sum(1 for nd in nodes if isinstance(nd, dict)
-                            and (nd.get("alarms") or nd.get("logs")))
+                            and (nd.get("alarms") or (count_logs and nd.get("logs"))))
         cases.append({"csn": os.path.basename(dirpath),
                       "n_total": n_total, "n_with_alarms": n_with_alarms})
 
@@ -46,7 +46,7 @@ def stats_node(data_root):
     nt = [c["n_total"] for c in cases]
     na = [c["n_with_alarms"] for c in cases]
 
-    print(f"Case 总数: {len(cases)}  (跳过: {skip})\n")
+    print(f"Case 总数: {len(cases)}  (跳过: {skip})  count_logs={count_logs}\n")
 
     print("--- 每 case 设备数 ---")
     print(f"  min={min(nt)}  median={sorted(nt)[len(nt)//2]}  max={max(nt)}")
@@ -82,5 +82,7 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="NodeInspector — node 数据集感知")
     p.add_argument("data_root", help="node 数据目录")
+    p.add_argument("--count-logs", action="store_true",
+                   help="把 log 也算作告警 (默认只看 alarm)")
     args = p.parse_args()
-    stats_node(args.data_root)
+    stats_node(args.data_root, count_logs=args.count_logs)

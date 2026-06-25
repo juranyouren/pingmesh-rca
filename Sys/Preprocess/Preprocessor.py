@@ -244,13 +244,15 @@ def _report_stats(cases, skip_reasons):
     print(f"  通过: {len(cases)}")
 
 
-def phase_extract(raw_dir, out_dir, write=False):
+def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
     """
     Phase 2: 扫描 RAWed 文件, 校验, 提取 info/label/nodes。
     输出到 out_dir (每个 csn 一个子目录)。
+
+    count_logs: RC 告警校验时是否把 log 也算作告警 (默认 False, 只看 alarms)。
     """
     files = [f for f in os.listdir(raw_dir) if f.endswith(".json")]
-    print(f"Phase 2 (extract): 扫描 {len(files)} 个 raw 文件")
+    print(f"Phase 2 (extract): 扫描 {len(files)} 个 raw 文件 (count_logs={count_logs})")
 
     cases = []
     skip_reasons = Counter()
@@ -291,8 +293,9 @@ def phase_extract(raw_dir, out_dir, write=False):
             skip_reasons["RC 设备不在 topo 中"] += 1
             continue
 
+        # 默认只看 alarms, count_logs=True 时才把 logs 也算作告警
         rc_has_alarms = any(
-            node_map[n]["alarms"] or node_map[n]["logs"]
+            node_map[n]["alarms"] or (count_logs and node_map[n]["logs"])
             for n in rc_names
         )
         if not rc_has_alarms:
@@ -380,6 +383,8 @@ if __name__ == "__main__":
                    help="执行阶段: merge(合并) / extract(提取) / all(全流程)")
     p.add_argument("--write", action="store_true",
                    help="执行写入 (不加则仅 dry-run)")
+    p.add_argument("--count-logs", action="store_true",
+                   help="RC 告警校验时把 log 也算作告警 (默认只看 alarm)")
     args = p.parse_args()
 
     # 默认路径 (可从环境变量读取)
@@ -399,4 +404,4 @@ if __name__ == "__main__":
     if args.phase in ("extract", "all"):
         # Phase 2 输入: Phase 1 的合并输出 或 用户指定的 raw
         ext_in = _raw.rstrip("/").rstrip("\\") + "_dedup" if args.phase == "all" else _raw
-        phase_extract(ext_in, _out, write=args.write)
+        phase_extract(ext_in, _out, write=args.write, count_logs=args.count_logs)
