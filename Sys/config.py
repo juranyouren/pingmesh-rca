@@ -28,11 +28,12 @@ class DataPaths:
     def __init__(self, root=PROJECT_ROOT):
         root = os.environ.get("PINGMESH_PROJECT_ROOT", root)
 
-        self.pingmesh_raw = os.path.join(root, "data", "pingmesh_labeled")
+        # raw: 原始数据目录 (data/raw/pingmesh_xxx)
+        self.pingmesh_raw = os.path.join(root, "data", "raw", "pingmesh_v1")
 
-        # 主数据路径: 环境变量 PINGMESH_DATA 优先
+        # node: 预处理后的标注数据 (data/node/node_xxx)
         self.nodes_labeled = os.environ.get("PINGMESH_DATA",
-                              os.path.join(root, "data", "nodes_labeled"))
+                              os.path.join(root, "data", "node", "nodes_labeled"))
 
         # 结果输出: 环境变量 PINGMESH_RESULTS 优先
         self.results = os.environ.get("PINGMESH_RESULTS",

@@ -9,21 +9,21 @@
   Phase 3 — Prune (可选): 拓扑剪枝
 
 数据用词约定:
-  raw  = pingmesh_extend 下的原始 JSON (含 full_link.task_topo 等)
+  raw  = data/raw/pingmesh_xxx 下的原始 JSON (含 full_link.task_topo 等)
   node = 提取后的结构化数据 (info.json + label.json + pingmesh-{csn}-全链路.json)
 
 用法:
   # 全流程
   python Sys/Preprocess/Preprocessor.py \
-    --raw data/pingmesh_extend --out data/nodes_extend --write
+    --raw data/raw/pingmesh_v1 --out data/node/nodes_v1 --write
 
   # 仅 Phase 1 (合并)
   python Sys/Preprocess/Preprocessor.py \
-    --raw data/pingmesh_extend --out data/nodes_merged --phase merge --write
+    --raw data/raw/pingmesh_v1 --phase merge --write
 
   # 仅 Phase 2
   python Sys/Preprocess/Preprocessor.py \
-    --raw data/nodes_merged --out data/nodes_final --phase extract --write
+    --raw data/raw/pingmesh_v1_dedup --out data/node/nodes_v1 --phase extract --write
 """
 
 import os, json, sys, shutil
@@ -212,22 +212,29 @@ def _extract_nodes(topo_value, full_link):
         try:
             if c.get("device_name") in node_map:
                 node_map[c["device_name"]]["cross"] = c.get("cross", 0)
-        except (KeyError, TypeError):
+        except:
             pass
 
-    # alarms
+    # alarms — 兼容多种 IP 字段名
     for alarm in full_link.get("alarm_list", []):
-        a_ip = alarm.get("alarm_ip_ad") if isinstance(alarm, dict) else None
+        if not isinstance(alarm, dict):
+            continue
+        a_ip = alarm.get("alarm_ip_ad") or alarm.get("mgmt_ip") or alarm.get("device_ip")
         target = ip_to_name.get(a_ip)
         if target:
             node_map[target]["alarms"].append(alarm)
 
-    # logs
-    for log in full_link.get("log_list", {}).get("list", []):
-        l_ip = log.get("alarm_ip_ad") if isinstance(log, dict) else None
-        target = ip_to_name.get(l_ip)
-        if target:
-            node_map[target]["logs"].append(log)
+    # logs — 兼容 list 和 data 两种 key
+    log_list = full_link.get("log_list", {})
+    if isinstance(log_list, dict):
+        logs = log_list.get("list", log_list.get("data", []))
+        for log in logs:
+            if not isinstance(log, dict):
+                continue
+            l_ip = log.get("alarm_ip_ad") or log.get("mgmt_ip") or log.get("device_ip")
+            target = ip_to_name.get(l_ip)
+            if target:
+                node_map[target]["logs"].append(log)
 
     return node_map
 
@@ -417,8 +424,8 @@ if __name__ == "__main__":
         _raw = config.data.pingmesh_raw if args.raw is None else args.raw
         _out = config.data.nodes_labeled if args.out is None else args.out
     except Exception:
-        _raw = args.raw or "/home/sbp/lixinyang/pingmesh/data/pingmesh_extend"
-        _out = args.out or "/home/sbp/lixinyang/pingmesh/data/nodes_extend"
+        _raw = args.raw or "/home/sbp/lixinyang/pingmesh/data/raw/pingmesh_v1"
+        _out = args.out or "/home/sbp/lixinyang/pingmesh/data/node/nodes_v1"
 
     if args.phase in ("merge", "all"):
         # Phase 1 中间产物: {raw文件夹名}_dedup
