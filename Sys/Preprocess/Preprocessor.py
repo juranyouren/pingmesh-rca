@@ -232,10 +232,13 @@ def _extract_nodes(topo_value, full_link):
     return node_map
 
 
-def _report_stats(cases, passed, rejected):
+def _report_stats(cases, passed, rejected, skip_reasons=None):
     """打印过滤统计报告。"""
     wa = [c["n_with_alarms"] for c in cases if c.get("n_with_alarms") is not None]
     print(f"\n  --- 过滤报告 ---")
+    if skip_reasons:
+        for reason, count in skip_reasons.most_common():
+            print(f"  跳过 ({reason}): {count}")
     print(f"  通过: {len(passed)}")
     for reason, lst in rejected.items():
         if lst:
@@ -244,7 +247,7 @@ def _report_stats(cases, passed, rejected):
         print(f"  有告警设备数: min={min(wa)} median={sorted(wa)[len(wa)//2]} max={max(wa)}")
 
 
-def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, write=False):
+def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, strict=False, write=False):
     """
     Phase 2: 扫描 RAWed 文件, 校验, 提取 info/label/nodes。
     输出到 out_dir (每个 csn 一个子目录)。
@@ -273,6 +276,36 @@ def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, w
 
         node_map = _extract_nodes(topo_value, full_link)
         n_with_alarms = sum(1 for nd in node_map.values() if nd["alarms"] or nd["logs"])
+
+        # ── RC 设备名校验 ──
+        rc_names = set()
+        for an in gt_label.get("abnormal_node", []):
+            if isinstance(an, dict) and an.get("name"):
+                rc_names.add(an["name"])
+            elif isinstance(an, dict) and an.get("mgmt_ip"):
+                # 如果只有 IP, 从 node_map 反查 name
+                ip = an["mgmt_ip"]
+                for nd_name, nd in node_map.items():
+                    if nd.get("mgmt_ip") == ip:
+                        rc_names.add(nd_name)
+                        break
+
+        rc_in_topo = rc_names and all(n in node_map for n in rc_names)
+        rc_no_alarms = False
+        if rc_in_topo:
+            rc_has_alarms = all(
+                node_map[n]["alarms"] or node_map[n]["logs"]
+                for n in rc_names
+            )
+            rc_no_alarms = not rc_has_alarms
+
+        if not rc_in_topo:
+            skip_reasons["RC 设备不在 topo 中"] += 1
+            continue
+
+        if strict and rc_no_alarms:
+            skip_reasons["RC 设备无告警 (strict 模式)"] += 1
+            continue
 
         gt_ips = []
         for an in gt_label.get("abnormal_node", []):
@@ -312,7 +345,7 @@ def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, w
         else:
             passed.append(c)
 
-    _report_stats(cases, passed, rejected)
+    _report_stats(cases, passed, rejected, skip_reasons)
 
     if not write:
         print("  >> DRY RUN — 加 --write 执行")
@@ -372,6 +405,8 @@ if __name__ == "__main__":
                    help="执行阶段: merge(合并) / extract(提取) / all(全流程)")
     p.add_argument("--min-alarm-devices", type=int, default=MIN_DEVICES_WITH_ALARMS,
                    help=f"最少有告警的设备数 (default: {MIN_DEVICES_WITH_ALARMS})")
+    p.add_argument("--strict", action="store_true",
+                   help="strict 模式: RC 设备无告警则丢弃")
     p.add_argument("--write", action="store_true",
                    help="执行写入 (不加则仅 dry-run)")
     args = p.parse_args()
@@ -392,4 +427,5 @@ if __name__ == "__main__":
         if args.phase == "all":
             # Phase 2 读 Phase 1 的输出
             _raw = _out
-        phase_extract(_raw, _out, min_alarm_devices=args.min_alarm_devices, write=args.write)
+        phase_extract(_raw, _out, min_alarm_devices=args.min_alarm_devices,
+                      strict=args.strict, write=args.write)
