@@ -22,8 +22,9 @@ NIKA 分支初始代码与 main 一致，后续各自独立演进。
 | 目录/文件 | 用途 |
 |-----------|------|
 | `Sys/config.py` | 集中配置：路径、模型、NPU、PageRank、时序、Skill 选择 |
-| `Sys/Collect/Collector.py` | 数据采集：解析原始故障 JSON，提取拓扑节点、告警、日志、路径交汇度 |
-| `Sys/Modify/Modifier.py` | 拓扑剪枝（基于交汇度 + 告警权重的 Jaccard 评分与 PageRank） |
+| `Sys/Preprocess/Preprocessor.py` | **数据预处理**（推荐）：RAW 合并 → 校验 → 提取 NODE 数据，整合 Collector + 感知过滤 |
+| `Sys/Collect/Collector.py` | （旧版）数据采集：解析原始故障 JSON，提取拓扑节点、告警、日志 |
+| `Sys/Modify/Modifier.py` | （旧版）拓扑剪枝：基于交汇度 + 告警权重的 Jaccard 评分与 PageRank |
 | `Sys/RootCauseAnalyze/SkilledAnalyzer.py` | Skill 触发 + LLM 重排审核的 RCA 分析器 |
 | `Sys/RootCauseAnalyze/evidence_fusion.py` | 证据融合层：两个 Skill 输出 → 候选设备综合证据表 + Top-K 详情 |
 | `Sys/RootCauseAnalyze/skill_pipeline.py` | 纯算法流水线：Skill 组合评分融合（不依赖 LLM/NPU），端到端评测 |
