@@ -484,6 +484,8 @@ if __name__ == "__main__":
                    help="展示给 LLM 的候选设备数 (default: 10)")
     p.add_argument("--failures-from", default=None,
                    help="只跑指定 failures JSON 中的错案 (debug/回归用)")
+    p.add_argument("--taxonomy", "-t", default=None,
+                   help="告警分类 taxonomy 文件路径 (alarm_taxonomy.json)")
     args = p.parse_args()
     taxonomy = None
     if args.taxonomy and os.path.exists(args.taxonomy):
