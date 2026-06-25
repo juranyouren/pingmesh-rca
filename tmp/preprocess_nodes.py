@@ -25,8 +25,8 @@ def extract_csn(fname):
     name = fname.replace(".json", "")
     parts = name.split("-")
 
-    if "merged" in parts and "pingmesh" in parts:
-        idx = parts.index("pingmesh")
+    if "merged_pingmesh" in parts:
+        idx = parts.index("merged_pingmesh")
     elif "pingmesh" in parts:
         idx = parts.index("pingmesh")
     else:
