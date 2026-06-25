@@ -114,10 +114,6 @@ def phase_merge(raw_dir, out_dir, write=False):
 # Phase 2: Validate & Extract — RAW → NODE
 # ══════════════════════════════════════════════════════════════════
 
-MIN_DEVICES_WITH_ALARMS = 5   # 有告警的设备数阈值
-IRRELEVANT_KEYS = {"node_sign", "type", "devicetype", "verified_hops_to"}
-
-
 def _get_device_ip(node):
     return node.get("mgmt_ip", node.get("ip", node.get("name", "unknown")))
 
@@ -239,22 +235,16 @@ def _extract_nodes(topo_value, full_link):
     return node_map
 
 
-def _report_stats(cases, passed, rejected, skip_reasons=None):
-    """打印过滤统计报告。"""
-    wa = [c["n_with_alarms"] for c in cases if c.get("n_with_alarms") is not None]
+def _report_stats(cases, skip_reasons):
+    """打印过滤统计。"""
     print(f"\n  --- 过滤报告 ---")
     if skip_reasons:
         for reason, count in skip_reasons.most_common():
             print(f"  跳过 ({reason}): {count}")
-    print(f"  通过: {len(passed)}")
-    for reason, lst in rejected.items():
-        if lst:
-            print(f"  拒绝 ({reason}): {len(lst)}")
-    if wa:
-        print(f"  有告警设备数: min={min(wa)} median={sorted(wa)[len(wa)//2]} max={max(wa)}")
+    print(f"  通过: {len(cases)}")
 
 
-def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, strict=False, write=False):
+def phase_extract(raw_dir, out_dir, write=False):
     """
     Phase 2: 扫描 RAWed 文件, 校验, 提取 info/label/nodes。
     输出到 out_dir (每个 csn 一个子目录)。
@@ -282,7 +272,6 @@ def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, s
             continue
 
         node_map = _extract_nodes(topo_value, full_link)
-        n_with_alarms = sum(1 for nd in node_map.values() if nd["alarms"] or nd["logs"])
 
         # ── RC 设备名校验 ──
         rc_names = set()
@@ -298,20 +287,16 @@ def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, s
                         break
 
         rc_in_topo = rc_names and all(n in node_map for n in rc_names)
-        rc_no_alarms = False
-        if rc_in_topo:
-            rc_has_alarms = all(
-                node_map[n]["alarms"] or node_map[n]["logs"]
-                for n in rc_names
-            )
-            rc_no_alarms = not rc_has_alarms
-
         if not rc_in_topo:
             skip_reasons["RC 设备不在 topo 中"] += 1
             continue
 
-        if strict and rc_no_alarms:
-            skip_reasons["RC 设备无告警 (strict 模式)"] += 1
+        rc_has_alarms = any(
+            node_map[n]["alarms"] or node_map[n]["logs"]
+            for n in rc_names
+        )
+        if not rc_has_alarms:
+            skip_reasons["RC 设备无告警"] += 1
             continue
 
         gt_ips = []
@@ -331,39 +316,22 @@ def phase_extract(raw_dir, out_dir, min_alarm_devices=MIN_DEVICES_WITH_ALARMS, s
         cases.append({
             "csn": csn, "path": fpath, "data": data,
             "task_info": task_info, "node_map": node_map, "gt_label": gt_label,
-            "gt_ips": gt_ips, "gt_in_topo": gt_in_topo,
-            "n_with_alarms": n_with_alarms,
-            "n_devices": len(node_map),
+            "gt_ips": gt_ips, "n_devices": len(node_map),
         })
 
-    # ── 过滤 ──
-    passed = []
-    rejected = {"告警数不足": [], "gt 不在 topo": [], "两者": []}
-
-    for c in cases:
-        low = c["n_with_alarms"] < min_alarm_devices
-        no_gt = not c["gt_ips"] or not c["gt_in_topo"]
-        if low and no_gt:
-            rejected["两者"].append(c)
-        elif low:
-            rejected["告警数不足"].append(c)
-        elif no_gt:
-            rejected["gt 不在 topo"].append(c)
-        else:
-            passed.append(c)
-
-    _report_stats(cases, passed, rejected, skip_reasons)
+    # ── 过滤已在入口完成 (RC 不在 topo / RC 无告警) ──
+    _report_stats(cases, skip_reasons)
 
     if not write:
         print("  >> DRY RUN — 加 --write 执行")
         return
-    if not passed:
-        print("  >> 无 case 通过过滤, 中止")
+    if not cases:
+        print("  >> 无 case 通过, 中止")
         return
 
     os.makedirs(out_dir, exist_ok=True)
     written = 0
-    for c in passed:
+    for c in cases:
         csn = str(c["csn"])
         case_dir = os.path.join(out_dir, csn)
         os.makedirs(case_dir, exist_ok=True)
@@ -410,10 +378,6 @@ if __name__ == "__main__":
                    help="NODE 输出目录")
     p.add_argument("--phase", default="all", choices=["merge", "extract", "all"],
                    help="执行阶段: merge(合并) / extract(提取) / all(全流程)")
-    p.add_argument("--min-alarm-devices", type=int, default=MIN_DEVICES_WITH_ALARMS,
-                   help=f"最少有告警的设备数 (default: {MIN_DEVICES_WITH_ALARMS})")
-    p.add_argument("--strict", action="store_true",
-                   help="strict 模式: RC 设备无告警则丢弃")
     p.add_argument("--write", action="store_true",
                    help="执行写入 (不加则仅 dry-run)")
     args = p.parse_args()
@@ -435,5 +399,4 @@ if __name__ == "__main__":
     if args.phase in ("extract", "all"):
         # Phase 2 输入: Phase 1 的合并输出 或 用户指定的 raw
         ext_in = _raw.rstrip("/").rstrip("\\") + "_dedup" if args.phase == "all" else _raw
-        phase_extract(ext_in, _out, min_alarm_devices=args.min_alarm_devices,
-                      strict=args.strict, write=args.write)
+        phase_extract(ext_in, _out, write=args.write)
