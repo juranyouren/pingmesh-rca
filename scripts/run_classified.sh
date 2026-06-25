@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# LLM 告警分类 + 分类增强 Pipeline
-# 新方案: 对告警做 causal/symptom/noise 三分类 → PageRank+Temporal 加权
+# LLM 告警分类增强 Pipeline (per-case 模式)
 #
 # 步骤:
-#   1. (离线一次性) LLM 分类全数据集告警名 → alarm_taxonomy.json
-#   2. 带 taxonomy 的纯算法消融
-#   3. 带 taxonomy 的 LLM 推理 + 评分
+#   1. LLM 逐 case 分类告警 → 写入每个 case 目录的 alarm_taxonomy.json
+#   2. 带分类的纯算法消融 (自动检测 per-case taxonomy)
+#   3. 带分类的 LLM 推理 + 评分
 #
 # 用法:
 #   ./scripts/run_classified.sh                    # 全流程
@@ -20,59 +19,46 @@ source scripts/common.sh
 
 PHASE="${1:-all}"
 
-# ── 步骤 1: LLM 告警分类 (离线) ──
+# ── 步骤 1: LLM 逐 case 分类 (需要 NPU) ──
 if [ "${PHASE}" = "classify" ] || [ "${PHASE}" = "all" ]; then
     echo ""
     echo "============================================"
-    echo "  步骤 1: LLM 告警三分类"
+    echo "  步骤 1: LLM 逐 case 告警三分类"
     echo "  数据: ${PINGMESH_DATA}"
-    echo "  输出: ${PINGMESH_TAXONOMY}"
     echo "============================================"
-
-    # 如果已有 taxonomy 则增量更新
-    BASE_ARG=""
-    if [ -f "${PINGMESH_TAXONOMY}" ]; then
-        BASE_ARG="--base ${PINGMESH_TAXONOMY}"
-        echo "  (增量更新已有 taxonomy)"
-    fi
 
     python Sys/RootCauseAnalyze/alarm_classifier.py \
         --data "${PINGMESH_DATA}" \
-        --output "${PINGMESH_TAXONOMY}" \
+        --mode per_case \
         --npu-cards "${PINGMESH_NPU_CARDS}" \
-        ${BASE_ARG}
+        --write
 
-    echo "  分类完成: ${PINGMESH_TAXONOMY}"
+    echo "  分类完成 (每个 case 目录下的 alarm_taxonomy.json)"
 fi
 
-# ── 步骤 2: 分类增强的纯算法消融 ──
+# ── 步骤 2: 分类增强纯算法消融 (不依赖 NPU) ──
 if [ "${PHASE}" = "ablation" ] || [ "${PHASE}" = "all" ]; then
     echo ""
     echo "============================================"
     echo "  步骤 2: 分类增强纯算法消融"
+    echo "  (自动检测 per-case alarm_taxonomy.json)"
     echo "============================================"
-
-    if [ ! -f "${PINGMESH_TAXONOMY}" ]; then
-        echo "ERROR: taxonomy 不存在, 请先运行步骤 1"
-        exit 1
-    fi
 
     OUTDIR="classified_ablation_$(date +%Y%m%d_%H%M%S)"
 
-    # 三组: [1] topo, [2] temporal, [1,2] topo+temporal (均带分类)
     for skills in "1" "2" "1 2"; do
         skname=$(echo ${skills} | tr ' ' '_')
         tag="${OUTDIR}/skills_${skname}"
         echo "--- ${skname} ---"
+        # 不传 -t 参数, skill_pipeline 会自动检测 case 目录下的
+        # alarm_taxonomy.json 并加载
         python Sys/RootCauseAnalyze/skill_pipeline.py \
             -d "${PINGMESH_DATA}" \
             -s ${skills} -k 5 \
-            -t "${PINGMESH_TAXONOMY}" \
             -w "${PINGMESH_WEIGHTS_MANUAL}" \
             -o "${tag}" 2>&1 | tail -3
     done
 
-    # 评分汇总
     echo ""; echo "--- 评分 ---"
     for skills in "1" "2" "1 2"; do
         skname=$(echo ${skills} | tr ' ' '_')
@@ -89,17 +75,12 @@ print(f'    Top-1={m[\"Top-1 Acc (%)\"]}  Top-3={m[\"Top-3 Acc (%)\"]}  Top-5={m
     done
 fi
 
-# ── 步骤 3: LLM 推理 (带分类) ──
+# ── 步骤 3: LLM 推理 (自动检测 per-case taxonomy) ──
 if [ "${PHASE}" = "inference" ] || [ "${PHASE}" = "all" ]; then
     echo ""
     echo "============================================"
-    echo "  步骤 3: LLM 推理 (分类增强)"
+    echo "  步骤 3: LLM 推理 (自动检测 per-case taxonomy)"
     echo "============================================"
-
-    if [ ! -f "${PINGMESH_TAXONOMY}" ]; then
-        echo "ERROR: taxonomy 不存在, 请先运行步骤 1"
-        exit 1
-    fi
 
     OUTDIR="classified_inference_$(date +%s)"
 
@@ -108,7 +89,6 @@ if [ "${PHASE}" = "inference" ] || [ "${PHASE}" = "all" ]; then
         -s ${PINGMESH_SKILLS} \
         -n "${PINGMESH_NPU_CARDS}" \
         -k "${PINGMESH_TOP_K}" \
-        -t "${PINGMESH_TAXONOMY}" \
         -o "${OUTDIR}"
 
     echo ""
@@ -124,5 +104,4 @@ fi
 echo ""
 echo "============================================"
 echo "基线 (无分类): topo+temporal = 56.64% Top-1"
-echo "对比分类增强后的数字, 看增益。"
 echo "============================================"

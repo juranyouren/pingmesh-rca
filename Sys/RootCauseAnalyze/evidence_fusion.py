@@ -109,7 +109,7 @@ def build_fused_evidence(node_list, info, dirpath,
     # ── 1. 核心评分（与 skill_pipeline 一致）──
     from Sys.RootCauseAnalyze.skill_pipeline import _score_topo, _score_temporal
     norm_pr = _score_topo(node_list, info, weight_dirpath=weight_dirpath, directed=True,
-                          alarm_taxonomy=alarm_taxonomy)
+                          alarm_taxonomy=alarm_taxonomy, case_dir=dirpath)
     norm_ts = _score_temporal(node_list, info, dirpath=dirpath,
                               alarm_taxonomy=alarm_taxonomy)
 

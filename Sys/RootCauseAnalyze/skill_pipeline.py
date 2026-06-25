@@ -108,13 +108,22 @@ except Exception:
 
 
 def _score_topo(node_list, infodta, weight_dirpath=None, directed=True,
-                alarm_taxonomy=None):
+                alarm_taxonomy=None, case_dir=""):
     """
     PageRank scoring. If alarm_taxonomy is provided, causal alarms get full weight,
     symptom alarms get reduced weight (0.3x), noise alarms get near-zero (0.05x).
+    If case_dir has alarm_taxonomy.json, it is auto-loaded when no taxonomy is provided.
     """
     if nx is None:
         return {}
+
+    # 若无显式 taxonomy, 尝试从 case 目录自动加载 per-case 分类
+    tax = alarm_taxonomy
+    if tax is None and case_dir:
+        tax_path = os.path.join(case_dir, "alarm_taxonomy.json")
+        if os.path.exists(tax_path):
+            try: tax = json.load(open(tax_path, encoding="utf-8"))
+            except Exception: pass
 
     weights_dict = _load_alarm_weights(weight_dirpath)
     source_ips, sink_ips = _parse_endpoint_ips(infodta)
@@ -138,8 +147,8 @@ def _score_topo(node_list, infodta, weight_dirpath=None, directed=True,
             if name and (name_lower := str(name).lower()) in weights_dict:
                 w = weights_dict[name_lower]
                 # 三分类加权
-                if alarm_taxonomy and name in alarm_taxonomy:
-                    atype = alarm_taxonomy[name].get("type", "symptom")
+                if tax and name in tax:
+                    atype = tax[name].get("type", "symptom")
                     if atype == "causal":
                         w = w * 1.0            # 根因型: 全权重
                     elif atype == "symptom":
@@ -205,7 +214,16 @@ def _score_temporal(node_list, infodta=None, dirpath="", alarm_taxonomy=None):
     """
     Run temporal scorer. If alarm_taxonomy provided, devices with ONLY
     symptom/noise alarms get their temporal score heavily penalized (×0.1).
+    If dirpath has alarm_taxonomy.json, it is auto-loaded when no taxonomy is provided.
     """
+    # 若无显式 taxonomy, 尝试从 case 目录自动加载 per-case 分类
+    tax = alarm_taxonomy
+    if tax is None and dirpath:
+        tax_path = os.path.join(dirpath, "alarm_taxonomy.json")
+        if os.path.exists(tax_path):
+            try: tax = json.load(open(tax_path, encoding="utf-8"))
+            except Exception: pass
+
     skill_map = _load_skills()
     fn = skill_map.get("temporal_score_devices")
     if not fn:
@@ -225,13 +243,13 @@ def _score_temporal(node_list, infodta=None, dirpath="", alarm_taxonomy=None):
               if isinstance(s, (int, float))} if max_s > 0 else {}
 
     # 分类加权: 只有非 causal 告警的设备惩罚
-    if alarm_taxonomy:
+    if tax:
         for nd in node_list:
             ip = _get_device_ip(nd)
             if ip not in scores or scores[ip] == 0:
                 continue
             has_causal = any(
-                alarm_taxonomy.get(
+                tax.get(
                     (evt if isinstance(evt, str) else evt.get("alarm_name", evt.get("name", ""))).strip(),
                     {}).get("type") == "causal"
                 for evt in nd.get("alarms", []) + nd.get("logs", [])
@@ -291,7 +309,7 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
             if sid == 1:
                 scores = scorer(node_list, infodta,
                                 weight_dirpath=weight_dirpath, directed=directed,
-                                alarm_taxonomy=alarm_taxonomy)
+                                alarm_taxonomy=alarm_taxonomy, case_dir=dirpath)
             elif sid == 2:
                 scores = scorer(node_list, infodta, dirpath=dirpath,
                                 alarm_taxonomy=alarm_taxonomy)
