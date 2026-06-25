@@ -421,11 +421,12 @@ if __name__ == "__main__":
         _out = args.out or "/home/sbp/lixinyang/pingmesh/data/nodes_extend"
 
     if args.phase in ("merge", "all"):
-        phase_merge(_raw, _out, write=args.write)
+        # Phase 1 中间产物: {raw文件夹名}_dedup
+        merge_out = _raw.rstrip("/").rstrip("\\") + "_dedup"
+        phase_merge(_raw, merge_out, write=args.write)
 
     if args.phase in ("extract", "all"):
-        if args.phase == "all":
-            # Phase 2 读 Phase 1 的输出
-            _raw = _out
-        phase_extract(_raw, _out, min_alarm_devices=args.min_alarm_devices,
+        # Phase 2 输入: Phase 1 的合并输出 或 用户指定的 raw
+        ext_in = _raw.rstrip("/").rstrip("\\") + "_dedup" if args.phase == "all" else _raw
+        phase_extract(ext_in, _out, min_alarm_devices=args.min_alarm_devices,
                       strict=args.strict, write=args.write)
