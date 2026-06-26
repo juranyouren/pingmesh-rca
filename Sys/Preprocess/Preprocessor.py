@@ -143,26 +143,34 @@ def _validate_raw(csn, full_link):
     gt_label = full_link.get("groud_truth",
                 full_link.get("ground_truth",
                 full_link.get("grond_truth")))
-    if not isinstance(gt_label, dict) or not gt_label:
+    # gt_labels: 所有标注条目 (可能是 ground_truth 单条, 也可能是 rca 多条)
+    gt_labels = []
+    if isinstance(gt_label, dict) and gt_label:
+        gt_labels = [gt_label]
+    else:
         rca = full_link.get("rootcause_analysis")
-        if isinstance(rca, list) and rca and isinstance(rca[0], dict):
-            gt_label = rca[0]
+        if isinstance(rca, list) and rca and all(isinstance(x, dict) for x in rca):
+            gt_labels = rca
 
-    if not isinstance(gt_label, dict) or not gt_label:
+    if not gt_labels:
         return False, "ground_truth / rootcause_analysis 缺失或为空", None, None, None
 
-    abnormal = gt_label.get("abnormal_node", [])
-    if not isinstance(abnormal, list) or not abnormal:
+    # 至少有一条包含有效的 abnormal_node
+    if not any(
+        isinstance(gt.get("abnormal_node"), list) and gt["abnormal_node"]
+        for gt in gt_labels
+    ):
         return False, "abnormal_node 为空", None, None, None
 
     has_valid_gt = any(
         isinstance(an, dict) and (an.get("ip") or an.get("mgmt_ip"))
-        for an in abnormal
+        for gt in gt_labels
+        for an in gt.get("abnormal_node", [])
     )
     if not has_valid_gt:
         return False, "abnormal_node 中无有效 IP", None, None, None
 
-    return True, None, task_info, topo_value, gt_label
+    return True, None, task_info, topo_value, gt_labels
 
 
 def _extract_nodes(topo_value, full_link):
@@ -268,32 +276,31 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
             continue
 
         full_link = data.get("full_link", {})
-        ok, err, task_info, topo_value, gt_label = _validate_raw(csn, full_link)
+        ok, err, task_info, topo_value, gt_labels = _validate_raw(csn, full_link)
         if not ok:
             skip_reasons[err] += 1
             continue
 
         node_map = _extract_nodes(topo_value, full_link)
 
-        # ── RC 设备名校验 ──
+        # ── RC 设备名校验 (遍历所有 gt_labels) ──
         rc_names = set()
-        for an in gt_label.get("abnormal_node", []):
-            if isinstance(an, dict) and an.get("name"):
-                rc_names.add(an["name"])
-            elif isinstance(an, dict) and an.get("mgmt_ip"):
-                # 如果只有 IP, 从 node_map 反查 name
-                ip = an["mgmt_ip"]
-                for nd_name, nd in node_map.items():
-                    if nd.get("mgmt_ip") == ip:
-                        rc_names.add(nd_name)
-                        break
+        for gt in gt_labels:
+            for an in gt.get("abnormal_node", []):
+                if isinstance(an, dict) and an.get("name"):
+                    rc_names.add(an["name"])
+                elif isinstance(an, dict) and an.get("mgmt_ip"):
+                    ip = an["mgmt_ip"]
+                    for nd_name, nd in node_map.items():
+                        if nd.get("mgmt_ip") == ip:
+                            rc_names.add(nd_name)
+                            break
 
         rc_in_topo = rc_names and all(n in node_map for n in rc_names)
         if not rc_in_topo:
             skip_reasons["RC 设备不在 topo 中"] += 1
             continue
 
-        # 默认只看 alarms, count_logs=True 时才把 logs 也算作告警
         rc_has_alarms = any(
             node_map[n]["alarms"] or (count_logs and node_map[n]["logs"])
             for n in rc_names
@@ -303,22 +310,16 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
             continue
 
         gt_ips = []
-        for an in gt_label.get("abnormal_node", []):
-            if isinstance(an, dict):
-                ip = an.get("ip", an.get("mgmt_ip", ""))
-                if ip:
-                    gt_ips.append(ip)
-
-        all_ips = set()
-        for nd in node_map.values():
-            ip = nd.get("mgmt_ip", "")
-            if ip:
-                all_ips.add(ip)
-        gt_in_topo = all(g in all_ips for g in gt_ips) if gt_ips else False
+        for gt in gt_labels:
+            for an in gt.get("abnormal_node", []):
+                if isinstance(an, dict):
+                    ip = an.get("ip", an.get("mgmt_ip", ""))
+                    if ip and ip not in gt_ips:
+                        gt_ips.append(ip)
 
         cases.append({
             "csn": csn, "path": fpath, "data": data,
-            "task_info": task_info, "node_map": node_map, "gt_label": gt_label,
+            "task_info": task_info, "node_map": node_map, "gt_labels": gt_labels,
             "gt_ips": gt_ips, "n_devices": len(node_map),
         })
 
@@ -351,11 +352,17 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
         json.dump(info, open(os.path.join(case_dir, "info.json"), "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
 
-        # label.json
-        gt = c["gt_label"]
-        labels = [{"ranking": gt.get("ranking", 1), "abnormal_node": gt.get("abnormal_node", [])}]
+        # label.json — 写入 rootcause_analysis 的全部条目
+        labels = []
+        for i, gt in enumerate(c.get("gt_labels", [])):
+            labels.append({
+                "ranking": gt.get("ranking", i + 1),
+                "abnormal_node": gt.get("abnormal_node", []),
+            })
         json.dump(labels, open(os.path.join(case_dir, "label.json"), "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
+        if len(labels) > 1:
+            print(f"  {csn}: {len(labels)} 条 rootcause_analysis, 已全部写入 label (后续人工筛选)")
 
         # nodes
         out_name = f"pingmesh-{csn}-全链路.json"
