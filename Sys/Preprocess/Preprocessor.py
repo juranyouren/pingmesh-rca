@@ -147,6 +147,8 @@ def _validate_raw(csn, full_link):
     gt_labels = []
     if isinstance(gt_label, dict) and gt_label.get("abnormal_node"):
         gt_labels = [gt_label]
+    else:
+        gt_labels=gt_label
     if not gt_labels:
         rca = full_link.get("rootcause_analysis")
         if isinstance(rca, list) and rca and all(isinstance(x, dict) for x in rca):

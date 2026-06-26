@@ -309,7 +309,7 @@ class BiAnAnalyzer:
 
     # ── Main pipeline ────────────────────────────────────────────────
     def process_one(self, dirpath):
-        nodes_path = os.path.join(dirpath, "nodes.json")
+        nodes_path = _find_full_link_path(dirpath) or os.path.join(dirpath, "nodes.json")
         info_path = os.path.join(dirpath, "info.json")
 
         nodes_data = load_json(nodes_path) if os.path.exists(nodes_path) else {}
@@ -360,10 +360,30 @@ class BiAnAnalyzer:
 
 
 # ── Parallel runner ──────────────────────────────────────────────────
+
+def _has_full_link(filenames):
+    for f in filenames:
+        if "全链路.json" in f and "pingmesh" in f:
+            return True
+    return False
+
+def _find_full_link_path(dirpath):
+    for f in os.listdir(dirpath):
+        if "全链路.json" in f and "pingmesh" in f:
+            return os.path.join(dirpath, f)
+    return None
+
+def _load_full_link(dirpath):
+    for f in os.listdir(dirpath):
+        if "全链路.json" in f and "pingmesh" in f:
+            data = load_json(os.path.join(dirpath, f))
+            return list(data.values()) if isinstance(data, dict) else data
+    return {}
+
 def generate_prompts(root_path):
     dirpaths = []
     for dirpath, dirnames, filenames in os.walk(root_path):
-        if "nodes.json" in filenames and "info.json" in filenames:
+        if _has_full_link(filenames) and "info.json" in filenames:
             dirpaths.append(dirpath)
     return dirpaths
 

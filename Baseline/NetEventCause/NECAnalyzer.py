@@ -197,7 +197,7 @@ class NetEventCauseAnalyzer:
     # ── Data extraction ────────────────────────────────────────────
     def _extract_sequence(self, dirpath):
         """Extract time-ordered alarm sequence from a case."""
-        nodes = load_json(os.path.join(dirpath, "nodes.json")) or {}
+        nodes = _load_full_link(dirpath)
         if isinstance(nodes, dict):
             nodes = list(nodes.values())
 
@@ -290,7 +290,7 @@ def _load_all_sequences(dirpaths):
     """Extract all sequences once for fitting."""
     raw_seqs = []
     for dp in dirpaths:
-        nodes = load_json(os.path.join(dp, "nodes.json")) or {}
+        nodes = _load_full_link(dp)
         if isinstance(nodes, dict):
             nodes = list(nodes.values())
         events = []
@@ -327,10 +327,24 @@ def _worker(args):
     return analyzer.process_cases(dirpaths_chunk)
 
 
+
+def _has_full_link(filenames):
+    for f in filenames:
+        if "全链路.json" in f and "pingmesh" in f:
+            return True
+    return False
+
+def _load_full_link(dirpath):
+    for f in os.listdir(dirpath):
+        if "全链路.json" in f and "pingmesh" in f:
+            data = load_json(os.path.join(dirpath, f))
+            return list(data.values()) if isinstance(data, dict) else data
+    return {}
+
 def generate_prompts(root_path):
     dirpaths = []
     for dirpath, dirnames, filenames in os.walk(root_path):
-        if "nodes.json" in filenames and "info.json" in filenames:
+        if _has_full_link(filenames) and "info.json" in filenames:
             dirpaths.append(dirpath)
     return dirpaths
 
