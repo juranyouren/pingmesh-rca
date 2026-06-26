@@ -143,11 +143,11 @@ def _validate_raw(csn, full_link):
     gt_label = full_link.get("groud_truth",
                 full_link.get("ground_truth",
                 full_link.get("grond_truth")))
-    # gt_labels: 所有标注条目 (可能是 ground_truth 单条, 也可能是 rca 多条)
+    # gt_labels: ground_truth 优先; 只有 ground_truth 为空/null/无 abnormal_node 时才用 rca
     gt_labels = []
-    if isinstance(gt_label, dict) and gt_label:
+    if isinstance(gt_label, dict) and gt_label.get("abnormal_node"):
         gt_labels = [gt_label]
-    else:
+    if not gt_labels:
         rca = full_link.get("rootcause_analysis")
         if isinstance(rca, list) and rca and all(isinstance(x, dict) for x in rca):
             gt_labels = rca
