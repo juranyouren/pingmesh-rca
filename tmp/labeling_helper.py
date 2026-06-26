@@ -117,9 +117,10 @@ def main():
             print(f"  {m['csn']}: {m['reason']}")
         if len(need_manual) > 10: print(f"  ... 还有 {len(need_manual) - 10} 个")
 
-    if write and auto_labeled:
+    if write:
         dst = src.rstrip("/").rstrip("\\") + "_labeled"
         os.makedirs(dst, exist_ok=True)
+        total = 0
         for a in auto_labeled:
             dst_dir = os.path.join(dst, a["csn"])
             if os.path.exists(dst_dir): shutil.rmtree(dst_dir)
@@ -128,10 +129,21 @@ def main():
             kept = labels[a["matched_idx"]]
             kept["ranking"] = 1
             _save_json([kept], os.path.join(dst_dir, "label.json"))
+            total += 1
+        for m in need_manual:
+            dst_dir = os.path.join(dst, m["csn"])
+            if os.path.exists(dst_dir): shutil.rmtree(dst_dir)
+            shutil.copytree(m["case_dir"], dst_dir)
+            labels = _load_json(os.path.join(dst_dir, "label.json"))
+            if isinstance(labels, list) and labels:
+                labels[:] = [labels[0]]  # 只保留第一条
+                labels[0]["ranking"] = 1
+                _save_json(labels, os.path.join(dst_dir, "label.json"))
+            total += 1
 
-        print(f"\n>> 已写入 {len(auto_labeled)} 个 case -> {dst}")
-        print(f">> label.json 已裁剪为命中的 1 条")
-        print(f">> {len(need_manual)} 个 case 留在 {src} 待人工标注")
+        print(f"\n>> 已写入 {total} 个 case -> {dst}")
+        print(f">> 自动命中 {len(auto_labeled)} 个 (label 已裁剪)")
+        print(f">> 待人工标注 {len(need_manual)} 个 (label 保留第一条, 需后续手动筛选)")
     elif not write:
         print("\n>> DRY RUN -- 加 --write 执行")
 
