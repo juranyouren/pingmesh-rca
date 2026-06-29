@@ -21,7 +21,7 @@ _ROOT = os.environ.get("PINGMESH_PROJECT_ROOT", "/home/sbp/lixinyang/pingmesh")
 class DataPaths:
     def __init__(self, root=_ROOT):
         self.pingmesh_raw = os.path.join(root, "data", "raw", "pingmesh_v1")
-        self.nodes_labeled = os.environ.get("PINGMESH_DATA", os.path.join(root, "data", "node", "nodes_labeled"))
+        self.nodes_labeled = os.environ.get("PINGMESH_DATA", os.path.join(root, "data", "node", "nodes_max_labeled"))
         self.results       = os.environ.get("PINGMESH_RESULTS", os.path.join(root, "data", "res"))
         self.alarm_weights = os.environ.get("PINGMESH_WEIGHTS_MANUAL", os.path.join(root, "data", "weights", "classified_alarms", "all_alarms.json"))
 
@@ -40,8 +40,8 @@ class SkillPaths:
 class ModelConfig:
     def __init__(self):
         self.model_path   = os.environ.get("PINGMESH_MODEL_PATH", "/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B")
-        self.npu_cards    = os.environ.get("PINGMESH_NPU_CARDS", "0,1")
-        self.npu_groups   = [[0, 1], [2, 3]]
+        self.npu_cards    = os.environ.get("PINGMESH_NPU_CARDS", "0,1,2,3,4,5,6,7")
+        self.npu_groups   = [[0, 1], [2, 3], [4, 5], [6, 7]]
         self.gpu_memory_utilization = 0.85
         self.max_model_len   = int(os.environ.get("PINGMESH_MAX_MODEL_LEN", "16384"))
         self.trust_remote_code = True
@@ -100,4 +100,3 @@ class Config:
         self.skill = SkillConfig()
 
 config = Config()
-
