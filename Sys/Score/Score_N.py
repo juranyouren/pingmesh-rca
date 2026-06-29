@@ -22,6 +22,7 @@ from dataclasses import dataclass
 @dataclass
 class GroundTruth:
     ips: List[str]
+    source: str = ""
 
 
 @dataclass
@@ -129,6 +130,13 @@ class Scorer:
 
     @staticmethod
     def _get_groundtruth(dir_name: str) -> GroundTruth:
+        label_v2_path = os.path.join(dir_name, "label_v2.json")
+        if os.path.exists(label_v2_path):
+            labels_v2 = Scorer._load_json(label_v2_path)
+            gt_ips = Scorer._get_groundtruth_v2(labels_v2)
+            if gt_ips:
+                return GroundTruth(ips=gt_ips, source="label_v2.json")
+
         label_path = os.path.join(dir_name, "label.json")
         if not os.path.exists(label_path):
             return GroundTruth(ips=[])
@@ -142,7 +150,56 @@ class Scorer:
                 ip = an.get("ip")
                 if ip and ip not in gt_ips:
                     gt_ips.append(ip)
-        return GroundTruth(ips=gt_ips)
+        return GroundTruth(ips=gt_ips, source="label.json:top3_ranking")
+
+    @staticmethod
+    def _extract_ips(value) -> List[str]:
+        """Extract IP strings from flexible label_v2 fields."""
+        ips = []
+        if value is None:
+            return ips
+        if isinstance(value, str):
+            return [value] if value else []
+        if isinstance(value, dict):
+            for key in ("ip", "mgmt_ip", "device_ip"):
+                ip = value.get(key)
+                if ip:
+                    return [ip]
+            return ips
+        if isinstance(value, list):
+            for item in value:
+                for ip in Scorer._extract_ips(item):
+                    if ip not in ips:
+                        ips.append(ip)
+        return ips
+
+    @staticmethod
+    def _get_groundtruth_v2(labels: Any) -> List[str]:
+        """
+        Preferred strict label schema for paper-grade evaluation.
+
+        Supported fields:
+          - primary_root_cause / primary_root_causes: counted first
+          - secondary_root_causes: counted after primary roots
+          - root_causes: fallback when primary/secondary split is absent
+
+        Fields such as victims/affected_nodes are intentionally ignored.
+        """
+        if not isinstance(labels, dict):
+            return []
+
+        gt_ips = []
+        primary = []
+        for key in ("primary_root_cause", "primary_root_causes"):
+            primary.extend(Scorer._extract_ips(labels.get(key)))
+
+        secondary = Scorer._extract_ips(labels.get("secondary_root_causes"))
+        fallback = Scorer._extract_ips(labels.get("root_causes"))
+
+        for ip in primary + secondary + fallback:
+            if ip and ip not in gt_ips:
+                gt_ips.append(ip)
+        return gt_ips
 
     # ── core eval ──────────────────────────────────────────────────
 
@@ -177,6 +234,7 @@ class Scorer:
                 rec = {
                     "dir": dir_name,
                     "gt_ips": gt.ips,
+                    "gt_source": gt.source,
                     "pred_ips": res["pred_ips"][:10],
                     "best_rank": res["best_rank"],
                 }

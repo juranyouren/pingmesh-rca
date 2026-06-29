@@ -18,6 +18,15 @@ SKILLS="${2:-${PINGMESH_SKILLS}}"
 NPU="${3:-${PINGMESH_NPU_CARDS}}"
 BATCH="${4:-${PINGMESH_BATCH_SIZE}}"
 TOPK="${5:-${PINGMESH_TOP_K}}"
+CONF_GATE="${PINGMESH_CONFIDENCE_GATE:-0}"
+CONF_HIGH_MARGIN="${PINGMESH_CONFIDENCE_HIGH_MARGIN:-15}"
+CONF_AGREEMENT_MARGIN="${PINGMESH_CONFIDENCE_AGREEMENT_MARGIN:-8}"
+CONF_ARGS=()
+if [ "${CONF_GATE}" = "1" ] || [ "${CONF_GATE}" = "true" ] || [ "${CONF_GATE}" = "TRUE" ]; then
+    CONF_ARGS+=(--confidence-gate)
+    CONF_ARGS+=(--confidence-high-margin "${CONF_HIGH_MARGIN}")
+    CONF_ARGS+=(--confidence-agreement-margin "${CONF_AGREEMENT_MARGIN}")
+fi
 
 echo "============================================"
 echo "  单次推理"
@@ -25,6 +34,7 @@ echo "  数据:    ${PINGMESH_DATA}"
 echo "  Skill:   ${SKILLS} (1=topo, 2=temporal)"
 echo "  Top-K:   ${TOPK}"
 echo "  NPU:     ${NPU}"
+echo "  Gate:    ${CONF_GATE} (high_margin=${CONF_HIGH_MARGIN}, agreement_margin=${CONF_AGREEMENT_MARGIN})"
 echo "============================================"
 
 if [ -z "${OUTDIR}" ]; then OUTDIR="inference_$(date +%s)"; fi
@@ -35,7 +45,8 @@ python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
     -n "${NPU}" \
     -b "${BATCH}" \
     -k "${TOPK}" \
-    -o "${OUTDIR}"
+    -o "${OUTDIR}" \
+    "${CONF_ARGS[@]}"
 
 echo ""
 echo "--- 评分 ---"
