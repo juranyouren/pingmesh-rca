@@ -59,7 +59,8 @@ def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
 
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
-                 alarm_taxonomy=None):
+                 alarm_taxonomy=None, confidence_gate=False,
+                 confidence_high_margin=15.0, confidence_agreement_margin=8.0):
         """
         初始化基于 vllm.LLM 的技能型根因分析器。
         alarm_taxonomy: 告警分类字典 {name: {type, severity}}。
@@ -76,7 +77,7 @@ class SkilledAnalyzer:
         if top_k is None:
             top_k = config.temporal.top_k
 
-        print(f"[{os.getpid()}] 正在初始化 vLLM 引擎，使用的 NPU 卡号为: {ASCEND_RT_VISIBLE_DEVICES}")
+        print(f"[{os.getpid()}] vLLM 将按需初始化，使用的 NPU 卡号为: {ASCEND_RT_VISIBLE_DEVICES}")
 
         self.model_path = model_path
         self.ASCEND_RT_VISIBLE_DEVICES = ASCEND_RT_VISIBLE_DEVICES
@@ -87,6 +88,11 @@ class SkilledAnalyzer:
         self.short=short
         self.top_k = top_k
         self.alarm_taxonomy = alarm_taxonomy or {}
+        self.confidence_gate_enabled = bool(confidence_gate)
+        self.confidence_high_margin = float(confidence_high_margin)
+        self.confidence_agreement_margin = float(confidence_agreement_margin)
+        self.llm = None
+        self.sampling_params = None
 
         # 将 skill_id 统一转换为 string 方便检索
         print(self.skills)
@@ -94,6 +100,11 @@ class SkilledAnalyzer:
             s["skill_id"] = str(s["skill_id"])
 
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.ASCEND_RT_VISIBLE_DEVICES
+
+    def _ensure_llm(self):
+        """Lazy init vLLM so confidence-gated all-bypass workers avoid model loading."""
+        if self.llm is not None and self.sampling_params is not None:
+            return
 
         from vllm import LLM, SamplingParams
 
@@ -161,8 +172,9 @@ class SkilledAnalyzer:
         return refined_skills
 
     def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, dirpath: str):
-        """返回 (final_prompt, skill_ips)。skill_ips 是算法综合分排名（LLM 未介入）。"""
+        """返回 (final_prompt, skill_ips, gate)。skill_ips 是算法综合分排名（LLM 未介入）。"""
         from Sys.RootCauseAnalyze.evidence_fusion import build_fused_evidence
+        from Sys.RootCauseAnalyze.confidence_gate import assess_gate
 
         # 融合层产出：证据表 / info 概况 / 候选紧凑详情 / 候选原始数据 / 算法排名 IP
         skill_ret, info_data, detail_compact, detail_raw, skill_ips = build_fused_evidence(
@@ -178,6 +190,31 @@ class SkilledAnalyzer:
         if not selected_skill_ids:
             skill_ret = "当前未调用任何专家工具，请仅依靠 Info 和候选详情进行推导。"
 
+        gate = {
+            "enabled": False,
+            "decision": "invoke_llm",
+            "reason": "confidence_gate_disabled",
+            "recommended_ips": skill_ips[:3],
+        }
+        if self.confidence_gate_enabled and selected_skill_ids:
+            gate = assess_gate(
+                skill_ret,
+                high_margin=self.confidence_high_margin,
+                agreement_margin=self.confidence_agreement_margin,
+            )
+            if gate.get("decision") == "bypass_llm":
+                final_prompt = (
+                    "CONFIDENCE_GATE_BYPASS\n"
+                    "# 故障概况\n"
+                    f"{info_data}\n\n"
+                    "# 算法证据\n"
+                    f"{skill_ret}\n\n"
+                    "# 候选设备详情\n"
+                    f"{detail_compact}"
+                )
+                return final_prompt, skill_ips, gate
+
+        self._ensure_llm()
         tokenizer = self.llm.get_tokenizer()
         max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len * 0.8)
 
@@ -187,13 +224,13 @@ class SkilledAnalyzer:
         skill_tokens = tokenizer.encode(skill_ret)
         if len(skill_tokens) > remaining_tokens:
             skill_ret = tokenizer.decode(skill_tokens[:remaining_tokens]) + "\n...[证据表超长截断]..."
-            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES=""), skill_ips
+            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES=""), skill_ips, gate
         remaining_tokens -= len(skill_tokens)
 
         info_tokens = tokenizer.encode(info_data)
         if len(info_tokens) > remaining_tokens:
             info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
-            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=""), skill_ips
+            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=""), skill_ips, gate
         remaining_tokens -= len(info_tokens)
 
         # 候选详情: 始终用结构化 JSON (detail_compact)，token 不够截断
@@ -202,7 +239,7 @@ class SkilledAnalyzer:
         if len(nodes_tokens) > remaining_tokens:
             nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
 
-        return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=nodes_data), skill_ips
+        return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=nodes_data), skill_ips, gate
 
     def _safe_truncate(self, text: str) -> str:
         tokenizer = self.llm.get_tokenizer()
@@ -214,7 +251,7 @@ class SkilledAnalyzer:
 
     # [MODIFIED] 增加 target_skill_ids 参数
     def batch_infer(self, dirpaths: list, prompts: list, target_skill_ids: list, batch_size: int = 8) -> list:
-        """返回 (responses, prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list)"""
+        """返回 (responses, prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list, confidence_gates)"""
         print(f"[{os.getpid()}] 正在执行技能推理 (直接使用传入的技能集 {target_skill_ids}) (共 {len(prompts)} 条, Batch Size: {batch_size})...")
 
         def vllm_invoke(llm, inputs:list, sampling_params, desc="Inferring", b_size=1):
@@ -230,28 +267,46 @@ class SkilledAnalyzer:
             return all_responses
 
         try:
+            from Sys.RootCauseAnalyze.confidence_gate import make_bypass_response
+
             final_prompts = []
+            final_responses = [None] * len(prompts)
             skill_ids_list = []
             skill_ips_list = []
             gt_ips_list = []
+            confidence_gates = []
             retrieval_responses = ["Skipped Retrieval Stage"] * len(prompts)
+            llm_prompts = []
+            llm_indices = []
 
             for dirpath, original_p in zip(dirpaths, prompts):
                 skill_ids_list.append(target_skill_ids)
-                final_p, skill_ips = self._build_final_prompt(original_p, target_skill_ids, dirpath)
+                final_p, skill_ips, gate = self._build_final_prompt(original_p, target_skill_ids, dirpath)
                 final_prompts.append(final_p)
                 skill_ips_list.append(skill_ips)
+                confidence_gates.append(gate)
                 # 读取 gt_ips
                 gt_ips_list.append(self._read_gt_ips(dirpath))
+                if gate.get("decision") == "bypass_llm":
+                    final_responses[len(final_prompts) - 1] = make_bypass_response(gate)
+                    retrieval_responses[len(final_prompts) - 1] = "Confidence gate bypassed LLM"
+                else:
+                    llm_indices.append(len(final_prompts) - 1)
+                    llm_prompts.append(final_p)
 
-            final_responses = vllm_invoke(
-                llm=self.llm,
-                inputs=final_prompts,
-                sampling_params=self.sampling_params,
-                desc="Stage 2: Root Cause Analysis",
-                b_size=batch_size
-            )
-            return final_responses, final_prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list
+            if llm_prompts:
+                self._ensure_llm()
+                llm_responses = vllm_invoke(
+                    llm=self.llm,
+                    inputs=llm_prompts,
+                    sampling_params=self.sampling_params,
+                    desc="Stage 2: Root Cause Analysis",
+                    b_size=batch_size
+                )
+                for idx, response in zip(llm_indices, llm_responses):
+                    final_responses[idx] = response
+
+            return final_responses, final_prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list, confidence_gates
 
         except Exception as e:
             print(f"\n[Error {os.getpid()}] vLLM 批量推理执行异常: {str(e)}")
@@ -260,7 +315,8 @@ class SkilledAnalyzer:
                     [""] * len(prompts),
                     [[]] * len(prompts),
                     [[]] * len(prompts),
-                    [[]] * len(prompts))
+                    [[]] * len(prompts),
+                    [{"enabled": self.confidence_gate_enabled, "decision": "error", "reason": str(e)}] * len(prompts))
 
     @staticmethod
     def _read_gt_ips(dirpath: str) -> list:
@@ -356,16 +412,24 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
     sleep_time = (worker_id - 1) * 60
     time.sleep(sleep_time)
 
-    analyzer = SkilledAnalyzer(ASCEND_RT_VISIBLE_DEVICES=npus, short=short, top_k=top_k, alarm_taxonomy=alarm_taxonomy)
+    analyzer = SkilledAnalyzer(
+        ASCEND_RT_VISIBLE_DEVICES=npus,
+        short=short,
+        top_k=top_k,
+        alarm_taxonomy=alarm_taxonomy,
+        confidence_gate=confidence_gate,
+        confidence_high_margin=confidence_high_margin,
+        confidence_agreement_margin=confidence_agreement_margin,
+    )
     # [MODIFIED] 将 target_skill_ids 传入 batch_infer
-    (responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls) = analyzer.batch_infer(
+    (responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls, confidence_gates) = analyzer.batch_infer(
         dirpaths=dirpaths_chunk, 
         prompts=prompts_chunk, 
         target_skill_ids=target_skill_ids, 
@@ -373,7 +437,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     )
     
     resls=[]
-    for dp, res, pmt, ret_res, skill, sips, gips in zip(dirpaths_chunk, responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls):
+    for dp, res, pmt, ret_res, skill, sips, gips, gate in zip(dirpaths_chunk, responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls, confidence_gates):
         clean_res = res.strip() if isinstance(res, str) else str(res)
         result_dict = {
             "dir": dp,
@@ -381,6 +445,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
             "gt_ips": gips,
             "ret_response":ret_res,
             "skills_used":skill,
+            "confidence_gate": gate,
             "prompt":pmt,
             "response":clean_res,
         }
@@ -389,7 +454,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -428,7 +493,11 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     target_skill_ids=target_skill_ids, # [MODIFIED] 注入到子进程
                     batch_size=batch_size,
                     short=short,
-                    top_k=top_k
+                    top_k=top_k,
+                    alarm_taxonomy=alarm_taxonomy,
+                    confidence_gate=confidence_gate,
+                    confidence_high_margin=confidence_high_margin,
+                    confidence_agreement_margin=confidence_agreement_margin,
                 )
                 futures.append(future)
 
@@ -486,6 +555,12 @@ if __name__ == "__main__":
                    help="只跑指定 failures JSON 中的错案 (debug/回归用)")
     p.add_argument("--taxonomy", "-t", default=None,
                    help="告警分类 taxonomy 文件路径 (alarm_taxonomy.json)")
+    p.add_argument("--confidence-gate", action="store_true",
+                   help="启用置信度门控：高置信算法结果跳过 LLM 重排")
+    p.add_argument("--confidence-high-margin", type=float, default=15.0,
+                   help="combined Top-1/Top-2 分差达到该阈值时跳过 LLM (default: 15.0)")
+    p.add_argument("--confidence-agreement-margin", type=float, default=8.0,
+                   help="多方法同意且 combined 分差达到该阈值时跳过 LLM (default: 8.0)")
     args = p.parse_args()
     taxonomy = None
     if args.taxonomy and os.path.exists(args.taxonomy):
@@ -515,6 +590,9 @@ if __name__ == "__main__":
             short=args.short,
             top_k=args.top_k,
             alarm_taxonomy=taxonomy,
+            confidence_gate=args.confidence_gate,
+            confidence_high_margin=args.confidence_high_margin,
+            confidence_agreement_margin=args.confidence_agreement_margin,
         )
         print(f"所有并行推理已完成！总耗时: {time.time() - start_time:.2f} 秒")
 
