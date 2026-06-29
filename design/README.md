@@ -61,9 +61,9 @@ On the server:
 ```bash
 cd /home/sbp/lixinyang/pingmesh
 
-export PINGMESH_DATA=/path/to/nodes_labeled
+export PINGMESH_DATA=/path/to/nodes_max_labeled
 export PINGMESH_RESULTS=/path/to/results
-export PINGMESH_NPU_CARDS=0,1
+export PINGMESH_NPU_CARDS=0,1,2,3,4,5,6,7
 export CREDENCE_RUN_ID=credence_$(date +%Y%m%d_%H%M%S)
 
 bash scripts/run_credence_artifacts.sh

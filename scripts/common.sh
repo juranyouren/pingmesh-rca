@@ -5,7 +5,7 @@
 #
 # 切换数据集:    export PINGMESH_DATA=/new/path
 # 切换模型:      export PINGMESH_MODEL_PATH=/new/model
-# 切换 NPU:      export PINGMESH_NPU_CARDS=0,1,2,3
+# 切换 NPU:      export PINGMESH_NPU_CARDS=0,1,2,3,4,5,6,7
 # 切换 Skill:    export PINGMESH_SKILLS="1"
 # ============================================================
 
@@ -13,7 +13,7 @@
 export PINGMESH_PROJECT_ROOT="${PINGMESH_PROJECT_ROOT:-/home/sbp/lixinyang/pingmesh}"
 
 # ── 数据路径 ──
-export PINGMESH_DATA="${PINGMESH_DATA:-${PINGMESH_PROJECT_ROOT}/data/node/nodes_labeled}"
+export PINGMESH_DATA="${PINGMESH_DATA:-${PINGMESH_PROJECT_ROOT}/data/node/nodes_max_labeled}"
 export PINGMESH_RESULTS="${PINGMESH_RESULTS:-${PINGMESH_PROJECT_ROOT}/data/res}"
 
 # ── 权重文件 ──
@@ -27,7 +27,7 @@ export PINGMESH_MODEL_PATH="${PINGMESH_MODEL_PATH:-/usr/share/large_language_mod
 export PINGMESH_TAXONOMY="${PINGMESH_TAXONOMY:-${PINGMESH_PROJECT_ROOT}/data/weights/alarm_taxonomy.json}"
 
 # ── NPU / 推理参数 ──
-export PINGMESH_NPU_CARDS="${PINGMESH_NPU_CARDS:-0,1}"
+export PINGMESH_NPU_CARDS="${PINGMESH_NPU_CARDS:-0,1,2,3,4,5,6,7}"
 export PINGMESH_SKILLS="${PINGMESH_SKILLS:-1 2}"
 export PINGMESH_TOP_K="${PINGMESH_TOP_K:-5}"
 export PINGMESH_BATCH_SIZE="${PINGMESH_BATCH_SIZE:-8}"

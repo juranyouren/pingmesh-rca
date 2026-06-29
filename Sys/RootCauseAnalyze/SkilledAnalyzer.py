@@ -541,8 +541,8 @@ if __name__ == "__main__":
                    help="数据根目录 (含 nodes.json + info.json 的 case 目录)")
     p.add_argument("--output-dir", "-o", default=None,
                    help="结果输出子目录名（相对于 results，默认用当前时间戳）")
-    p.add_argument("--npu-cards", "-n", default="0,1",
-                   help="使用的 NPU 卡号，逗号分隔 (default: 0,1)")
+    p.add_argument("--npu-cards", "-n", default=config.model.npu_cards,
+                   help=f"使用的 NPU 卡号，逗号分隔 (default: {config.model.npu_cards})")
     p.add_argument("--skills", "-s", nargs="*", type=int, default=config.skill.skill_ids,
                    help="启用的 Skill ID 列表 (default: [1,2,3])")
     p.add_argument("--batch-size", "-b", type=int, default=config.model.batch_size,

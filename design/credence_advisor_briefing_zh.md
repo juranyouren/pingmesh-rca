@@ -93,9 +93,9 @@ diagnosability_frontier.csv
 服务器上一键运行：
 
 ```bash
-export PINGMESH_DATA=/path/to/nodes_labeled
+export PINGMESH_DATA=/path/to/nodes_max_labeled
 export PINGMESH_RESULTS=/path/to/results
-export PINGMESH_NPU_CARDS=0,1
+export PINGMESH_NPU_CARDS=0,1,2,3,4,5,6,7
 export CREDENCE_RUN_ID=credence_$(date +%Y%m%d_%H%M%S)
 bash scripts/run_credence_artifacts.sh
 ```
