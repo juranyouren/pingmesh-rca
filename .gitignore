@@ -28,20 +28,17 @@ Thumbs.db
 fusion_result.json
 combined_all_code.txt
 
-# SkillBank large data files (keep code, ignore large JSON results)
-SkillBank/hit_report.json
-SkillBank/raw_co_occur.json
-SkillBank/alarm_co_occurrence_rules.json
-SkillBank/raw.json
-SkillBank/check_list.json
-SkillBank/failure_cases/
-
 # NetEventCause open-source dependency (large, keep as reference only)
 Baseline/NetEventCause/NetEventCause-main/
 Baseline/NetEventCause/NetEventCause-main.zip
 
 # PDF papers (large binaries, keep code only)
 docs/papers/*.pdf
+
+# Local web snapshots / obsolete manuscript tree
+docs/CCF Conference Deadlines.html
+docs/CCF Conference Deadlines_files/
+docs/毕业论文/
 
 # Local manuscript/build artifacts
 paper/
