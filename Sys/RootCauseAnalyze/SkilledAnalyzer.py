@@ -59,12 +59,9 @@ def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
 
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
-                 alarm_taxonomy=None, confidence_gate=False,
-                 confidence_high_margin=15.0, confidence_agreement_margin=8.0):
+                 confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0):
         """
         初始化基于 vllm.LLM 的技能型根因分析器。
-        alarm_taxonomy: 告警分类字典 {name: {type, severity}}。
-                        None 或空字典 → 原方案不变。
         """
         if model_path is None:
             model_path = config.model.model_path
@@ -87,7 +84,6 @@ class SkilledAnalyzer:
         self.skills = self.executor.get_skill_conf()
         self.short=short
         self.top_k = top_k
-        self.alarm_taxonomy = alarm_taxonomy or {}
         self.confidence_gate_enabled = bool(confidence_gate)
         self.confidence_high_margin = float(confidence_high_margin)
         self.confidence_agreement_margin = float(confidence_agreement_margin)
@@ -184,7 +180,6 @@ class SkilledAnalyzer:
             skill_map=self.executor.skill_map,
             weight_dirpath=config.data.alarm_weights,
             top_k=self.top_k,
-            alarm_taxonomy=(self.alarm_taxonomy if self.alarm_taxonomy else None),
         )
 
         if not selected_skill_ids:
@@ -412,7 +407,7 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
@@ -423,7 +418,6 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
         ASCEND_RT_VISIBLE_DEVICES=npus,
         short=short,
         top_k=top_k,
-        alarm_taxonomy=alarm_taxonomy,
         confidence_gate=confidence_gate,
         confidence_high_margin=confidence_high_margin,
         confidence_agreement_margin=confidence_agreement_margin,
@@ -454,7 +448,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, alarm_taxonomy=None, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -494,7 +488,6 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     batch_size=batch_size,
                     short=short,
                     top_k=top_k,
-                    alarm_taxonomy=alarm_taxonomy,
                     confidence_gate=confidence_gate,
                     confidence_high_margin=confidence_high_margin,
                     confidence_agreement_margin=confidence_agreement_margin,
@@ -553,8 +546,6 @@ if __name__ == "__main__":
                    help="展示给 LLM 的候选设备数 (default: 10)")
     p.add_argument("--failures-from", default=None,
                    help="只跑指定 failures JSON 中的错案 (debug/回归用)")
-    p.add_argument("--taxonomy", "-t", default=None,
-                   help="告警分类 taxonomy 文件路径 (alarm_taxonomy.json)")
     p.add_argument("--confidence-gate", action="store_true",
                    help="启用置信度门控：高置信算法结果跳过 LLM 重排")
     p.add_argument("--confidence-high-margin", type=float, default=15.0,
@@ -562,10 +553,6 @@ if __name__ == "__main__":
     p.add_argument("--confidence-agreement-margin", type=float, default=8.0,
                    help="多方法同意且 combined 分差达到该阈值时跳过 LLM (default: 8.0)")
     args = p.parse_args()
-    taxonomy = None
-    if args.taxonomy and os.path.exists(args.taxonomy):
-        taxonomy = json.load(open(args.taxonomy, "r", encoding="utf-8"))
-        print(f"已加载 taxonomy: {len(taxonomy)} 条")
 
     target_skill_ids = [str(sid) for sid in args.skills]
 
@@ -589,7 +576,6 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             short=args.short,
             top_k=args.top_k,
-            alarm_taxonomy=taxonomy,
             confidence_gate=args.confidence_gate,
             confidence_high_margin=args.confidence_high_margin,
             confidence_agreement_margin=args.confidence_agreement_margin,
