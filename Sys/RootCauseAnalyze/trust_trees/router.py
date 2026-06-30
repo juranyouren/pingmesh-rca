@@ -44,7 +44,7 @@ def route_with_trust_trees(
     elif rank_near:
         decision, route, reason = "bypass_llm", "combined", "rankers_near_accept_combined"
     elif topo_state == "strong" and temporal_state != "strong":
-        decision, route, reason = "bypass_llm", "topo", "topo_strong_accept_topo"
+        decision, route, reason = "invoke_llm", "llm", "topo_strong_defer_to_llm"
     elif temporal_state == "strong" and topo_state != "strong":
         decision, route, reason = "bypass_llm", "temporal", "temporal_strong_accept_temporal"
     elif topo_state == "strong" and temporal_state == "strong":

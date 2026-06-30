@@ -22,7 +22,7 @@ if topo == weak and temporal == weak:
 elif rank_near:
     accept_combined
 elif topo == strong and temporal != strong:
-    accept_topo
+    invoke_llm
 elif temporal == strong and topo != strong:
     accept_temporal
 elif topo == strong and temporal == strong:
@@ -30,6 +30,11 @@ elif topo == strong and temporal == strong:
 else:
     invoke_llm
 ```
+
+In v1, topology evidence is useful for conflict detection and LLM arbitration,
+but `topo strong` alone is not trusted as an autonomous Top-1 decision. The
+current validation set showed that the former `accept_topo` route was too noisy,
+so those cases are routed to LLM instead.
 
 `operator_review` returns an empty `response.ip` list so automatic scoring does
 not count it as an automated diagnosis.

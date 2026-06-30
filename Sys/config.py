@@ -28,9 +28,9 @@ class DataPaths:
 
 class SkillPaths:
     def __init__(self, root=_ROOT):
-        self.skills_folder = os.path.join(root, "SkillBank", "skills")
-        self.skills_json   = os.path.join(root, "SkillBank", "skills.json")
-        self.checklist     = os.path.join(root, "SkillBank", "check_list.json")
+        self.skills_folder = os.path.join(root, "Sys", "RootCauseAnalyze", "skills")
+        self.skills_json   = os.path.join(root, "Sys", "RootCauseAnalyze", "skills", "builtin_skills.json")
+        self.checklist     = os.path.join(root, "Sys", "RootCauseAnalyze", "gate", "check_list.json")
 
 
 # ══════════════════════════════════════════════════════════════════

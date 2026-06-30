@@ -143,7 +143,7 @@ class TrustTreeRouterTest(unittest.TestCase):
         self.assertEqual(gate["route"], "combined")
         self.assertEqual(gate["reason"], "rankers_near_accept_combined")
 
-    def test_confident_single_ranker_routes_to_that_ranker(self):
+    def test_topo_strong_alone_defers_to_llm(self):
         gate = route_with_trust_trees(
             combined_ips=["10.0.0.9"],
             topo_ips=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
@@ -152,9 +152,22 @@ class TrustTreeRouterTest(unittest.TestCase):
             temporal_tree={"state": "weak", "passed": [], "failed": [], "evidence": {}},
         )
 
+        self.assertEqual(gate["decision"], "invoke_llm")
+        self.assertEqual(gate["route"], "llm")
+        self.assertEqual(gate["reason"], "topo_strong_defer_to_llm")
+
+    def test_temporal_strong_alone_routes_to_temporal(self):
+        gate = route_with_trust_trees(
+            combined_ips=["10.0.0.9"],
+            topo_ips=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
+            temporal_ips=["10.0.0.4", "10.0.0.5", "10.0.0.6"],
+            topo_tree={"state": "weak", "passed": [], "failed": [], "evidence": {}},
+            temporal_tree={"state": "strong", "passed": [], "failed": [], "evidence": {}},
+        )
+
         self.assertEqual(gate["decision"], "bypass_llm")
-        self.assertEqual(gate["route"], "topo")
-        self.assertEqual(gate["recommended_ips"][:3], ["10.0.0.1", "10.0.0.2", "10.0.0.3"])
+        self.assertEqual(gate["route"], "temporal")
+        self.assertEqual(gate["recommended_ips"][:3], ["10.0.0.4", "10.0.0.5", "10.0.0.6"])
 
     def test_confident_disagreement_invokes_llm(self):
         gate = route_with_trust_trees(
