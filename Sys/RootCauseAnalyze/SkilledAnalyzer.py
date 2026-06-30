@@ -32,7 +32,9 @@ def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
 
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
-                 confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0):
+                 confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0,
+                 summarize_nodes=False, summary_model_path=None, summary_npu_cards=None,
+                 summary_max_tokens=1024):
         """
         Initialize the skill-guided RCA analyzer.
         """
@@ -60,6 +62,10 @@ class SkilledAnalyzer:
         self.confidence_gate_enabled = bool(confidence_gate)
         self.confidence_high_margin = float(confidence_high_margin)
         self.confidence_agreement_margin = float(confidence_agreement_margin)
+        self.summarize_nodes_enabled = bool(summarize_nodes)
+        self.summary_model_path = summary_model_path or os.environ.get("PINGMESH_SUMMARY_MODEL_PATH", "")
+        self.summary_npu_cards = summary_npu_cards or os.environ.get("PINGMESH_SUMMARY_NPU_CARDS", ASCEND_RT_VISIBLE_DEVICES.split(",")[0])
+        self.summary_max_tokens = int(summary_max_tokens)
         self.llm = None
         self.sampling_params = None
 
@@ -68,6 +74,20 @@ class SkilledAnalyzer:
             s["skill_id"] = str(s["skill_id"])
 
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.ASCEND_RT_VISIBLE_DEVICES
+
+    def _summarize_candidate_detail(self, candidate_detail: str) -> str:
+        if not self.summarize_nodes_enabled:
+            return candidate_detail
+        if not self.summary_model_path:
+            raise ValueError("summarize_nodes is enabled but PINGMESH_SUMMARY_MODEL_PATH/--summary-model-path is not set")
+        from Sys.RootCauseAnalyze.gate.node_summarizer import VllmNodeSummarizer, summarize_nodes_with
+
+        with VllmNodeSummarizer(
+            model_path=self.summary_model_path,
+            npu_cards=self.summary_npu_cards,
+            max_tokens=self.summary_max_tokens,
+        ) as summarizer:
+            return summarize_nodes_with(candidate_detail, summarize_batch=summarizer.summarize_batch)
 
     def _ensure_llm(self):
         """Lazy init vLLM so confidence-gated all-bypass workers avoid model loading."""
@@ -95,7 +115,6 @@ class SkilledAnalyzer:
         from Sys.RootCauseAnalyze.gate.decision import assess_gate
         from Sys.RootCauseAnalyze.gate.evidence import build_fused_evidence
 
-        # 铻嶅悎灞備骇鍑猴細璇佹嵁琛?/ info 姒傚喌 / 鍊欓€夌揣鍑戣鎯?/ 鍊欓€夊師濮嬫暟鎹?/ 绠楁硶鎺掑悕 IP
         skill_ret, info_data, detail_compact, detail_raw, skill_ips = build_fused_evidence(
             node_list=self.executor.get_node_list(dirpath),
             info=self.executor.get_alarminfo(dirpath),
@@ -104,6 +123,7 @@ class SkilledAnalyzer:
             weight_dirpath=config.data.alarm_weights,
             top_k=self.top_k,
         )
+        detail_for_llm = self._summarize_candidate_detail(detail_compact)
 
         if not selected_skill_ids:
             skill_ret = "No deterministic skill was selected; infer from info and candidate details only."
@@ -129,9 +149,12 @@ class SkilledAnalyzer:
                     "# 绠楁硶璇佹嵁\n"
                     f"{skill_ret}\n\n"
                     "# 鍊欓€夎澶囪鎯匼n"
-                    f"{detail_compact}"
+                    f"{detail_for_llm}"
                 )
                 return final_prompt, skill_ips, gate
+
+        if self.summarize_nodes_enabled:
+            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=detail_for_llm), skill_ips, gate
 
         self._ensure_llm()
         tokenizer = self.llm.get_tokenizer()
@@ -153,7 +176,7 @@ class SkilledAnalyzer:
         remaining_tokens -= len(info_tokens)
 
         # 鍊欓€夎鎯? 濮嬬粓鐢ㄧ粨鏋勫寲 JSON (detail_compact)锛宼oken 涓嶅鎴柇
-        nodes_data = detail_compact
+        nodes_data = detail_for_llm
         nodes_tokens = tokenizer.encode(nodes_data)
         if len(nodes_tokens) > remaining_tokens:
             nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[鍊欓€夎鎯呮埅鏂璢..."
@@ -312,7 +335,7 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 璇婃柇] 淇濆瓨澶辫触: {e}")
 
 # [MODIFIED] 澧炲姞 target_skill_ids 鍙傛暟骞朵紶閫掔粰 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 鐜鍙橀噺宸茶缃?ASCEND_RT_VISIBLE_DEVICES={npus}")
@@ -326,6 +349,10 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
         confidence_gate=confidence_gate,
         confidence_high_margin=confidence_high_margin,
         confidence_agreement_margin=confidence_agreement_margin,
+        summarize_nodes=summarize_nodes,
+        summary_model_path=summary_model_path,
+        summary_npu_cards=summary_npu_cards,
+        summary_max_tokens=summary_max_tokens,
     )
     # [MODIFIED] 灏?target_skill_ids 浼犲叆 batch_infer
     (responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls, confidence_gates) = analyzer.batch_infer(
@@ -353,7 +380,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 澧炲姞 target_skill_ids 鎺ユ敹骞朵紶閫掔粰 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -396,6 +423,10 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     confidence_gate=confidence_gate,
                     confidence_high_margin=confidence_high_margin,
                     confidence_agreement_margin=confidence_agreement_margin,
+                    summarize_nodes=summarize_nodes,
+                    summary_model_path=summary_model_path,
+                    summary_npu_cards=summary_npu_cards,
+                    summary_max_tokens=summary_max_tokens,
                 )
                 futures.append(future)
 
@@ -457,6 +488,14 @@ if __name__ == "__main__":
                    help="combined Top-1/Top-2 鍒嗗樊杈惧埌璇ラ槇鍊兼椂璺宠繃 LLM (default: 15.0)")
     p.add_argument("--confidence-agreement-margin", type=float, default=8.0,
                    help="澶氭柟娉曞悓鎰忎笖 combined 鍒嗗樊杈惧埌璇ラ槇鍊兼椂璺宠繃 LLM (default: 8.0)")
+    p.add_argument("--summarize-nodes", action="store_true",
+                   help="Summarize candidate NODES with a small model before sending them to the RCA LLM")
+    p.add_argument("--summary-model-path", default=os.environ.get("PINGMESH_SUMMARY_MODEL_PATH", ""),
+                   help="Path to the small node-summary model, e.g. a 1.5B model")
+    p.add_argument("--summary-npu-cards", default=os.environ.get("PINGMESH_SUMMARY_NPU_CARDS", ""),
+                   help="NPU cards for the small summary model; defaults to the worker's first NPU")
+    p.add_argument("--summary-max-tokens", type=int, default=int(os.environ.get("PINGMESH_SUMMARY_MAX_TOKENS", "1024")),
+                   help="Max tokens generated by the small node-summary model")
     args = p.parse_args()
 
     target_skill_ids = [str(sid) for sid in args.skills]
@@ -484,6 +523,10 @@ if __name__ == "__main__":
             confidence_gate=args.confidence_gate,
             confidence_high_margin=args.confidence_high_margin,
             confidence_agreement_margin=args.confidence_agreement_margin,
+            summarize_nodes=args.summarize_nodes,
+            summary_model_path=args.summary_model_path,
+            summary_npu_cards=args.summary_npu_cards or None,
+            summary_max_tokens=args.summary_max_tokens,
         )
         print(f"All inference workers finished in {time.time() - start_time:.2f}s.")
 

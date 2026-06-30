@@ -4,7 +4,8 @@
 #   1. gate+pipe+llm : deterministic pipe, trust-tree gate, LLM only when routed
 #   2. gate+pipe     : deterministic pipe plus trust-tree gate, no LLM call
 #   3. pipe+llm      : deterministic pipe evidence, always send to LLM reranking
-#   4. pipe          : deterministic fused ranking only
+#   4. pipe_summary_llm : pipe evidence, small-model NODES summary, then LLM reranking
+#   5. pipe          : deterministic fused ranking only
 #
 # Configuration comes from scripts/common.sh and environment variables.
 #
@@ -27,12 +28,15 @@ RUN_TAG="${PREFIX}_${TIMESTAMP}"
 WORKDIR="${PINGMESH_RESULTS}/${RUN_TAG}"
 SUMMARY_JSON="${WORKDIR}/summary.json"
 SUMMARY_CSV="${WORKDIR}/summary.csv"
-EXPERIMENTS="${PINGMESH_EXPERIMENTS:-gate_pipe_llm gate_pipe pipe_llm pipe}"
+EXPERIMENTS="${PINGMESH_EXPERIMENTS:-gate_pipe_llm gate_pipe pipe_llm pipe_summary_llm pipe}"
 SKILLS="${PINGMESH_SKILLS:-1 2}"
 TOPK="${PINGMESH_TOP_K:-5}"
 BATCH="${PINGMESH_BATCH_SIZE:-8}"
 NPU="${PINGMESH_NPU_CARDS:-0,1,2,3,4,5,6,7}"
 WEIGHT_FILE="${PINGMESH_WEIGHTS_MANUAL}"
+SUMMARY_MODEL_PATH="${PINGMESH_SUMMARY_MODEL_PATH:-}"
+SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-}"
+SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
 
 mkdir -p "${WORKDIR}"
 
@@ -66,6 +70,7 @@ echo "  skills:     ${SKILLS}"
 echo "  top_k:      ${TOPK}"
 echo "  npu:        ${NPU}"
 echo "  weights:    ${WEIGHT_FILE}"
+echo "  summary_model: ${SUMMARY_MODEL_PATH:-<unset>}"
 echo "============================================"
 
 PIPE_OUTDIR="${RUN_TAG}/pipe"
@@ -111,6 +116,29 @@ if has_experiment pipe_llm; then
     score_res "${WORKDIR}/pipe_llm/res.json"
 fi
 
+if has_experiment pipe_summary_llm; then
+    if [ -z "${SUMMARY_MODEL_PATH}" ]; then
+        echo "[ERROR] pipe_summary_llm requires PINGMESH_SUMMARY_MODEL_PATH or --summary-model-path." >&2
+        exit 1
+    fi
+    SUMMARY_ARGS=(--summarize-nodes --summary-model-path "${SUMMARY_MODEL_PATH}" --summary-max-tokens "${SUMMARY_MAX_TOKENS}")
+    if [ -n "${SUMMARY_NPU_CARDS}" ]; then
+        SUMMARY_ARGS+=(--summary-npu-cards "${SUMMARY_NPU_CARDS}")
+    fi
+
+    echo ""
+    echo "=== [pipe_summary_llm] small-model NODES summary with LLM reranking ==="
+    python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
+        -d "${PINGMESH_DATA}" \
+        -s ${SKILLS} \
+        -n "${NPU}" \
+        -b "${BATCH}" \
+        -k "${TOPK}" \
+        -o "${RUN_TAG}/pipe_summary_llm" \
+        "${SUMMARY_ARGS[@]}"
+    score_res "${WORKDIR}/pipe_summary_llm/res.json"
+fi
+
 if has_experiment gate_pipe_llm; then
     echo ""
     echo "=== [gate+pipe+llm] gated pipe with LLM arbitration ==="
@@ -129,7 +157,7 @@ python -c "
 import csv, json, os
 
 workdir = '${WORKDIR}'
-experiments = ['gate_pipe_llm', 'gate_pipe', 'pipe_llm', 'pipe']
+experiments = ['gate_pipe_llm', 'gate_pipe', 'pipe_llm', 'pipe_summary_llm', 'pipe']
 rows = []
 
 def metric_block(summary, key):
