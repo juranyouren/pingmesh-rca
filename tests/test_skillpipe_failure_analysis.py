@@ -41,7 +41,7 @@ class SkillpipeFailureAnalysisTest(unittest.TestCase):
                     ["10.0.0.2", "10.0.0.1", "10.0.0.3"],
                     {
                         "1": {"top3": [["10.0.0.2", 0.7], ["10.0.0.1", 0.68]]},
-                        "2": {"top3": [["10.0.0.3", 0.8], ["10.0.0.1", 0.79]]},
+                        "2": {"top3": [["10.0.0.1", 0.8], ["10.0.0.3", 0.79]]},
                     },
                 ),
             },
@@ -70,9 +70,16 @@ class SkillpipeFailureAnalysisTest(unittest.TestCase):
         self.assertEqual(rank2["best_rank"], 2)
         self.assertTrue(rank2["method_disagreement"])
         self.assertTrue(rank2["low_margin"])
+        self.assertFalse(rank2["topo_hit_top1"])
+        self.assertTrue(rank2["topo_hit_top3"])
+        self.assertTrue(rank2["temporal_hit_top1"])
+        self.assertEqual(rank2["topo_gt_rank"], 2)
+        self.assertEqual(rank2["temporal_gt_rank"], 1)
+        self.assertEqual(rank2["method_failure_pattern"], "topo_wrong_temporal_right")
         self.assertEqual(rank2["suggested_gate_action"], "defer_to_llm_candidate")
 
         miss = next(row for row in rows if row["case_id"] == "case-miss")
+        self.assertEqual(miss["method_failure_pattern"], "topo_wrong_temporal_missing")
         self.assertEqual(miss["suggested_gate_action"], "low_diagnosability_candidate")
 
     def test_writes_analysis_outputs(self):
@@ -97,7 +104,9 @@ class SkillpipeFailureAnalysisTest(unittest.TestCase):
                 self.assertTrue(os.path.exists(path), path)
 
             with open(outputs["failures_csv"], encoding="utf-8") as f:
-                self.assertIn("top1_miss_gt_in_top3", f.read())
+                content = f.read()
+                self.assertIn("top1_miss_gt_in_top3", content)
+                self.assertIn("method_failure_pattern", content)
 
 
 if __name__ == "__main__":

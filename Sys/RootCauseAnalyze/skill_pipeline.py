@@ -268,10 +268,12 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
         except Exception:
             scores = {}
         if scores:
+            ranked_scores = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
             skill_id_to_scores[sid] = scores
             skill_details[str(sid)] = {
                 "num_devices_scored": len(scores),
-                "top3": sorted(scores.items(), key=lambda x: (-x[1], x[0]))[:3],
+                "top3": ranked_scores[:3],
+                "topk": ranked_scores[:top_k],
             }
 
     all_ips = sorted({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
