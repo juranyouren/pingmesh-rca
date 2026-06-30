@@ -29,7 +29,7 @@ def _skill_ret(combined, topo=None, temporal=None):
 
 
 class ConfidenceGateTest(unittest.TestCase):
-    def test_bypasses_llm_when_combined_margin_is_high(self):
+    def test_records_evidence_but_does_not_bypass_before_data_designed_gate(self):
         gate = assess_gate(
             _skill_ret(
                 combined=[("10.0.0.1", 96.0), ("10.0.0.2", 70.0)],
@@ -39,8 +39,9 @@ class ConfidenceGateTest(unittest.TestCase):
             high_margin=15.0,
         )
 
-        self.assertEqual(gate["decision"], "bypass_llm")
-        self.assertEqual(gate["reason"], "combined_high_margin")
+        self.assertEqual(gate["decision"], "invoke_llm")
+        self.assertEqual(gate["reason"], "gate_design_pending_failure_analysis")
+        self.assertEqual(gate["policy_version"], "analysis_only_no_bypass")
         self.assertEqual(gate["recommended_ips"], ["10.0.0.1", "10.0.0.2"])
         self.assertGreaterEqual(gate["methods"]["combined"]["margin"], 15.0)
 
@@ -56,11 +57,12 @@ class ConfidenceGateTest(unittest.TestCase):
         )
 
         self.assertEqual(gate["decision"], "invoke_llm")
-        self.assertEqual(gate["reason"], "low_confidence_or_disagreement")
+        self.assertEqual(gate["reason"], "gate_design_pending_failure_analysis")
+        self.assertEqual(gate["policy_version"], "analysis_only_no_bypass")
         self.assertLess(gate["methods"]["combined"]["margin"], 15.0)
         self.assertEqual(gate["agreement"]["top1_votes_for_combined"], 1)
 
-    def test_bypasses_llm_when_topo_and_temporal_agree_with_combined(self):
+    def test_records_method_agreement_but_still_invokes_llm_before_redesign(self):
         gate = assess_gate(
             _skill_ret(
                 combined=[("10.0.0.1", 80.0), ("10.0.0.2", 74.0)],
@@ -71,8 +73,8 @@ class ConfidenceGateTest(unittest.TestCase):
             agreement_margin=5.0,
         )
 
-        self.assertEqual(gate["decision"], "bypass_llm")
-        self.assertEqual(gate["reason"], "method_agreement")
+        self.assertEqual(gate["decision"], "invoke_llm")
+        self.assertEqual(gate["reason"], "gate_design_pending_failure_analysis")
         self.assertEqual(gate["agreement"]["top1_votes_for_combined"], 3)
 
     def test_invokes_llm_when_rankings_are_missing(self):

@@ -1,15 +1,17 @@
-"""
-Confidence gate for LLM RCA reranking.
+"""Confidence evidence extractor for LLM RCA reranking.
 
-The gate reads the structured evidence JSON already produced by
-`evidence_fusion.build_fused_evidence` and decides whether the deterministic
-topology/temporal ranking is confident enough to bypass LLM reranking.
+The previous margin/agreement bypass policy is intentionally disabled. This
+module now records ranking evidence only; every valid case is still sent to LLM
+until a new gate is designed from skillpipe failure statistics.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
+
+
+POLICY_VERSION = "analysis_only_no_bypass"
 
 
 def _safe_load_skill_ret(skill_ret: str) -> Optional[Dict[str, Any]]:
@@ -47,7 +49,7 @@ def _method_confidence(data: Dict[str, Any], method: str) -> Dict[str, Any]:
         for item in rankings
         if isinstance(item, dict) and item.get("ip")
     ]
-    entries.sort(key=lambda x: x["score"], reverse=True)
+    entries.sort(key=lambda x: (-x["score"], x["ip"]))
 
     if not entries:
         return {"top_ip": None, "top_score": 0.0, "runner_up_score": 0.0, "margin": 0.0}
@@ -78,22 +80,14 @@ def assess_gate(
     high_margin: float = 15.0,
     agreement_margin: float = 8.0,
 ) -> Dict[str, Any]:
-    """
-    Decide whether to bypass LLM reranking for one case.
-
-    Returns a JSON-serializable dict with:
-      - decision: "bypass_llm" or "invoke_llm"
-      - reason: compact machine-readable reason
-      - methods: per-method top score and margin
-      - agreement: method agreement with combined top-1
-      - recommended_ips: deterministic top combined candidates
-    """
+    """Extract confidence evidence for one case without bypassing LLM."""
     data = _safe_load_skill_ret(skill_ret)
     if not data:
         return {
             "enabled": True,
             "decision": "invoke_llm",
             "reason": "invalid_or_missing_rankings",
+            "policy_version": POLICY_VERSION,
             "methods": {},
             "agreement": {"top1_votes_for_combined": 0, "method_top_ips": {}},
             "recommended_ips": [],
@@ -109,6 +103,7 @@ def assess_gate(
             "enabled": True,
             "decision": "invoke_llm",
             "reason": "invalid_or_missing_rankings",
+            "policy_version": POLICY_VERSION,
             "methods": methods,
             "agreement": {"top1_votes_for_combined": 0, "method_top_ips": {}},
             "recommended_ips": [],
@@ -116,22 +111,13 @@ def assess_gate(
 
     method_top_ips = {name: info["top_ip"] for name, info in methods.items()}
     votes = sum(1 for ip in method_top_ips.values() if ip == combined_top)
-    recommended_ips = _combined_ips(data)
-
-    decision = "invoke_llm"
-    reason = "low_confidence_or_disagreement"
-    if methods["combined"]["margin"] >= high_margin:
-        decision = "bypass_llm"
-        reason = "combined_high_margin"
-    elif votes >= 2 and methods["combined"]["margin"] >= agreement_margin:
-        decision = "bypass_llm"
-        reason = "method_agreement"
 
     return {
         "enabled": True,
-        "decision": decision,
-        "reason": reason,
-        "thresholds": {
+        "decision": "invoke_llm",
+        "reason": "gate_design_pending_failure_analysis",
+        "policy_version": POLICY_VERSION,
+        "legacy_thresholds_ignored": {
             "high_margin": high_margin,
             "agreement_margin": agreement_margin,
         },
@@ -140,16 +126,16 @@ def assess_gate(
             "top1_votes_for_combined": votes,
             "method_top_ips": method_top_ips,
         },
-        "recommended_ips": recommended_ips,
+        "recommended_ips": _combined_ips(data),
     }
 
 
 def make_bypass_response(gate: Dict[str, Any]) -> str:
-    """Build a Score_N-compatible JSON response for bypassed cases."""
+    """Build a Score_N-compatible JSON response for future bypassed cases."""
     payload = {
         "reasoning": (
-            "置信度门控判定算法排名足够可靠，跳过 LLM 重排。"
-            f" reason={gate.get('reason')}; "
+            "Confidence gate bypassed LLM reranking. "
+            f"reason={gate.get('reason')}; "
             f"combined_margin={gate.get('methods', {}).get('combined', {}).get('margin', 0)}"
         ),
         "ip": gate.get("recommended_ips", [])[:3],

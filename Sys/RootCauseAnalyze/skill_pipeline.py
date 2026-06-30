@@ -107,23 +107,12 @@ except Exception:
     _DEFAULT_PAGERANK_ALPHA = 0.85
 
 
-def _score_topo(node_list, infodta, weight_dirpath=None, directed=True,
-                alarm_taxonomy=None, case_dir=""):
+def _score_topo(node_list, infodta, weight_dirpath=None, directed=True):
     """
-    PageRank scoring. If alarm_taxonomy is provided, causal alarms get full weight,
-    symptom alarms get reduced weight (0.3x), noise alarms get near-zero (0.05x).
-    If case_dir has alarm_taxonomy.json, it is auto-loaded when no taxonomy is provided.
+    PageRank scoring.
     """
     if nx is None:
         return {}
-
-    # 若无显式 taxonomy, 尝试从 case 目录自动加载 per-case 分类
-    tax = alarm_taxonomy
-    if tax is None and case_dir:
-        tax_path = os.path.join(case_dir, "alarm_taxonomy.json")
-        if os.path.exists(tax_path):
-            try: tax = json.load(open(tax_path, encoding="utf-8"))
-            except Exception: pass
 
     weights_dict = _load_alarm_weights(weight_dirpath)
     source_ips, sink_ips = _parse_endpoint_ips(infodta)
@@ -146,15 +135,6 @@ def _score_topo(node_list, infodta, weight_dirpath=None, directed=True,
             name = evt if isinstance(evt, str) else evt.get("alarm_name", evt.get("name", ""))
             if name and (name_lower := str(name).lower()) in weights_dict:
                 w = weights_dict[name_lower]
-                # 三分类加权
-                if tax and name in tax:
-                    atype = tax[name].get("type", "symptom")
-                    if atype == "causal":
-                        w = w * 1.0            # 根因型: 全权重
-                    elif atype == "symptom":
-                        w = w * 0.3            # 继发型: 降权
-                    else:
-                        w = w * 0.05           # 噪声型: 几乎忽略
                 if w > max_weight:
                     max_weight = w
 
@@ -210,20 +190,10 @@ def _score_topo(node_list, infodta, weight_dirpath=None, directed=True,
 
 # ── Skill 3: temporal_score_devices ─────────────────────────────
 
-def _score_temporal(node_list, infodta=None, dirpath="", alarm_taxonomy=None):
+def _score_temporal(node_list, infodta=None, dirpath=""):
     """
-    Run temporal scorer. If alarm_taxonomy provided, devices with ONLY
-    symptom/noise alarms get their temporal score heavily penalized (×0.1).
-    If dirpath has alarm_taxonomy.json, it is auto-loaded when no taxonomy is provided.
+    Run temporal scorer.
     """
-    # 若无显式 taxonomy, 尝试从 case 目录自动加载 per-case 分类
-    tax = alarm_taxonomy
-    if tax is None and dirpath:
-        tax_path = os.path.join(dirpath, "alarm_taxonomy.json")
-        if os.path.exists(tax_path):
-            try: tax = json.load(open(tax_path, encoding="utf-8"))
-            except Exception: pass
-
     skill_map = _load_skills()
     fn = skill_map.get("temporal_score_devices")
     if not fn:
@@ -241,21 +211,6 @@ def _score_temporal(node_list, infodta=None, dirpath="", alarm_taxonomy=None):
     max_s = max(v for v in raw.values() if isinstance(v, (int, float)))
     scores = {ip: s / max_s for ip, s in raw.items()
               if isinstance(s, (int, float))} if max_s > 0 else {}
-
-    # 分类加权: 只有非 causal 告警的设备惩罚
-    if tax:
-        for nd in node_list:
-            ip = _get_device_ip(nd)
-            if ip not in scores or scores[ip] == 0:
-                continue
-            has_causal = any(
-                tax.get(
-                    (evt if isinstance(evt, str) else evt.get("alarm_name", evt.get("name", ""))).strip(),
-                    {}).get("type") == "causal"
-                for evt in nd.get("alarms", []) + nd.get("logs", [])
-            )
-            if not has_causal:
-                scores[ip] = scores[ip] * 0.1  # 无根因型告警, 时序嫌疑大幅削弱
 
     return scores
 
@@ -282,21 +237,18 @@ def _combine_scores(skill_id_to_scores, node_ips):
         vals = [scores.get(ip, 0) for scores in skill_id_to_scores.values()]
         combined[ip] = sum(vals) / len(vals)
 
-    sorted_items = sorted(combined.items(), key=lambda x: x[1], reverse=True)
+    sorted_items = sorted(combined.items(), key=lambda x: (-x[1], x[0]))
     return [ip for ip, _ in sorted_items]
 
 
 def rank_devices_by_skills(node_list, infodta, dirpath="",
                            skill_ids=(1, 2), directed=True,
-                           weight_dirpath=None, top_k=5,
-                           alarm_taxonomy=None):
+                           weight_dirpath=None, top_k=5):
     """
     核心函数：对一组 skill 运行评分并融合排名。
 
     Args:
         ...
-        alarm_taxonomy: 告警分类字典 {name: {type, severity}}，
-                        None 时保持原方案不变
     """
     skill_id_to_scores = {}
     skill_details = {}
@@ -308,11 +260,9 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
         try:
             if sid == 1:
                 scores = scorer(node_list, infodta,
-                                weight_dirpath=weight_dirpath, directed=directed,
-                                alarm_taxonomy=alarm_taxonomy, case_dir=dirpath)
+                                weight_dirpath=weight_dirpath, directed=directed)
             elif sid == 2:
-                scores = scorer(node_list, infodta, dirpath=dirpath,
-                                alarm_taxonomy=alarm_taxonomy)
+                scores = scorer(node_list, infodta, dirpath=dirpath)
             else:
                 scores = scorer(node_list, infodta)
         except Exception:
@@ -321,10 +271,10 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
             skill_id_to_scores[sid] = scores
             skill_details[str(sid)] = {
                 "num_devices_scored": len(scores),
-                "top3": sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3],
+                "top3": sorted(scores.items(), key=lambda x: (-x[1], x[0]))[:3],
             }
 
-    all_ips = list({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
+    all_ips = sorted({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
     ranked = _combine_scores(skill_id_to_scores, all_ips)
     return ranked[:top_k], skill_details
 
@@ -358,15 +308,12 @@ def _find_full_link_file(dirpath, filenames):
 
 
 def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2),
-                       directed=True, top_k=5, weight_path=None,
-                       alarm_taxonomy=None):
+                       directed=True, top_k=5, weight_path=None):
     """
     遍历数据集，对每个 case 运行指定 skill 组合，输出 res.json。
 
     Args:
         weight_path: 告警权重文件路径，None 则从 config 读默认值
-        alarm_taxonomy: 告警分类字典 {name: {type, severity}}，
-                        None 时保持原方案不变
     """
     if weight_path:
         _wpath = weight_path
@@ -378,8 +325,6 @@ def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2),
             _wpath = None
 
     mode_desc = "topo+temporal"
-    if alarm_taxonomy:
-        mode_desc += "_classified"
 
     print(f"Skill Pipeline ({mode_desc}, top_k={top_k})")
     print(f"扫描目录: {data_root}")
@@ -403,8 +348,7 @@ def run_skill_pipeline(data_root, output_dir, skill_ids=(1, 2),
             predicted_ips, details = rank_devices_by_skills(
                 node_list, info, dirpath,
                 skill_ids=skill_ids, directed=directed,
-                weight_dirpath=_wpath, top_k=top_k,
-                alarm_taxonomy=alarm_taxonomy)
+                weight_dirpath=_wpath, top_k=top_k)
 
             mock_response = json.dumps({
                 "reasoning": f"纯算法流水线 ({mode_desc})，skill_ids={list(skill_ids)}。",
@@ -463,22 +407,10 @@ if __name__ == "__main__":
                    help="输出的预测 IP 数量 (default: 5)")
     p.add_argument("--weight-file", "-w", default=None,
                    help="告警权重文件路径（默认: config.data.alarm_weights）")
-    p.add_argument("--taxonomy", "-t", default=None,
-                   help="告警分类 taxonomy 文件路径 (alarm_taxonomy.json)")
     args = p.parse_args()
-
-    # 加载 taxonomy
-    taxonomy = None
-    if args.taxonomy and os.path.exists(args.taxonomy):
-        taxonomy = json.load(open(args.taxonomy, "r", encoding="utf-8"))
-        print(f"已加载 taxonomy: {len(taxonomy)} 条")
-    elif args.taxonomy:
-        print(f"WARNING: taxonomy 文件不存在: {args.taxonomy}")
 
     variant = "dir" if args.directed else "undir"
     skill_tag = "_".join(str(s) for s in args.skills)
-    if taxonomy:
-        skill_tag += "_classified"
     if args.weight_file:
         wtag = os.path.splitext(os.path.basename(args.weight_file))[0]
         skill_tag += f"__{wtag}"
@@ -493,5 +425,4 @@ if __name__ == "__main__":
                        skill_ids=args.skills,
                        directed=args.directed,
                        top_k=args.top_k,
-                       weight_path=args.weight_file,
-                       alarm_taxonomy=taxonomy)
+                       weight_path=args.weight_file)

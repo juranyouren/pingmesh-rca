@@ -23,9 +23,6 @@ export PINGMESH_WEIGHTS_LLM="${PINGMESH_WEIGHTS_LLM:-${PINGMESH_PROJECT_ROOT}/da
 # ── 模型 ──
 export PINGMESH_MODEL_PATH="${PINGMESH_MODEL_PATH:-/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B}"
 
-# ── 告警分类 ──
-export PINGMESH_TAXONOMY="${PINGMESH_TAXONOMY:-${PINGMESH_PROJECT_ROOT}/data/weights/alarm_taxonomy.json}"
-
 # ── NPU / 推理参数 ──
 export PINGMESH_NPU_CARDS="${PINGMESH_NPU_CARDS:-0,1,2,3,4,5,6,7}"
 export PINGMESH_SKILLS="${PINGMESH_SKILLS:-1 2}"
