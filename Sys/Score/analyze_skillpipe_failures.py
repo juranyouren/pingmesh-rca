@@ -85,7 +85,11 @@ def _method_entries(details: Dict[str, Any], method_id: str) -> List[Tuple[str, 
     method = details.get(method_id, {})
     if not isinstance(method, dict):
         return []
-    return sorted(_normalize_top_entries(method.get("top3", [])), key=lambda item: (-item[1], item[0]))
+    for key in ("topk", "top5", "top3"):
+        entries = _normalize_top_entries(method.get(key, []))
+        if entries:
+            return sorted(entries, key=lambda item: (-item[1], item[0]))
+    return []
 
 
 def _method_summary(entries: Sequence[Tuple[str, float]]) -> Dict[str, Any]:
@@ -113,6 +117,29 @@ def _best_rank(pred_ips: Sequence[str], gt_ips: Sequence[str]) -> Optional[int]:
 
 def _rank_in_entries(entries: Sequence[Tuple[str, float]], gt_ips: Sequence[str]) -> Optional[int]:
     return _best_rank([ip for ip, _score in entries], gt_ips)
+
+
+def _hit_in_entries(entries: Sequence[Tuple[str, float]], gt_ips: Sequence[str], k: int) -> bool | None:
+    return hit_at([ip for ip, _score in entries], gt_ips, k)
+
+
+def _method_failure_pattern(
+    *,
+    gt_ips: Sequence[str],
+    topo_entries: Sequence[Tuple[str, float]],
+    temporal_entries: Sequence[Tuple[str, float]],
+) -> str:
+    if not gt_ips:
+        return "unlabeled"
+
+    topo_has = bool(topo_entries)
+    temporal_has = bool(temporal_entries)
+    topo_top1 = _hit_in_entries(topo_entries, gt_ips, 1)
+    temporal_top1 = _hit_in_entries(temporal_entries, gt_ips, 1)
+
+    topo_label = "missing" if not topo_has else ("right" if topo_top1 else "wrong")
+    temporal_label = "missing" if not temporal_has else ("right" if temporal_top1 else "wrong")
+    return f"topo_{topo_label}_temporal_{temporal_label}"
 
 
 def _gt_ips_from_record(record: Dict[str, Any]) -> List[str]:
@@ -165,6 +192,10 @@ def _case_row(record: Dict[str, Any], index: int, margin_threshold: float) -> Di
     temporal_entries = _method_entries(details, "2")
     topo = _method_summary(topo_entries)
     temporal = _method_summary(temporal_entries)
+    topo_ips = [ip for ip, _score in topo_entries]
+    temporal_ips = [ip for ip, _score in temporal_entries]
+    topo_gt_rank = _rank_in_entries(topo_entries, gt_ips)
+    temporal_gt_rank = _rank_in_entries(temporal_entries, gt_ips)
 
     combined_top1 = skill_ips[0] if skill_ips else None
     method_top_ips = {
@@ -196,21 +227,36 @@ def _case_row(record: Dict[str, Any], index: int, margin_threshold: float) -> Di
         "combined_top2": skill_ips[1] if len(skill_ips) > 1 else None,
         "combined_top3": skill_ips[2] if len(skill_ips) > 2 else None,
         "topo_top1": topo["top_ip"],
+        "topo_ips": topo_ips,
+        "topo_rank_scope": len(topo_ips),
         "topo_margin": topo["margin"],
+        "topo_gt_rank": topo_gt_rank,
+        "topo_hit_top1": _hit_in_entries(topo_entries, gt_ips, 1),
+        "topo_hit_top3": _hit_in_entries(topo_entries, gt_ips, 3),
         "temporal_top1": temporal["top_ip"],
+        "temporal_ips": temporal_ips,
+        "temporal_rank_scope": len(temporal_ips),
         "temporal_margin": temporal["margin"],
+        "temporal_gt_rank": temporal_gt_rank,
+        "temporal_hit_top1": _hit_in_entries(temporal_entries, gt_ips, 1),
+        "temporal_hit_top3": _hit_in_entries(temporal_entries, gt_ips, 3),
         "min_method_margin": round(min_method_margin, 6),
         "top1_votes_for_combined": top1_votes_for_combined,
         "method_disagreement": method_disagreement,
         "low_margin": low_margin,
         "gt_rank_in_skill": best_rank,
-        "gt_rank_in_topo_top3": _rank_in_entries(topo_entries, gt_ips),
-        "gt_rank_in_temporal_top3": _rank_in_entries(temporal_entries, gt_ips),
+        "gt_rank_in_topo_top3": _best_rank(topo_ips[:3], gt_ips),
+        "gt_rank_in_temporal_top3": _best_rank(temporal_ips[:3], gt_ips),
         "top1_hit": top1_hit,
         "top3_hit": top3_hit,
         "top5_hit": top5_hit,
         "best_rank": best_rank,
         "failure_type": ftype,
+        "method_failure_pattern": _method_failure_pattern(
+            gt_ips=gt_ips,
+            topo_entries=topo_entries,
+            temporal_entries=temporal_entries,
+        ),
         "suggested_gate_action": _suggest_action(ftype, method_disagreement, low_margin),
     }
 
@@ -243,6 +289,7 @@ def analyze_skillpipe_records(
         "top5_hits": sum(1 for row in labeled if row["top5_hit"] is True),
         "margin_threshold": margin_threshold,
         "failure_type_counts": dict(Counter(row["failure_type"] for row in rows)),
+        "method_failure_pattern_counts": dict(Counter(row["method_failure_pattern"] for row in rows)),
         "failure_feature_counts": dict(failure_feature_counts),
         "suggested_gate_action_counts": dict(Counter(row["suggested_gate_action"] for row in rows)),
     }
@@ -264,6 +311,7 @@ def _write_csv(path: str, rows: Iterable[Dict[str, Any]], fieldnames: Sequence[s
 def _report_text(summary: Dict[str, Any]) -> str:
     failure_counts = summary.get("failure_type_counts", {})
     action_counts = summary.get("suggested_gate_action_counts", {})
+    pattern_counts = summary.get("method_failure_pattern_counts", {})
     feature_counts = summary.get("failure_feature_counts", {})
     return "\n".join(
         [
@@ -286,6 +334,10 @@ def _report_text(summary: Dict[str, Any]) -> str:
             "## Failure Features",
             "",
             *[f"- {key}: {value}" for key, value in sorted(feature_counts.items())],
+            "",
+            "## Method Failure Patterns",
+            "",
+            *[f"- {key}: {value}" for key, value in sorted(pattern_counts.items())],
             "",
             "## Candidate Gate Actions",
             "",
@@ -317,7 +369,17 @@ def write_analysis_outputs(rows: List[Dict[str, Any]], summary: Dict[str, Any], 
         "skill_ips",
         "combined_top1",
         "topo_top1",
+        "topo_ips",
+        "topo_rank_scope",
+        "topo_gt_rank",
+        "topo_hit_top1",
+        "topo_hit_top3",
         "temporal_top1",
+        "temporal_ips",
+        "temporal_rank_scope",
+        "temporal_gt_rank",
+        "temporal_hit_top1",
+        "temporal_hit_top3",
         "topo_margin",
         "temporal_margin",
         "min_method_margin",
@@ -327,6 +389,7 @@ def write_analysis_outputs(rows: List[Dict[str, Any]], summary: Dict[str, Any], 
         "gt_rank_in_topo_top3",
         "gt_rank_in_temporal_top3",
         "failure_type",
+        "method_failure_pattern",
         "suggested_gate_action",
     ]
     _write_csv(failures_csv, [row for row in rows if row["label_available"] and row["top1_hit"] is False], fields)
