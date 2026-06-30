@@ -105,56 +105,50 @@ def build_fused_evidence(node_list, info, dirpath,
     if skill_map is None: skill_map = _lazy_load_skill_map()
 
     # ── 1. 核心评分（与 skill_pipeline 一致）──
-    from Sys.RootCauseAnalyze.skill_pipeline import _score_topo, _score_temporal
-    norm_pr = _score_topo(node_list, info, weight_dirpath=weight_dirpath, directed=True)
-    norm_ts = _score_temporal(node_list, info, dirpath=dirpath)
-
-    # ── 2. 综合分 & 排序 ──
-    all_ips = list({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
-    combined = {ip: (norm_pr.get(ip, 0) + norm_ts.get(ip, 0)) / 2.0 for ip in all_ips}
-    candidate_ips = sorted(combined, key=combined.get, reverse=True)[:top_k]
+    from Sys.RootCauseAnalyze.skill_pipeline import rank_devices_by_skills
+    candidate_ips, skill_details = rank_devices_by_skills(
+        node_list,
+        info,
+        dirpath=dirpath,
+        skill_ids=(1, 2),
+        directed=True,
+        weight_dirpath=weight_dirpath,
+        top_k=top_k,
+    )
+    topo_detail = skill_details.get("1", {})
+    temporal_detail = skill_details.get("2", {})
+    combined_detail = skill_details.get("combined", {})
 
     # ── 3. 告警权重 & node lookup ──
     weights_dict = _load_alarm_weights(weight_dirpath)
     node_by_ip = {_get_device_ip(n): n for n in node_list}
 
-    # ── 4. Topo 结构化字典 ──
-    topo_ranking = _run_topo(skill_map, node_list, info, weight_dirpath)
-    topo_by_ip = {r.get("ip"): r for r in topo_ranking}
-    topo_list = []
-    for rank, ip in enumerate(candidate_ips, 1):
-        tr = topo_by_ip.get(ip, {})
-        node = node_by_ip.get(ip, {})
-        topo_list.append({
-            "rank": rank,
-            "ip": ip,
-            "role": tr.get("role") or node.get("role", "UNKNOWN"),
-            "pr_score": round(norm_pr.get(ip, 0) * 100, 1),
-            "cross": node.get("cross", tr.get("cross", 0)),
-        })
-
-    # ── 5. Temporal 结构化字典 ──
-    from Sys.RootCauseAnalyze.skill_pipeline import _score_temporal as _ts
-    temporal_list = []
-    for rank, ip in enumerate(candidate_ips, 1):
-        node = node_by_ip.get(ip, {})
-        raw_vals = _compute_temporal_raw(node)
-        temporal_list.append({
-            "rank": rank,
-            "ip": ip,
-            "score": round(norm_ts.get(ip, 0) * 100, 1),
-        } | raw_vals)
+    # ── 4. Ranker own Top-K 结构化字典 ──
+    topo_list = topo_detail.get("topk", [])
+    temporal_list = temporal_detail.get("topk", [])
+    combined_list = combined_detail.get("topk", [])
 
     # ── 6. 组装 skill_ret JSON ──
     skill_ret = json.dumps({
-        "topo": {"description": TOPO_DESC, "rankings": topo_list},
-        "temporal": {"description": TEMPORAL_DESC, "rankings": temporal_list},
-        "combined_score_rankings": [{
-            "rank": i + 1,
-            "ip": ip,
-            "combined_score": round(combined[ip] * 100, 1),
-            "role": (topo_by_ip.get(ip, {}) or {}).get("role") or node_by_ip.get(ip, {}).get("role", "UNKNOWN"),
-        } for i, ip in enumerate(candidate_ips)],
+        "topo": {
+            "description": TOPO_DESC,
+            "rankings": topo_list,
+            "diagnostics": topo_detail.get("diagnostics", {}),
+            "trust_tree": topo_detail.get("trust_tree", {}),
+        },
+        "temporal": {
+            "description": TEMPORAL_DESC,
+            "rankings": temporal_list,
+            "diagnostics": temporal_detail.get("diagnostics", {}),
+            "trust_tree": temporal_detail.get("trust_tree", {}),
+        },
+        "combined_score_rankings": [
+            {
+                **item,
+                "role": node_by_ip.get(item.get("ip"), {}).get("role", "UNKNOWN"),
+            }
+            for item in combined_list
+        ],
     }, ensure_ascii=False, indent=2)
 
     # ── 7. info 概况 ──

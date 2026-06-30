@@ -1,8 +1,8 @@
-"""Confidence evidence extractor for LLM RCA reranking.
+"""Trust-tree gate for LLM RCA reranking.
 
-The previous margin/agreement bypass policy is intentionally disabled. This
-module now records ranking evidence only; every valid case is still sent to LLM
-until a new gate is designed from skillpipe failure statistics.
+The gate no longer computes a continuous confidence score. It evaluates two
+ranker-specific trust trees (topology and temporal) and routes each case to a
+deterministic ranker, LLM arbitration, or operator review.
 """
 
 from __future__ import annotations
@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-
-POLICY_VERSION = "analysis_only_no_bypass"
+from Sys.RootCauseAnalyze.trust_trees.common import normalize_entries, score_key_for, unique_ips
+from Sys.RootCauseAnalyze.trust_trees.router import POLICY_VERSION, route_with_trust_trees
+from Sys.RootCauseAnalyze.trust_trees.temporal_tree import assess_temporal_tree
+from Sys.RootCauseAnalyze.trust_trees.topo_tree import assess_topo_tree
 
 
 def _safe_load_skill_ret(skill_ret: str) -> Optional[Dict[str, Any]]:
@@ -22,14 +24,6 @@ def _safe_load_skill_ret(skill_ret: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-def _score_key(method: str) -> str:
-    if method == "topo":
-        return "pr_score"
-    if method == "temporal":
-        return "score"
-    return "combined_score"
-
-
 def _extract_rankings(data: Dict[str, Any], method: str) -> List[Dict[str, Any]]:
     if method == "combined":
         raw = data.get("combined_score_rankings", [])
@@ -38,40 +32,28 @@ def _extract_rankings(data: Dict[str, Any], method: str) -> List[Dict[str, Any]]
     return raw if isinstance(raw, list) else []
 
 
-def _method_confidence(data: Dict[str, Any], method: str) -> Dict[str, Any]:
-    rankings = _extract_rankings(data, method)
-    score_key = _score_key(method)
-    entries = [
-        {
-            "ip": item.get("ip"),
-            "score": float(item.get(score_key, 0) or 0),
-        }
-        for item in rankings
-        if isinstance(item, dict) and item.get("ip")
-    ]
-    entries.sort(key=lambda x: (-x["score"], x["ip"]))
+def _method_ips(data: Dict[str, Any], method: str, limit: int = 5) -> List[str]:
+    entries = normalize_entries(_extract_rankings(data, method), score_key_for(method))
+    return unique_ips(row.get("ip") for row in entries[:limit])
 
-    if not entries:
-        return {"top_ip": None, "top_score": 0.0, "runner_up_score": 0.0, "margin": 0.0}
 
-    top_score = entries[0]["score"]
-    runner_up = entries[1]["score"] if len(entries) > 1 else 0.0
+def _invalid_gate(reason: str) -> Dict[str, Any]:
+    empty_tree = {"state": "weak", "passed": [], "failed": [reason], "evidence": {}}
     return {
-        "top_ip": entries[0]["ip"],
-        "top_score": round(top_score, 4),
-        "runner_up_score": round(runner_up, 4),
-        "margin": round(top_score - runner_up, 4),
+        "enabled": True,
+        "decision": "invoke_llm",
+        "route": "llm",
+        "reason": reason,
+        "policy_version": POLICY_VERSION,
+        "recommended_ips": [],
+        "agreement": {
+            "rank_near": False,
+            "top3_overlap": 0,
+            "top3_overlap_ips": [],
+            "method_top_ips": {"topo": None, "temporal": None, "combined": None},
+        },
+        "trust_trees": {"topo": empty_tree, "temporal": empty_tree},
     }
-
-
-def _combined_ips(data: Dict[str, Any], limit: int = 3) -> List[str]:
-    ips = []
-    for item in _extract_rankings(data, "combined")[:limit]:
-        if isinstance(item, dict):
-            ip = item.get("ip")
-            if ip and ip not in ips:
-                ips.append(ip)
-    return ips
 
 
 def assess_gate(
@@ -80,64 +62,51 @@ def assess_gate(
     high_margin: float = 15.0,
     agreement_margin: float = 8.0,
 ) -> Dict[str, Any]:
-    """Extract confidence evidence for one case without bypassing LLM."""
+    """Assess trust-tree route for one case.
+
+    The margin arguments are accepted for backward CLI compatibility. They are
+    intentionally not used by the trust-tree policy.
+    """
     data = _safe_load_skill_ret(skill_ret)
     if not data:
-        return {
-            "enabled": True,
-            "decision": "invoke_llm",
-            "reason": "invalid_or_missing_rankings",
-            "policy_version": POLICY_VERSION,
-            "methods": {},
-            "agreement": {"top1_votes_for_combined": 0, "method_top_ips": {}},
-            "recommended_ips": [],
-        }
+        return _invalid_gate("invalid_or_missing_rankings")
 
-    methods = {
-        name: _method_confidence(data, name)
-        for name in ("combined", "topo", "temporal")
+    combined_ips = _method_ips(data, "combined")
+    topo_ips = _method_ips(data, "topo")
+    temporal_ips = _method_ips(data, "temporal")
+    if not combined_ips and not topo_ips and not temporal_ips:
+        return _invalid_gate("invalid_or_missing_rankings")
+
+    topo_tree = assess_topo_tree(data.get("topo", {}))
+    temporal_tree = assess_temporal_tree(data.get("temporal", {}))
+    gate = route_with_trust_trees(
+        combined_ips=combined_ips,
+        topo_ips=topo_ips,
+        temporal_ips=temporal_ips,
+        topo_tree=topo_tree,
+        temporal_tree=temporal_tree,
+    )
+    gate["legacy_thresholds_ignored"] = {
+        "high_margin": high_margin,
+        "agreement_margin": agreement_margin,
     }
-    combined_top = methods["combined"]["top_ip"]
-    if not combined_top:
-        return {
-            "enabled": True,
-            "decision": "invoke_llm",
-            "reason": "invalid_or_missing_rankings",
-            "policy_version": POLICY_VERSION,
-            "methods": methods,
-            "agreement": {"top1_votes_for_combined": 0, "method_top_ips": {}},
-            "recommended_ips": [],
-        }
-
-    method_top_ips = {name: info["top_ip"] for name, info in methods.items()}
-    votes = sum(1 for ip in method_top_ips.values() if ip == combined_top)
-
-    return {
-        "enabled": True,
-        "decision": "invoke_llm",
-        "reason": "gate_design_pending_failure_analysis",
-        "policy_version": POLICY_VERSION,
-        "legacy_thresholds_ignored": {
-            "high_margin": high_margin,
-            "agreement_margin": agreement_margin,
-        },
-        "methods": methods,
-        "agreement": {
-            "top1_votes_for_combined": votes,
-            "method_top_ips": method_top_ips,
-        },
-        "recommended_ips": _combined_ips(data),
-    }
+    return gate
 
 
 def make_bypass_response(gate: Dict[str, Any]) -> str:
-    """Build a Score_N-compatible JSON response for future bypassed cases."""
+    """Build a Score_N-compatible JSON response for routed non-LLM cases."""
+    decision = gate.get("decision")
+    route = gate.get("route")
+    if decision == "operator_review":
+        ips: List[str] = []
+    else:
+        ips = gate.get("recommended_ips", [])[:3]
+
     payload = {
         "reasoning": (
-            "Confidence gate bypassed LLM reranking. "
-            f"reason={gate.get('reason')}; "
-            f"combined_margin={gate.get('methods', {}).get('combined', {}).get('margin', 0)}"
+            "Trust-tree gate routed RCA without LLM final reranking. "
+            f"decision={decision}; route={route}; reason={gate.get('reason')}"
         ),
-        "ip": gate.get("recommended_ips", [])[:3],
+        "ip": ips,
     }
     return "```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```"

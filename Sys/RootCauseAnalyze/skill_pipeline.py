@@ -19,6 +19,9 @@ import json
 import time
 import importlib.util
 
+from Sys.RootCauseAnalyze.trust_trees.temporal_tree import assess_temporal_tree
+from Sys.RootCauseAnalyze.trust_trees.topo_tree import assess_topo_tree
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Skill loading (shared with evidence_fusion — same lazy loader)
@@ -54,6 +57,63 @@ def _load_skills(skills_dir=None):
 
 def _get_device_ip(node):
     return node.get("mgmt_ip", node.get("ip", node.get("name", "unknown")))
+
+
+def _event_name(evt):
+    if isinstance(evt, str):
+        return evt
+    if isinstance(evt, dict):
+        return evt.get("alarm_name", evt.get("name", ""))
+    return ""
+
+
+def _event_ts(evt):
+    if not isinstance(evt, dict):
+        return None
+    raw = evt.get("alarm_time") or evt.get("time")
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _node_events(node):
+    return node.get("alarms", []) + node.get("logs", []) if isinstance(node, dict) else []
+
+
+def _node_alarm_weight(node, weights_dict):
+    max_weight = 0
+    hit_names = []
+    for evt in _node_events(node):
+        name = _event_name(evt)
+        if not name:
+            continue
+        weight = weights_dict.get(str(name).lower(), 0)
+        if weight > 0:
+            max_weight = max(max_weight, weight)
+            if name not in hit_names:
+                hit_names.append(name)
+    return max_weight, hit_names
+
+
+def _source_sink_related(ip, node, source_ips, sink_ips):
+    endpoints = set(source_ips + sink_ips)
+    if ip in endpoints:
+        return True
+    neighbors = set(node.get("linked_to", []) + node.get("linked_from", []))
+    return bool(neighbors & endpoints)
+
+
+def _seed_type(node, max_weight, source_sink_related):
+    if max_weight > 0:
+        return "alarm_weight"
+    if node.get("alarms"):
+        return "alarm_count"
+    if node.get("logs"):
+        return "log"
+    if source_sink_related:
+        return "endpoint"
+    return "baseline"
 
 
 def _load_alarm_weights(weight_dirpath):
@@ -225,6 +285,176 @@ SKILL_SCORER = {
 }
 
 
+def _sorted_score_items(scores, top_k):
+    return sorted(scores.items(), key=lambda x: (-x[1], x[0]))[:top_k]
+
+
+def _combined_score_items(skill_id_to_scores, node_ips, top_k):
+    if not skill_id_to_scores:
+        return []
+    combined = {}
+    for ip in node_ips:
+        vals = [scores.get(ip, 0) for scores in skill_id_to_scores.values()]
+        combined[ip] = sum(vals) / len(vals)
+    return sorted(combined.items(), key=lambda x: (-x[1], x[0]))[:top_k]
+
+
+def _topo_details(node_list, infodta, scores, weight_dirpath, directed, top_k):
+    weights_dict = _load_alarm_weights(weight_dirpath)
+    source_ips, sink_ips = _parse_endpoint_ips(infodta)
+    node_by_ip = {_get_device_ip(node): node for node in node_list if _get_device_ip(node) != "unknown"}
+    scores = scores or {}
+
+    fallback_scores = {}
+    for ip, node in node_by_ip.items():
+        max_weight, _hit_names = _node_alarm_weight(node, weights_dict)
+        related = _source_sink_related(ip, node, source_ips, sink_ips)
+        try:
+            cross = float(node.get("cross", 0) or 0)
+        except (TypeError, ValueError):
+            cross = 0.0
+        fallback_scores[ip] = max_weight + cross + len(node.get("alarms", [])) * 2.0 + len(node.get("logs", [])) * 0.5 + (0.5 if related else 0.0)
+
+    ranking_scores = scores if scores else fallback_scores
+    directed_scores = scores if directed else _score_topo(node_list, infodta, weight_dirpath=weight_dirpath, directed=True)
+    undirected_scores = _score_topo(node_list, infodta, weight_dirpath=weight_dirpath, directed=False) if scores else {}
+    directed_top3 = [ip for ip, _ in _sorted_score_items(directed_scores or {}, 3)]
+    undirected_top3 = [ip for ip, _ in _sorted_score_items(undirected_scores or {}, 3)]
+
+    rankings = []
+    for rank, (ip, score) in enumerate(_sorted_score_items(ranking_scores or {}, top_k), 1):
+        node = node_by_ip.get(ip, {})
+        max_weight, hit_names = _node_alarm_weight(node, weights_dict)
+        related = _source_sink_related(ip, node, source_ips, sink_ips)
+        rankings.append({
+            "rank": rank,
+            "ip": ip,
+            "pr_score": round(score, 6),
+            "cross": node.get("cross", 0),
+            "max_alarm_weight": max_weight,
+            "high_weight_alarm_hit": max_weight > 0,
+            "high_weight_alarms": hit_names[:10],
+            "source_sink_related": related,
+            "seed_type": _seed_type(node, max_weight, related),
+        })
+
+    block = {
+        "num_devices_scored": len(scores),
+        "top3": rankings[:3],
+        "topk": rankings,
+        "rankings": rankings,
+        "diagnostics": {
+            "pagerank_available": bool(scores),
+            "directed_top3": directed_top3,
+            "undirected_top3": undirected_top3,
+        },
+    }
+    block["trust_tree"] = assess_topo_tree(block)
+    return block
+
+
+def _temporal_reference_time(infodta, dirpath):
+    ref_time_ms = infodta.get("alarm_time") if isinstance(infodta, dict) else None
+    if ref_time_ms is None and dirpath:
+        for fname in os.listdir(dirpath) if os.path.isdir(dirpath) else []:
+            if not fname.endswith("_info.json"):
+                continue
+            try:
+                with open(os.path.join(dirpath, fname), encoding="utf-8") as f:
+                    ref_time_ms = json.load(f).get("alarm_time")
+                if ref_time_ms is not None:
+                    break
+            except Exception:
+                pass
+    try:
+        return int(ref_time_ms) if ref_time_ms is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _temporal_density(timestamps):
+    if len(timestamps) < 2:
+        return float(len(timestamps))
+    span_ms = timestamps[-1] - timestamps[0]
+    if span_ms <= 0:
+        return float(len(timestamps))
+    return len(timestamps) / max(span_ms / 60000.0, 0.001)
+
+
+def _temporal_feature_details(node_list, infodta, dirpath):
+    ref_time_ms = _temporal_reference_time(infodta, dirpath)
+    device_timestamps = {}
+    for node in node_list:
+        ip = _get_device_ip(node)
+        if ip == "unknown" or not ip:
+            continue
+        timestamps = sorted(ts for ts in (_event_ts(evt) for evt in _node_events(node)) if ts is not None)
+        device_timestamps[ip] = timestamps
+
+    all_first_ts = sorted(tss[0] for tss in device_timestamps.values() if tss)
+    features = {}
+    for ip, timestamps in device_timestamps.items():
+        if not timestamps or ref_time_ms is None:
+            burst = early = density = raw_score = 0.0
+        else:
+            burst = sum(1 for ts in timestamps if abs(ts - ref_time_ms) <= 300000) / len(timestamps)
+            early = 1.0 / (all_first_ts.index(timestamps[0]) + 1) if timestamps[0] in all_first_ts else 0.0
+            density_raw = _temporal_density(timestamps)
+            density = min(density_raw / 20.0, 1.0)
+            raw_score = 0.40 * burst + 0.35 * early + 0.25 * density
+        features[ip] = {
+            "burst_score": round(burst, 6),
+            "early_bird_score": round(early, 6),
+            "density_score": round(density, 6),
+            "raw_temporal_score": round(raw_score, 6),
+            "timestamp_count": len(timestamps),
+        }
+
+    def top3_by(key):
+        return [
+            ip for ip, _val in sorted(
+                ((ip, vals[key]) for ip, vals in features.items()),
+                key=lambda item: (-item[1], item[0]),
+            )[:3]
+        ]
+
+    diagnostics = {
+        "ref_time_ms": ref_time_ms,
+        "devices_with_timestamps": sum(1 for tss in device_timestamps.values() if tss),
+        "burst_top3": top3_by("burst_score"),
+        "early_top3": top3_by("early_bird_score"),
+        "density_top3": top3_by("density_score"),
+    }
+    return features, diagnostics
+
+
+def _temporal_details(node_list, infodta, dirpath, scores, top_k):
+    node_by_ip = {_get_device_ip(node): node for node in node_list if _get_device_ip(node) != "unknown"}
+    features, diagnostics = _temporal_feature_details(node_list, infodta, dirpath)
+
+    rankings = []
+    for rank, (ip, score) in enumerate(_sorted_score_items(scores or {}, top_k), 1):
+        node = node_by_ip.get(ip, {})
+        rankings.append({
+            "rank": rank,
+            "ip": ip,
+            "score": round(score, 6),
+            "total_alarms": len(node.get("alarms", [])),
+            "total_logs": len(node.get("logs", [])),
+            **features.get(ip, {}),
+        })
+
+    block = {
+        "num_devices_scored": len(scores or {}),
+        "top3": rankings[:3],
+        "topk": rankings,
+        "rankings": rankings,
+        "diagnostics": diagnostics,
+    }
+    block["trust_tree"] = assess_temporal_tree(block)
+    return block
+
+
 def _combine_scores(skill_id_to_scores, node_ips):
     """
     每项 Skill 得分归一化到 [0,1] 后等权平均，返回按得分降序排列的 IP 列表。
@@ -252,6 +482,7 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
     """
     skill_id_to_scores = {}
     skill_details = {}
+    all_ips = sorted({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
 
     for sid in skill_ids:
         scorer = SKILL_SCORER.get(sid)
@@ -268,16 +499,27 @@ def rank_devices_by_skills(node_list, infodta, dirpath="",
         except Exception:
             scores = {}
         if scores:
-            ranked_scores = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
             skill_id_to_scores[sid] = scores
-            skill_details[str(sid)] = {
-                "num_devices_scored": len(scores),
-                "top3": ranked_scores[:3],
-                "topk": ranked_scores[:top_k],
-            }
+        if sid == 1:
+            skill_details[str(sid)] = _topo_details(node_list, infodta, scores, weight_dirpath, directed, top_k)
+        elif sid == 2:
+            skill_details[str(sid)] = _temporal_details(node_list, infodta, dirpath, scores, top_k)
 
-    all_ips = sorted({_get_device_ip(n) for n in node_list if _get_device_ip(n) != "unknown"})
+    if 1 in skill_ids and "1" not in skill_details:
+        skill_details["1"] = _topo_details(node_list, infodta, {}, weight_dirpath, directed, top_k)
+    if 2 in skill_ids and "2" not in skill_details:
+        skill_details["2"] = _temporal_details(node_list, infodta, dirpath, {}, top_k)
+
     ranked = _combine_scores(skill_id_to_scores, all_ips)
+    combined_topk = [
+        {"rank": rank, "ip": ip, "combined_score": round(score, 6)}
+        for rank, (ip, score) in enumerate(_combined_score_items(skill_id_to_scores, all_ips, top_k), 1)
+    ]
+    skill_details["combined"] = {
+        "top3": combined_topk[:3],
+        "topk": combined_topk,
+        "rankings": combined_topk,
+    }
     return ranked[:top_k], skill_details
 
 

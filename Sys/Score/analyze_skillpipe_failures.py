@@ -14,7 +14,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from Sys.Score.Score_N import Scorer
-from Sys.Score.credence_artifact_utils import (
+from Sys.Score.score_utils import (
     case_id_from_dir,
     dedupe,
     hit_at,

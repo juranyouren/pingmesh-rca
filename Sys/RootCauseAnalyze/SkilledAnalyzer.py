@@ -197,9 +197,10 @@ class SkilledAnalyzer:
                 high_margin=self.confidence_high_margin,
                 agreement_margin=self.confidence_agreement_margin,
             )
-            if gate.get("decision") == "bypass_llm":
+            if gate.get("decision") in ("bypass_llm", "operator_review"):
+                gate_tag = "CONFIDENCE_GATE_BYPASS" if gate.get("decision") == "bypass_llm" else "CONFIDENCE_GATE_OPERATOR_REVIEW"
                 final_prompt = (
-                    "CONFIDENCE_GATE_BYPASS\n"
+                    f"{gate_tag}\n"
                     "# 故障概况\n"
                     f"{info_data}\n\n"
                     "# 算法证据\n"
@@ -282,9 +283,12 @@ class SkilledAnalyzer:
                 confidence_gates.append(gate)
                 # 读取 gt_ips
                 gt_ips_list.append(self._read_gt_ips(dirpath))
-                if gate.get("decision") == "bypass_llm":
+                if gate.get("decision") in ("bypass_llm", "operator_review"):
                     final_responses[len(final_prompts) - 1] = make_bypass_response(gate)
-                    retrieval_responses[len(final_prompts) - 1] = "Confidence gate bypassed LLM"
+                    if gate.get("decision") == "operator_review":
+                        retrieval_responses[len(final_prompts) - 1] = "Confidence gate requested operator review"
+                    else:
+                        retrieval_responses[len(final_prompts) - 1] = "Confidence gate bypassed LLM"
                 else:
                     llm_indices.append(len(final_prompts) - 1)
                     llm_prompts.append(final_p)
