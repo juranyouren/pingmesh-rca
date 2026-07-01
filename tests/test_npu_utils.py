@@ -15,7 +15,9 @@ if _PROJECT_ROOT not in _sys.path:
     _sys.path.insert(0, _PROJECT_ROOT)
 
 from Sys.utils.npu_utils import (
+    _HBM_LINE,
     _MEM_LINE,
+    _parse_npu_smi_memory,
     _run_npu_smi,
     get_npu_memory_info,
     get_npu_free_memory,
@@ -25,18 +27,29 @@ from Sys.utils.npu_utils import (
 
 # ── sample npu-smi output snippets ────────────────────────────────────
 
+# 910B3 format: Memory-Usage = 0/0, HBM-Usage has real data
+_NPU_SMI_HBM = """
+NPU ID                         : 0
+Chip ID                        : 0
+Memory-Usage(MB)               : 0 / 0
+HBM-Usage(MB)                  : 18432 / 32768
+
+NPU ID                         : 1
+Chip ID                        : 0
+Memory-Usage(MB)               : 0 / 0
+HBM-Usage(MB)                  : 5120 / 32768
+
+NPU ID                         : 2
+Chip ID                        : 0
+Memory-Usage(MB)               : 0 / 0
+HBM-Usage(MB)                  : 24576 / 32768
+"""
+
+# Old format: Memory Usage(Capacity)
 _NPU_SMI_MEMORY = """
 NPU ID                         : 0
 Chip ID                        : 0
 Memory Usage(Capacity)         : 18432 MB / 32768 MB
-
-NPU ID                         : 1
-Chip ID                        : 0
-Memory Usage(Capacity)         : 5120 MB / 32768 MB
-
-NPU ID                         : 2
-Chip ID                        : 0
-Memory Usage(Capacity)         : 24576 MB / 32768 MB
 """
 
 _NPU_SMI_PROCESS = """
@@ -64,8 +77,9 @@ class _FakeResult:
 
 
 class GetNpuMemoryInfoTest(unittest.TestCase):
-    def test_parses_memory_output(self):
-        with _mock_run_ok(_NPU_SMI_MEMORY):
+    def test_parses_hbm_output(self):
+        """910B3 format: HBM-Usage has real data, Memory-Usage is 0/0."""
+        with _mock_run_ok(_NPU_SMI_HBM):
             info = get_npu_memory_info()
 
         self.assertIn(0, info)
@@ -77,7 +91,7 @@ class GetNpuMemoryInfoTest(unittest.TestCase):
         self.assertEqual(info[1]["used"], 5120)
 
     def test_filters_by_card_ids(self):
-        with _mock_run_ok(_NPU_SMI_MEMORY):
+        with _mock_run_ok(_NPU_SMI_HBM):
             info = get_npu_memory_info(card_ids=[0])
 
         self.assertIn(0, info)
@@ -92,7 +106,7 @@ class GetNpuMemoryInfoTest(unittest.TestCase):
 
 class GetNpuFreeMemoryTest(unittest.TestCase):
     def test_returns_free_per_card(self):
-        with _mock_run_ok(_NPU_SMI_MEMORY):
+        with _mock_run_ok(_NPU_SMI_HBM):
             free = get_npu_free_memory([0, 1])
 
         self.assertEqual(free[0], 32768 - 18432)
@@ -168,21 +182,37 @@ Memory Usage(Capacity)         : 2048 MB / 32768 MB
 
 
 class MemLineRegexTest(unittest.TestCase):
-    """Test that _MEM_LINE can parse different npu-smi output formats."""
+    """Test that _HBM_LINE and _MEM_LINE can parse different formats."""
 
-    def test_parses_standard_format(self):
-        line = "NPU ID                         : 0\nMemory Usage(Capacity)         : 18432 MB / 32768 MB"
-        matches = _MEM_LINE.findall(line)
-        self.assertEqual(len(matches), 1)
-        # (card_id, used, total) — "18432 / 32768"
-        self.assertEqual(matches[0], ("0", "18432", "32768"))
-
-    def test_parses_compact_format(self):
-        line = "NPU:0 Memory: 5000MB/32000MB"
-        matches = _MEM_LINE.findall(line)
+    def test_parses_hbm_format(self):
+        """910B3: HBM-Usage(MB) = 3381 / 65536"""
+        line = "NPU ID                         : 0\nHBM-Usage(MB)                  : 3381 / 65536"
+        matches = _HBM_LINE.findall(line)
         self.assertEqual(len(matches), 1)
         # (card_id, used, total)
-        self.assertEqual(matches[0], ("0", "5000", "32000"))
+        self.assertEqual(matches[0], ("0", "3381", "65536"))
+
+    def test_parses_memory_usage_format(self):
+        line = "NPU ID                         : 0\nMemory-Usage(MB)               : 18432 / 32768"
+        matches = _MEM_LINE.findall(line)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0], ("0", "18432", "32768"))
+
+    def test_hbm_preferred_over_memory(self):
+        """On 910B3 both columns exist; HBM should win."""
+        out = "NPU ID: 0\nMemory-Usage(MB) = 0 / 0\nHBM-Usage(MB) = 3381 / 65536"
+        info = _parse_npu_smi_memory(out)
+        self.assertIn(0, info)
+        self.assertEqual(info[0]["total"], 65536)
+        self.assertEqual(info[0]["used"], 3381)
+        self.assertEqual(info[0]["free"], 65536 - 3381)
+
+    def test_falls_back_to_memory_when_no_hbm(self):
+        out = "NPU ID: 0\nMemory-Usage(MB) = 5000 / 32000"
+        info = _parse_npu_smi_memory(out)
+        self.assertIn(0, info)
+        self.assertEqual(info[0]["total"], 32000)
+        self.assertEqual(info[0]["used"], 5000)
 
 
 if __name__ == "__main__":

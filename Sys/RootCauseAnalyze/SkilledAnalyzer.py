@@ -94,7 +94,7 @@ class SkilledAnalyzer:
         if top_k is None:
             top_k = config.temporal.top_k
 
-        print(f"[{os.getpid()}] vLLM 将按需初始化，使用的 NPU 卡号为: {ASCEND_RT_VISIBLE_DEVICES}")
+        print(f"[{os.getpid()}] vLLM 将按需初始化，使用的 NPU 卡号为: {ASCEND_RT_VISIBLE_DEVICES}", flush=True)
 
         self.model_path = model_path
         self.ASCEND_RT_VISIBLE_DEVICES = ASCEND_RT_VISIBLE_DEVICES
@@ -202,14 +202,14 @@ class SkilledAnalyzer:
         if card_ids:
             ok = wait_npu_memory(
                 card_ids,
-                required_free_ratio=0.25,
-                timeout=1800.0,
-                poll_interval=15.0,
+                required_free_ratio=0.15,
+                timeout=120.0,
+                poll_interval=5.0,
             )
             if not ok:
                 logger.warning(
-                    "NPU memory wait timed out for cards %s; "
-                    "vLLM init may fail with OOM.",
+                    "NPU memory wait timed out (120s) for cards %s; "
+                    "proceeding with vLLM init anyway.",
                     card_ids,
                 )
 
@@ -489,26 +489,14 @@ def _report_gt_check(root_path: str, reports: list):
 def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
-    print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
-
-    # ── NPU-aware stagger：轮询等待本 worker 的 NPU 卡空闲 ──────────
     card_ids = _parse_npu_cards(npus)
-    if card_ids:
-        # 每个 worker 等待自己的卡空闲，取代固定 60s 错峰
-        ok = wait_npu_memory(
-            card_ids,
-            required_free_ratio=0.25,
-            timeout=1800.0,
-            poll_interval=15.0,
-        )
-        if not ok:
-            print(f"[Worker {worker_id}] 警告: NPU 内存等待超时 (cards={card_ids})，"
-                  f"vLLM 初始化可能会 OOM。")
-    else:
-        # 无法解析 NPU 卡号时回退到固定错峰
-        sleep_time = (worker_id - 1) * 60
-        print(f"[Worker {worker_id}] 无法解析 NPU 卡号，固定等待 {sleep_time}s ...")
-        time.sleep(sleep_time)
+    print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}, cards={card_ids}", flush=True)
+
+    # ── simple staggered start to avoid thundering herd ──────────────
+    stagger_s = (worker_id - 1) * 5
+    if stagger_s > 0:
+        print(f"[Worker {worker_id}] 错峰等待 {stagger_s}s ...", flush=True)
+        time.sleep(stagger_s)
 
     analyzer = SkilledAnalyzer(
         ASCEND_RT_VISIBLE_DEVICES=npus,

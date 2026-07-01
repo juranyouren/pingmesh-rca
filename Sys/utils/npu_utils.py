@@ -33,19 +33,50 @@ def _run_npu_smi(args: List[str], timeout: float = 10) -> str:
 
 # ── memory ────────────────────────────────────────────────────────────
 
-_MEM_LINE = re.compile(
-    r"NPU\s*(?:ID|#)?\s*[：:]\s*(\d+).*?"
-    r"(?:Memory|内存).*?"
-    r"(\d+)\s*(?:MB|GiB|GB|MiB).*?"
-    r"(\d+)\s*(?:MB|GiB|GB|MiB)",
+# npu-smi on 910B3 outputs two "Usage" columns per NPU block:
+#   Memory-Usage(MB) = 0 / 0        ← device memory (often zero)
+#   HBM-Usage(MB)    = 3381 / 65536 ← the real HBM we care about
+# The unit (MB/GB) appears in the column header, not after each number.
+# Try HBM-Usage first; fall back to Memory-Usage for older hardware.
+
+_HBM_LINE = re.compile(
+    r"NPU\s*(?:ID|#)?\s*[：:]\s*(\d+)\s*.*?"
+    r"HBM-Usage.*?"
+    r"(\d+)\s*/\s*(\d+)",
     re.IGNORECASE | re.DOTALL,
 )
+
+_MEM_LINE = re.compile(
+    r"NPU\s*(?:ID|#)?\s*[：:]\s*(\d+)\s*.*?"
+    r"Memory-Usage.*?"
+    r"(\d+)\s*/\s*(\d+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _parse_npu_smi_memory(out: str, card_ids: Optional[List[int]] = None) -> Dict[int, Dict[str, int]]:
+    """Try HBM-Usage first; if none found, fall back to Memory-Usage."""
+    info: Dict[int, Dict[str, int]] = {}
+    for regex in (_HBM_LINE, _MEM_LINE):
+        for match in regex.finditer(out):
+            cid = int(match.group(1))
+            if card_ids is not None and cid not in card_ids:
+                continue
+            if cid in info:
+                continue  # already captured via HBM
+            used = int(match.group(2))
+            total = int(match.group(3))
+            info[cid] = {"total": total, "used": used, "free": total - used}
+        if info:
+            break
+    return info
 
 
 def get_npu_memory_info(card_ids: Optional[List[int]] = None) -> Dict[int, Dict[str, int]]:
     """Return {card_id: {"total": MiB, "used": MiB, "free": MiB}} for each card.
 
-    Parses ``npu-smi info -t memory`` (or ``npu-smi info -m`` as fallback).
+    Parses ``npu-smi info -t memory`` (preferring HBM-Usage), falls back to
+    ``npu-smi info -m``.
     """
     out = _run_npu_smi(["info", "-t", "memory"])
     if not out:
@@ -53,16 +84,7 @@ def get_npu_memory_info(card_ids: Optional[List[int]] = None) -> Dict[int, Dict[
     if not out:
         return {}
 
-    info: Dict[int, Dict[str, int]] = {}
-    for match in _MEM_LINE.finditer(out):
-        cid = int(match.group(1))
-        if card_ids is not None and cid not in card_ids:
-            continue
-        # npu-smi format: "used MB / total MB" — first capture = used, second = total
-        used = int(match.group(2))
-        total = int(match.group(3))
-        info[cid] = {"total": total, "used": used, "free": total - used}
-    return info
+    return _parse_npu_smi_memory(out, card_ids)
 
 
 def get_npu_free_memory(card_ids: List[int]) -> Dict[int, int]:
