@@ -7,7 +7,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 sys.path.append("/home/sbp/lixinyang/pingmesh")
-from utils.prompts import PROMPT,SKILLED_PROMPT
+from prompts import PROMPT, SKILLED_PROMPT
 from Sys.config import config
 from Sys.RootCauseAnalyze.skills.provider import BuiltinSkillProvider
 from Sys.utils.case_utils import find_full_link_file, read_gt_ips
