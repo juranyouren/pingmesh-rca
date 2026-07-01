@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from Sys.RootCauseAnalyze.SkilledAnalyzer import SkilledAnalyzer
 
@@ -30,12 +31,27 @@ class FakeExecutor:
 
 
 class SummaryAnalyzer(SkilledAnalyzer):
+    """SkilledAnalyzer with _summarize_candidate_detail mocked to avoid
+    instantiating VllmNodeSummarizer (which would try to allocate NPU memory).
+    """
+
     def _summarize_candidate_detail(self, candidate_detail: str) -> str:
         self.seen_candidate_detail = candidate_detail
         return "SMALL_MODEL_SUMMARY: 10.0.0.1 trunkdown cross=3"
 
 
 class SkilledAnalyzerSummaryTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._ensure_patcher = patch.object(
+            SkilledAnalyzer, "_ensure_llm", return_value=None
+        )
+        cls._ensure_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._ensure_patcher.stop()
+
     def test_summary_replaces_nodes_in_final_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "info.json"), "w", encoding="utf-8") as f:

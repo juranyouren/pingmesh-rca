@@ -107,7 +107,8 @@ class SkilledAnalyzer:
         for s in self.skills:
             s["skill_id"] = str(s["skill_id"])
 
-        os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.ASCEND_RT_VISIBLE_DEVICES
+        # NOTE: ASCEND_RT_VISIBLE_DEVICES is set lazily inside _ensure_llm()
+        # to avoid triggering NPU runtime init at object construction time.
 
     def _summarize_candidate_detail(self, candidate_detail: str) -> str:
         if not self.summarize_nodes_enabled:
@@ -133,6 +134,7 @@ class SkilledAnalyzer:
         if self.llm is not None and self.sampling_params is not None:
             return
 
+        os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.ASCEND_RT_VISIBLE_DEVICES
         card_ids = _parse_npu_cards(self.ASCEND_RT_VISIBLE_DEVICES)
         if card_ids:
             ok = wait_npu_memory(
