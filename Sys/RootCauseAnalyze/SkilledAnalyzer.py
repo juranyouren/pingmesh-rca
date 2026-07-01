@@ -49,6 +49,18 @@ def _parse_npu_cards(npu_spec: str) -> list:
     return cards
 
 
+def _pick_summary_card(main_npu_spec: str) -> str:
+    """Pick a single NPU card for the summary model that the main model
+    does NOT use.  Avoids vLLM init deadlock when two models share a card."""
+    main_cards = set(_parse_npu_cards(main_npu_spec))
+    all_spec = os.environ.get("PINGMESH_NPU_CARDS", "0,1,2,3,4,5,6,7")
+    all_cards = _parse_npu_cards(all_spec)
+    for cid in reversed(all_cards):
+        if cid not in main_cards:
+            return str(cid)
+    return str(all_cards[-1]) if all_cards else "0"
+
+
 def _report_npu_occupants(card_ids: list) -> None:
     """Log current NPU occupants for diagnostics."""
     try:
@@ -97,7 +109,15 @@ class SkilledAnalyzer:
         self.confidence_agreement_margin = float(confidence_agreement_margin)
         self.summarize_nodes_enabled = bool(summarize_nodes)
         self.summary_model_path = summary_model_path or os.environ.get("PINGMESH_SUMMARY_MODEL_PATH", "")
-        self.summary_npu_cards = summary_npu_cards or os.environ.get("PINGMESH_SUMMARY_NPU_CARDS", ASCEND_RT_VISIBLE_DEVICES.split(",")[0])
+        # Default to a card the main model does NOT use: last card from the full pool.
+        # This avoids the summary model and main model (tensor_parallel=2) fighting
+        # over the same NPU card.
+        _default_summary_card = (
+            summary_npu_cards
+            or os.environ.get("PINGMESH_SUMMARY_NPU_CARDS")
+            or _pick_summary_card(ASCEND_RT_VISIBLE_DEVICES)
+        )
+        self.summary_npu_cards = _default_summary_card
         self.summary_max_tokens = int(summary_max_tokens)
         self.llm = None
         self.sampling_params = None
@@ -127,17 +147,29 @@ class SkilledAnalyzer:
 
         # ── lazy-init + cache across cases ───────────────────────────
         if self._summary_model is None:
-            model = VllmNodeSummarizer(
-                model_path=self.summary_model_path,
-                npu_cards=self.summary_npu_cards,
-                max_tokens=self.summary_max_tokens,
-            )
-            model.__enter__()  # init vLLM once, keep alive
-            self._summary_model = model
-            logger.info(
-                "VllmNodeSummarizer started on NPU %s, model=%s",
-                self.summary_npu_cards, self.summary_model_path,
-            )
+            try:
+                model = VllmNodeSummarizer(
+                    model_path=self.summary_model_path,
+                    npu_cards=self.summary_npu_cards,
+                    max_tokens=self.summary_max_tokens,
+                )
+                model.__enter__()
+                self._summary_model = model
+                logger.info(
+                    "VllmNodeSummarizer started on NPU %s, model=%s",
+                    self.summary_npu_cards, self.summary_model_path,
+                )
+            except Exception:
+                logger.warning(
+                    "VllmNodeSummarizer init failed — "
+                    "falling back to raw candidate detail for this run.",
+                    exc_info=True,
+                )
+                self._summary_model = None  # mark as failed
+                return candidate_detail
+
+        if self._summary_model is None:
+            return candidate_detail  # init failed, use raw
 
         return summarize_nodes_with(
             candidate_detail,
@@ -187,9 +219,11 @@ class SkilledAnalyzer:
         base_delay = 30.0
         for attempt in range(1, max_retries + 1):
             try:
+                tp_size = len(card_ids) if card_ids else 1
                 self.llm = LLM(
                     model=self.model_path,
-                    tensor_parallel_size=2,
+                    tensor_parallel_size=tp_size,
+                    distributed_executor_backend="mp",
                     gpu_memory_utilization=config.model.gpu_memory_utilization,
                     max_model_len=config.model.max_model_len,
                     trust_remote_code=config.model.trust_remote_code,
@@ -353,6 +387,7 @@ class SkilledAnalyzer:
                     llm_prompts.append(final_p)
 
             if llm_prompts:
+                self._cleanup_summarizer()  # release summary model before main vLLM init
                 self._ensure_llm()
                 llm_responses = vllm_invoke(
                     llm=self.llm,
