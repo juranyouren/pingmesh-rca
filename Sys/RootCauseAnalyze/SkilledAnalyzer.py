@@ -345,19 +345,14 @@ class SkilledAnalyzer:
                 )
                 return final_prompt, skill_ips, gate
 
-        # 方案 A：优先读离线预处理好的 node summary cache。
-        # 主推理进程不再初始化 VllmNodeSummarizer。
+        # ── 确定发送给 LLM 的候选设备详情 ──────────────────────────
+        # 方案 A：优先读取离线 cache；否则实时调 summarize；否则用原始 JSON。
         if self.summary_cache_dir:
             detail_for_llm = self._load_cached_node_summary(dirpath, detail_compact)
-            return SKILLED_PROMPT.format(
-                SKILLRET=skill_ret, INFO=info_data, NODES=detail_for_llm,
-            ), skill_ips, gate
-
-        # 旧路径：实时调 summary 小模型（主实验应避免使用）
-        detail_for_llm = self._summarize_candidate_detail(detail_compact)
-
-        if self.summarize_nodes_enabled:
-            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=detail_for_llm), skill_ips, gate
+        elif self.summarize_nodes_enabled:
+            detail_for_llm = self._summarize_candidate_detail(detail_compact)
+        else:
+            detail_for_llm = detail_compact
 
         self._ensure_llm()
         tokenizer = self.llm.get_tokenizer()
@@ -374,17 +369,17 @@ class SkilledAnalyzer:
 
         info_tokens = tokenizer.encode(info_data)
         if len(info_tokens) > remaining_tokens:
-            info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 鎴柇]..."
+            info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
             return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=""), skill_ips, gate
         remaining_tokens -= len(info_tokens)
 
-        # 候选详情始终使用结构化 JSON (detail_compact)，token 不够时截断。
-        nodes_data = detail_for_llm
-        nodes_tokens = tokenizer.encode(nodes_data)
+        nodes_tokens = tokenizer.encode(detail_for_llm)
         if len(nodes_tokens) > remaining_tokens:
-            nodes_data = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
+            detail_for_llm = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
 
-        return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=nodes_data), skill_ips, gate
+        return SKILLED_PROMPT.format(
+            SKILLRET=skill_ret, INFO=info_data, NODES=detail_for_llm,
+        ), skill_ips, gate
 
     def _safe_truncate(self, text: str) -> str:
         tokenizer = self.llm.get_tokenizer()

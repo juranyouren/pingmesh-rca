@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Precompute node summaries for Pingmesh RCA cases.
+"""Precompute per-device node summaries for Pingmesh RCA cases.
 
-Run this ONCE before the main inference run, on a dedicated NPU card.
-The main SkilledAnalyzer then reads the cache via --summary-cache-dir
-and never initialises a summary vLLM model.
+Deploys one small vLLM instance per NPU card (--npu-cards 4,5,6,7 → 4 instances).
+Each device is summarised independently (tiny prompt, no token overflow).
+Devices within a case are distributed across cards for parallelism.
 
-Usage:
-    export ASCEND_RT_VISIBLE_DEVICES=0
-    export VLLM_WORKER_MULTIPROC_METHOD=spawn
-    export OMP_NUM_THREADS=1
+Run this ONCE before main inference:
     python scripts/precompute_node_summaries.py \
         --data-root /path/to/cases \
         --out-cache /path/to/cache_dir \
-        --model-path /path/to/Qwen2.5-0.5B \
-        --npu-cards 0 --top-k 10
+        --npu-cards 4,5,6,7 \
+        --model-path /path/to/Qwen2.5-1.5B \
+        --top-k 10
 """
 
 import os
@@ -35,10 +33,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from Sys.config import config
 from Sys.RootCauseAnalyze.skills.provider import BuiltinSkillProvider
 from Sys.RootCauseAnalyze.gate.evidence import build_fused_evidence
-from Sys.RootCauseAnalyze.gate.node_summarizer import (
-    VllmNodeSummarizer,
-    summarize_nodes_with,
-)
+from Sys.RootCauseAnalyze.gate.node_summarizer import MultiCardSummarizer, summarize_devices
 from Sys.utils.case_utils import find_full_link_file
 from Sys.utils.io_utils import load_json, save_json
 
@@ -62,58 +57,35 @@ def get_dirpaths_from_fcases(fcase_path: str) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Precompute node summaries for Pingmesh RCA cases."
+        description="Precompute per-device node summaries for Pingmesh RCA cases."
     )
-    parser.add_argument(
-        "--data-root", "-d",
-        default=config.data.nodes_labeled,
-        help="case 数据根目录",
-    )
-    parser.add_argument(
-        "--failures-from",
-        default=None,
-        help="只预处理指定 failures JSON 中的 case",
-    )
-    parser.add_argument(
-        "--out-cache",
-        required=True,
-        help="summary cache 输出目录",
-    )
+    parser.add_argument("--data-root", "-d", default=config.data.nodes_labeled)
+    parser.add_argument("--failures-from", default=None)
+    parser.add_argument("--out-cache", required=True, help="summary cache 输出目录")
     parser.add_argument(
         "--model-path",
         default=os.environ.get(
             "PINGMESH_SUMMARY_MODEL_PATH",
-            "/usr/share/large_language_models/Qwen2.5-0.5B",
+            "/home/sbp/huangzeshun/firstpaper/qwen2.5-1.5b-local",
         ),
-        help="summary 小模型路径",
     )
     parser.add_argument(
         "--npu-cards",
         default=os.environ.get("PINGMESH_SUMMARY_NPU_CARDS", "0"),
-        help="summary 小模型使用的 NPU，例如 0",
+        help="summary 模型使用的 NPU 卡，逗号分隔，每卡一个实例 (如 4,5,6,7)",
+    )
+    parser.add_argument("--top-k", "-k", type=int, default=config.temporal.top_k)
+    parser.add_argument(
+        "--max-model-len", type=int,
+        default=int(os.environ.get("PINGMESH_SUMMARY_MAX_MODEL_LEN", "4096")),
     )
     parser.add_argument(
-        "--top-k", "-k",
-        type=int,
-        default=config.temporal.top_k,
-        help="候选节点数量",
+        "--summary-max-tokens", type=int,
+        default=int(os.environ.get("PINGMESH_SUMMARY_MAX_TOKENS", "512")),
     )
-    parser.add_argument(
-        "--summary-max-tokens",
-        type=int,
-        default=int(os.environ.get("PINGMESH_SUMMARY_MAX_TOKENS", "1024")),
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="覆盖已有 summary cache",
-    )
+    parser.add_argument("--overwrite", action="store_true")
 
     args = parser.parse_args()
-
-    os.environ["ASCEND_RT_VISIBLE_DEVICES"] = args.npu_cards
-    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
 
     out_cache = Path(args.out_cache)
     out_cache.mkdir(parents=True, exist_ok=True)
@@ -125,7 +97,8 @@ def main():
 
     print(f"[precompute] cases={len(dirpaths)}")
     print(f"[precompute] model={args.model_path}")
-    print(f"[precompute] ASCEND_RT_VISIBLE_DEVICES={args.npu_cards}")
+    print(f"[precompute] npu_cards={args.npu_cards}")
+    print(f"[precompute] max_model_len={args.max_model_len}")
     print(f"[precompute] out_cache={out_cache}")
 
     executor = BuiltinSkillProvider()
@@ -139,10 +112,11 @@ def main():
         "items": [],
     }
 
-    with VllmNodeSummarizer(
+    with MultiCardSummarizer(
         model_path=args.model_path,
         npu_cards=args.npu_cards,
         max_tokens=args.summary_max_tokens,
+        max_model_len=args.max_model_len,
     ) as summarizer:
         for dirpath in dirpaths:
             key = case_cache_key(dirpath)
@@ -150,15 +124,13 @@ def main():
 
             if out_path.exists() and not args.overwrite:
                 manifest["items"].append({
-                    "dir": dirpath,
-                    "cache": str(out_path),
-                    "status": "skipped_exists",
+                    "dir": dirpath, "cache": str(out_path), "status": "skipped_exists",
                 })
-                print(f"  skip {dirpath} (cached)")
+                print(f"  skip {os.path.basename(dirpath)} (cached)")
                 continue
 
             try:
-                skill_ret, info_data, detail_compact, detail_raw, skill_ips = build_fused_evidence(
+                _sr, _info, detail_compact, _raw, skill_ips = build_fused_evidence(
                     node_list=executor.get_node_list(dirpath),
                     info=executor.get_alarminfo(dirpath),
                     dirpath=dirpath,
@@ -167,26 +139,22 @@ def main():
                     top_k=args.top_k,
                 )
 
-                summary = summarize_nodes_with(
-                    detail_compact,
-                    summarize_batch=summarizer.summarize_batch,
-                )
+                summary = summarizer.summarize_devices(detail_compact)
 
                 record = {
-                    "dir": dirpath,
-                    "cache_key": key,
-                    "top_k": args.top_k,
-                    "skill_ips": skill_ips,
-                    "summary": summary,
-                    "raw_chars": len(detail_compact),
-                    "summary_chars": len(summary),
+                    "dir": dirpath, "cache_key": key, "top_k": args.top_k,
+                    "skill_ips": skill_ips, "summary": summary,
+                    "raw_chars": len(detail_compact), "summary_chars": len(summary),
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
                 save_json(record, str(out_path))
                 manifest["items"].append({
                     "dir": dirpath, "cache": str(out_path), "status": "ok",
                 })
-                print(f"  ok  {dirpath}  ({record['raw_chars']}→{record['summary_chars']} chars)")
+                print(
+                    f"  ok  {os.path.basename(dirpath)}  "
+                    f"({record['raw_chars']}→{record['summary_chars']} chars)"
+                )
 
             except Exception as e:
                 err_path = out_cache / f"{key}.error.json"
@@ -196,17 +164,16 @@ def main():
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }, str(err_path))
                 manifest["items"].append({
-                    "dir": dirpath, "cache": str(err_path), "status": "error",
-                    "error": repr(e),
+                    "dir": dirpath, "cache": str(err_path),
+                    "status": "error", "error": repr(e),
                 })
-                print(f"  ERR {dirpath}: {e}")
+                print(f"  ERR {os.path.basename(dirpath)}: {e}")
 
     save_json(manifest, str(out_cache / "manifest.json"))
     ok_n = sum(1 for i in manifest["items"] if i["status"] == "ok")
     skip_n = sum(1 for i in manifest["items"] if i["status"] == "skipped_exists")
     err_n = sum(1 for i in manifest["items"] if i["status"] == "error")
     print(f"[precompute] done. ok={ok_n} skipped={skip_n} errors={err_n}")
-    print(f"[precompute] manifest={out_cache / 'manifest.json'}")
 
 
 if __name__ == "__main__":
