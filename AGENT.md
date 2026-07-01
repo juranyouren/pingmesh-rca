@@ -11,7 +11,6 @@ Pingmesh-triggered incidents. The active pipeline is:
 
 - Internal fault data is not publishable. Do not move `data/` into tracked code.
 - Do not call external LLM APIs for project experiments. The intended runtime is local vLLM on Ascend NPU servers.
-- Do not reintroduce `SkillBank` or `SkillExecutor` dependencies under `Sys/`; built-in rankers live in `Sys/RootCauseAnalyze/skills/`.
 - Do not let inference code read `label.json`; labels are only for evaluation.
 - Run tests with `python -m pytest`, not bare `pytest`, unless a local `PYTHONPATH` is already configured.
 
@@ -32,10 +31,7 @@ Pingmesh-triggered incidents. The active pipeline is:
 ## Data And Artifacts
 
 - `data/` is ignored and should stay local.
-- Original paper PDFs were moved out of the project to `../pingmeshPaper_papers_pdf/`.
 - `docs/papers/` keeps text extractions and summaries only.
-- `docs/毕业论文/` is obsolete and ignored.
-- Clear `__pycache__/`, `.pytest_cache/`, and generated JSON outputs before committing.
 
 ## Common Commands
 
