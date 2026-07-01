@@ -10,16 +10,21 @@
 #   gate_pipe             apply gate without LLM; LLM/operator routes stay empty
 #   pipe_llm              pipe evidence -> main LLM reranking
 #   gate_pipe_llm         pipe evidence -> gate -> main LLM only for routed cases
-#   pipe_summary_llm      pipe evidence -> small-model NODES summary -> main LLM
-#   gate_pipe_summary_llm pipe evidence -> gate -> summary -> main LLM routed cases
+#   pipe_cache_llm        pipe evidence -> cached summary -> main LLM
+#   gate_pipe_cache_llm   pipe evidence -> gate -> cached summary -> main LLM
+#   gate_ablation         multi-policy gate routing comparison
+#   gate_selection        topo-vs-temporal-vs-LLM per-case comparison
+#
+# Before running summary experiments, precompute the cache ONCE:
+#   python scripts/precompute_node_summaries.py \
+#       --data-root "$PINGMESH_DATA" \
+#       --out-cache "$PINGMESH_SUMMARY_CACHE_DIR" \
+#       --npu-cards 0 --model-path /path/to/1.5B --top-k "$PINGMESH_TOP_K"
 #
 # Typical runs:
 #   ./scripts/run_gate_pipe_experiments.sh
 #   ./scripts/run_gate_pipe_experiments.sh my_prefix
-#   PINGMESH_EXPERIMENTS="pipe gate_eval gate_pipe" ./scripts/run_gate_pipe_experiments.sh
-#
-# Summary experiments require:
-#   export PINGMESH_SUMMARY_MODEL_PATH=/path/to/1.5B-model
+#   PINGMESH_EXPERIMENTS="pipe gate_eval gate_pipe pipe_llm gate_pipe_llm" ./scripts/run_gate_pipe_experiments.sh
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -32,8 +37,8 @@ export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
 
 # ---------------- user-editable experiment config ----------------
 RUN_EXPERIMENTS="${PINGMESH_EXPERIMENTS:-pipe gate_eval gate_pipe pipe_llm gate_pipe_llm}"
-# To include small-model summary experiments, for example:
-# RUN_EXPERIMENTS="${PINGMESH_EXPERIMENTS:-pipe gate_eval pipe_summary_llm gate_pipe_summary_llm}"
+# With summary cache (precompute first with precompute_node_summaries.py):
+# RUN_EXPERIMENTS="${PINGMESH_EXPERIMENTS:-pipe gate_eval pipe_cache_llm gate_pipe_cache_llm gate_ablation gate_selection}"
 # -----------------------------------------------------------------
 
 PREFIX="${1:-gate_pipe_experiments}"
@@ -50,9 +55,10 @@ TOPK="${PINGMESH_TOP_K:-5}"
 BATCH="${PINGMESH_BATCH_SIZE:-8}"
 NPU="${PINGMESH_NPU_CARDS:-0,1,2,3,4,5,6,7}"
 WEIGHT_FILE="${PINGMESH_WEIGHTS_MANUAL}"
-SUMMARY_MODEL_PATH="${PINGMESH_SUMMARY_MODEL_PATH:-}"
-SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-}"
-SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
+
+# Summary cache (方案 A): precompute with precompute_node_summaries.py first,
+# then set PINGMESH_SUMMARY_CACHE_DIR to point to the cache directory.
+SUMMARY_CACHE_DIR="${PINGMESH_SUMMARY_CACHE_DIR:-}"
 
 mkdir -p "${WORKDIR}"
 
@@ -70,8 +76,12 @@ needs_pipe_result() {
     has_experiment pipe || has_experiment gate_eval || has_experiment gate_pipe
 }
 
-needs_summary_model() {
-    has_experiment pipe_summary_llm || has_experiment gate_pipe_summary_llm
+needs_summary_cache() {
+    has_experiment pipe_cache_llm || has_experiment gate_pipe_cache_llm
+}
+
+needs_gate_pipe_llm_result() {
+    has_experiment gate_ablation || has_experiment gate_selection
 }
 
 score_res() {
@@ -85,32 +95,30 @@ print(json.dumps(summary, ensure_ascii=False, indent=2))
 "
 }
 
-summary_args=()
-build_summary_args() {
-    if [ -z "${SUMMARY_MODEL_PATH}" ]; then
-        echo "[ERROR] summary experiments require PINGMESH_SUMMARY_MODEL_PATH." >&2
+# Build args for summary cache path (方案 A)
+cache_args=()
+build_cache_args() {
+    if [ -z "${SUMMARY_CACHE_DIR}" ]; then
+        echo "[ERROR] cache-based summary experiments require PINGMESH_SUMMARY_CACHE_DIR." >&2
         exit 1
     fi
-    summary_args=(--summarize-nodes --summary-model-path "${SUMMARY_MODEL_PATH}" --summary-max-tokens "${SUMMARY_MAX_TOKENS}")
-    if [ -n "${SUMMARY_NPU_CARDS}" ]; then
-        summary_args+=(--summary-npu-cards "${SUMMARY_NPU_CARDS}")
-    fi
+    cache_args=(--summary-cache-dir "${SUMMARY_CACHE_DIR}")
 }
 
 echo "============================================"
 echo "  Unified Gate/Pipe/LLM experiments"
-echo "  data:          ${PINGMESH_DATA}"
-echo "  results:       ${WORKDIR}"
-echo "  experiments:   ${RUN_EXPERIMENTS}"
-echo "  skills:        ${SKILLS}"
-echo "  top_k:         ${TOPK}"
-echo "  npu:           ${NPU}"
-echo "  weights:       ${WEIGHT_FILE}"
-echo "  summary_model: ${SUMMARY_MODEL_PATH:-<unset>}"
+echo "  data:           ${PINGMESH_DATA}"
+echo "  results:        ${WORKDIR}"
+echo "  experiments:    ${RUN_EXPERIMENTS}"
+echo "  skills:         ${SKILLS}"
+echo "  top_k:          ${TOPK}"
+echo "  npu:            ${NPU}"
+echo "  weights:        ${WEIGHT_FILE}"
+echo "  summary_cache:  ${SUMMARY_CACHE_DIR:-<unset>}"
 echo "============================================"
 
-if needs_summary_model; then
-    build_summary_args
+if needs_summary_cache; then
+    build_cache_args
 fi
 
 PIPE_OUTDIR="${RUN_TAG}/pipe"
@@ -175,40 +183,67 @@ if has_experiment gate_pipe_llm; then
     score_res "${WORKDIR}/gate_pipe_llm/res.json"
 fi
 
-if has_experiment pipe_summary_llm; then
+if has_experiment pipe_cache_llm; then
     echo ""
-    echo "=== [pipe_summary_llm] small-model NODES summary with LLM reranking ==="
+    echo "=== [pipe_cache_llm] cached NODES summary with LLM reranking ==="
     python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
         -d "${PINGMESH_DATA}" \
         -s ${SKILLS} \
         -n "${NPU}" \
         -b "${BATCH}" \
         -k "${TOPK}" \
-        -o "${RUN_TAG}/pipe_summary_llm" \
-        "${summary_args[@]}"
-    score_res "${WORKDIR}/pipe_summary_llm/res.json"
+        -o "${RUN_TAG}/pipe_cache_llm" \
+        "${cache_args[@]}"
+    score_res "${WORKDIR}/pipe_cache_llm/res.json"
 fi
 
-if has_experiment gate_pipe_summary_llm; then
+if has_experiment gate_pipe_cache_llm; then
     echo ""
-    echo "=== [gate_pipe_summary_llm] gated pipe with small-model NODES summary and LLM arbitration ==="
+    echo "=== [gate_pipe_cache_llm] gated pipe with cached NODES summary and LLM arbitration ==="
     python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
         -d "${PINGMESH_DATA}" \
         -s ${SKILLS} \
         -n "${NPU}" \
         -b "${BATCH}" \
         -k "${TOPK}" \
-        -o "${RUN_TAG}/gate_pipe_summary_llm" \
-        "${summary_args[@]}" \
+        -o "${RUN_TAG}/gate_pipe_cache_llm" \
+        "${cache_args[@]}" \
         --confidence-gate
-    score_res "${WORKDIR}/gate_pipe_summary_llm/res.json"
+    score_res "${WORKDIR}/gate_pipe_cache_llm/res.json"
+fi
+
+GATE_PIPE_LLM_RES="${WORKDIR}/gate_pipe_llm/res.json"
+
+if has_experiment gate_ablation; then
+    echo ""
+    echo "=== [gate_ablation] multi-policy gate routing comparison ==="
+    if [ ! -f "${GATE_PIPE_LLM_RES}" ]; then
+        echo "[WARNING] gate_pipe_llm/res.json not found — gate_ablation needs it. Skipping."
+    else
+        python Sys/Score/evaluate_gate_ablation.py \
+            --res "${GATE_PIPE_LLM_RES}" \
+            --out-dir "${WORKDIR}/gate_ablation" \
+            --policies baseline,strict_combined,conservative
+    fi
+fi
+
+if has_experiment gate_selection; then
+    echo ""
+    echo "=== [gate_selection] topo-vs-temporal-vs-LLM per-case comparison ==="
+    if [ ! -f "${GATE_PIPE_LLM_RES}" ]; then
+        echo "[WARNING] gate_pipe_llm/res.json not found — gate_selection needs it. Skipping."
+    else
+        python Sys/Score/evaluate_gate_selection.py \
+            --res "${GATE_PIPE_LLM_RES}" \
+            --out-dir "${WORKDIR}/gate_selection"
+    fi
 fi
 
 python -c "
 import csv, json, os
 
 workdir = '${WORKDIR}'
-experiments = ['pipe', 'gate_pipe', 'pipe_llm', 'gate_pipe_llm', 'pipe_summary_llm', 'gate_pipe_summary_llm']
+experiments = ['pipe', 'gate_pipe', 'pipe_llm', 'gate_pipe_llm', 'pipe_cache_llm', 'gate_pipe_cache_llm']
 rows = []
 
 def metric_block(summary, key):
@@ -290,8 +325,8 @@ if gate_summary:
     gate_pipe = metrics.get('gate_pipe', {})
     pipe_llm = metrics.get('pipe_llm', {})
     gate_pipe_llm = metrics.get('gate_pipe_llm', {})
-    pipe_summary_llm = metrics.get('pipe_summary_llm', {})
-    gate_pipe_summary_llm = metrics.get('gate_pipe_summary_llm', {})
+    pipe_cache_llm = metrics.get('pipe_cache_llm', {})
+    gate_pipe_cache_llm = metrics.get('gate_pipe_cache_llm', {})
 
     def delta(a, b):
         return round(float(a) - float(b), 2) if a not in (None, '') and b not in (None, '') else None
@@ -301,13 +336,13 @@ if gate_summary:
         'gate_pipe_top1': gate_pipe.get('top1'),
         'pipe_llm_top1': pipe_llm.get('top1'),
         'gate_pipe_llm_top1': gate_pipe_llm.get('top1'),
-        'pipe_summary_llm_top1': pipe_summary_llm.get('top1'),
-        'gate_pipe_summary_llm_top1': gate_pipe_summary_llm.get('top1'),
+        'pipe_cache_llm_top1': pipe_cache_llm.get('top1'),
+        'gate_pipe_cache_llm_top1': gate_pipe_cache_llm.get('top1'),
         'gate_pipe_vs_pipe_top1_delta': delta(gate_pipe.get('top1'), pipe.get('top1')) if gate_pipe and pipe else None,
         'gate_pipe_llm_vs_pipe_llm_top1_delta': delta(gate_pipe_llm.get('top1'), pipe_llm.get('top1')) if gate_pipe_llm and pipe_llm else None,
-        'gate_pipe_summary_llm_vs_pipe_summary_llm_top1_delta': (
-            delta(gate_pipe_summary_llm.get('top1'), pipe_summary_llm.get('top1'))
-            if gate_pipe_summary_llm and pipe_summary_llm else None
+        'gate_pipe_cache_llm_vs_pipe_cache_llm_top1_delta': (
+            delta(gate_pipe_cache_llm.get('top1'), pipe_cache_llm.get('top1'))
+            if gate_pipe_cache_llm and pipe_cache_llm else None
         ),
         'gate_cost_useful': llm_n < total if total else None,
         'gate_final_llm_useful': (
@@ -327,8 +362,8 @@ if gate_summary:
             'llm_call_cases', 'llm_call_coverage', 'operator_review_cases', 'operator_review_coverage',
             'pipe_top1', 'gate_pipe_top1', 'gate_pipe_vs_pipe_top1_delta',
             'pipe_llm_top1', 'gate_pipe_llm_top1', 'gate_pipe_llm_vs_pipe_llm_top1_delta',
-            'pipe_summary_llm_top1', 'gate_pipe_summary_llm_top1',
-            'gate_pipe_summary_llm_vs_pipe_summary_llm_top1_delta',
+            'pipe_cache_llm_top1', 'gate_pipe_cache_llm_top1',
+            'gate_pipe_cache_llm_vs_pipe_cache_llm_top1_delta',
             'invoke_llm_top1_miss_gt_in_top3_cases', 'operator_review_miss_top5_cases',
             'gate_cost_useful', 'gate_final_llm_useful',
         ]
