@@ -3,6 +3,7 @@ import sys
 import time
 import math
 import re
+import logging
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -12,6 +13,9 @@ from Sys.config import config
 from Sys.RootCauseAnalyze.skills.provider import BuiltinSkillProvider
 from Sys.utils.case_utils import find_full_link_file, read_gt_ips
 from Sys.utils.io_utils import load_json, save_json
+from Sys.utils.npu_utils import wait_npu_memory, get_npu_memory_info, list_npu_processes
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_gt_ips(dirpath: str) -> list:
@@ -29,6 +33,35 @@ def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
         "missing_ips": missing,
         "all_missing": bool(gt_ips) and len(missing) == len(gt_ips),
     }
+
+
+# ── NPU helpers (used by _ensure_llm) ─────────────────────────────────
+
+def _parse_npu_cards(npu_spec: str) -> list:
+    """Parse ``"0,1"`` style NPU card strings into int list."""
+    if not isinstance(npu_spec, str) or not npu_spec.strip():
+        return []
+    cards = []
+    for part in npu_spec.split(","):
+        part = part.strip()
+        if part.isdigit():
+            cards.append(int(part))
+    return cards
+
+
+def _report_npu_occupants(card_ids: list) -> None:
+    """Log current NPU occupants for diagnostics."""
+    try:
+        info = get_npu_memory_info(card_ids)
+        procs = list_npu_processes(card_ids)
+        logger.info(
+            "NPU memory state: %s | processes: %s",
+            {cid: f"{v['free']}/{v['total']} MiB free" for cid, v in info.items()},
+            [{"card": p["card"], "pid": p["pid"], "mem_mib": p["memory_mib"]} for p in procs],
+        )
+    except Exception:
+        logger.info("Could not query NPU state.", exc_info=True)
+
 
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
@@ -91,25 +124,68 @@ class SkilledAnalyzer:
             return summarize_nodes_with(candidate_detail, summarize_batch=summarizer.summarize_batch)
 
     def _ensure_llm(self):
-        """Lazy init vLLM so confidence-gated all-bypass workers avoid model loading."""
+        """Lazy init vLLM — polls NPU memory first, retries on OOM.
+
+        Stale processes from a previous experiment run may still hold NPU
+        memory.  We wait until the assigned cards have enough free memory,
+        then initialise vLLM with retry-on-OOM backoff.
+        """
         if self.llm is not None and self.sampling_params is not None:
             return
 
+        card_ids = _parse_npu_cards(self.ASCEND_RT_VISIBLE_DEVICES)
+        if card_ids:
+            ok = wait_npu_memory(
+                card_ids,
+                required_free_ratio=0.25,
+                timeout=1800.0,
+                poll_interval=15.0,
+            )
+            if not ok:
+                logger.warning(
+                    "NPU memory wait timed out for cards %s; "
+                    "vLLM init may fail with OOM.",
+                    card_ids,
+                )
+
         from vllm import LLM, SamplingParams
 
-        self.llm = LLM(
-            model=self.model_path,
-            tensor_parallel_size=2,
-            gpu_memory_utilization=config.model.gpu_memory_utilization,
-            max_model_len=config.model.max_model_len,
-            trust_remote_code=config.model.trust_remote_code
-        )
-
-        self.sampling_params = SamplingParams(
-            temperature=config.model.temperature,
-            max_tokens=config.model.max_tokens,
-            repetition_penalty=config.model.repetition_penalty
-        )
+        max_retries = 3
+        base_delay = 30.0
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.llm = LLM(
+                    model=self.model_path,
+                    tensor_parallel_size=2,
+                    gpu_memory_utilization=config.model.gpu_memory_utilization,
+                    max_model_len=config.model.max_model_len,
+                    trust_remote_code=config.model.trust_remote_code,
+                )
+                self.sampling_params = SamplingParams(
+                    temperature=config.model.temperature,
+                    max_tokens=config.model.max_tokens,
+                    repetition_penalty=config.model.repetition_penalty,
+                )
+                logger.info("vLLM initialised successfully on cards %s.", card_ids)
+                return
+            except Exception as exc:
+                err_msg = str(exc)
+                is_oom = (
+                    "out of memory" in err_msg.lower()
+                    or "oom" in err_msg.lower()
+                )
+                if is_oom and attempt < max_retries:
+                    delay = base_delay * attempt
+                    logger.warning(
+                        "vLLM init OOM on cards %s (attempt %d/%d): %s. "
+                        "Waiting %.0f s for stale processes to release memory ...",
+                        card_ids, attempt, max_retries, err_msg[:200],
+                        delay,
+                    )
+                    _report_npu_occupants(card_ids)
+                    time.sleep(delay)
+                else:
+                    raise
 
     def _build_final_prompt(self, original_prompt: str, selected_skill_ids: list, dirpath: str):
         """Return (final_prompt, skill_ips, gate)."""
@@ -341,8 +417,25 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}")
-    sleep_time = (worker_id - 1) * 60
-    time.sleep(sleep_time)
+
+    # ── NPU-aware stagger：轮询等待本 worker 的 NPU 卡空闲 ──────────
+    card_ids = _parse_npu_cards(npus)
+    if card_ids:
+        # 每个 worker 等待自己的卡空闲，取代固定 60s 错峰
+        ok = wait_npu_memory(
+            card_ids,
+            required_free_ratio=0.25,
+            timeout=1800.0,
+            poll_interval=15.0,
+        )
+        if not ok:
+            print(f"[Worker {worker_id}] 警告: NPU 内存等待超时 (cards={card_ids})，"
+                  f"vLLM 初始化可能会 OOM。")
+    else:
+        # 无法解析 NPU 卡号时回退到固定错峰
+        sleep_time = (worker_id - 1) * 60
+        print(f"[Worker {worker_id}] 无法解析 NPU 卡号，固定等待 {sleep_time}s ...")
+        time.sleep(sleep_time)
 
     analyzer = SkilledAnalyzer(
         ASCEND_RT_VISIBLE_DEVICES=npus,

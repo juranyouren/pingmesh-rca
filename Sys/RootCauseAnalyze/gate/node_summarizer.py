@@ -5,6 +5,18 @@ import os
 from typing import Callable, List, Sequence
 
 
+def _parse_npu_cards(npu_spec: str) -> list:
+    """Parse ``"0,1"`` style NPU card strings into int list."""
+    if not isinstance(npu_spec, str) or not npu_spec.strip():
+        return []
+    cards = []
+    for part in npu_spec.split(","):
+        part = part.strip()
+        if part.isdigit():
+            cards.append(int(part))
+    return cards
+
+
 SUMMARY_SYSTEM_INSTRUCTION = """You are a network RCA evidence compressor.
 Summarize candidate device evidence for a downstream root-cause LLM.
 Keep all IP addresses, preserve discriminative alarms, topology proximity,
@@ -62,6 +74,13 @@ class VllmNodeSummarizer:
 
     def __enter__(self) -> "VllmNodeSummarizer":
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.npu_cards
+
+        # Wait for NPU memory to avoid OOM from stale processes.
+        card_ids = _parse_npu_cards(self.npu_cards)
+        if card_ids:
+            from Sys.utils.npu_utils import wait_npu_memory
+            wait_npu_memory(card_ids, required_free_ratio=0.20, timeout=600.0, poll_interval=15.0)
+
         from vllm import LLM, SamplingParams
 
         self.llm = LLM(
