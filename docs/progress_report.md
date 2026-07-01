@@ -115,6 +115,6 @@ topo+temporal (55.94%) > temporal (49.65%)，+6.3pp。拓扑信号在约 9 个 c
 |--------|------|------|
 | P0 | restore_alarms_from_labels — 回填 label→全链路 | ⏳ 脚本已就绪 |
 | P0 | 回填后重跑 run_full_ablation + run_inference | ⏳ |
-| P1 | LLM 前置告警打分 (llm_alarm_scorer) | ⏳ |
+
 | P2 | 调 K（3/5/10） | ⏳ |
 | P2 | NIKA 公开数据集 | ⏳ |

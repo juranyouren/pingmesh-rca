@@ -112,18 +112,16 @@ Main files:
 
 ### 5.3 Alarm Weight And Semantic Coverage
 
-`llm_alarm_scorer.py` remains the active path for using a local LLM to score
-previously uncovered alarm names and improve the global weight table. Earlier
-classification experiments showed that semantic classification can help
-temporal-only ranking, but can hurt fused ranking when coverage is partial. The
-next useful work is broader alarm-name normalization and coverage analysis
-before applying semantic weights globally.
+Alarm weights are maintained manually in `data/weights/classified_alarms/all_alarms.json`.
+Earlier experiments with LLM-based alarm scoring and classification showed that semantic
+classification can help temporal-only ranking, but can hurt fused ranking when coverage
+is partial. The next useful work is broader alarm-name normalization and coverage
+analysis before applying semantic weights globally.
 
 Main files:
 
-- `Sys/RootCauseAnalyze/llm_alarm_scorer.py`
-- `Sys/AlarmWeightBuilder.py`
 - `Sys/utils/alarm_utils.py`
+- `data/weights/classified_alarms/all_alarms.json`
 
 ### 5.4 Failure Analysis And Gate Design
 
@@ -135,7 +133,8 @@ work rather than prompt-only tuning.
 Main files:
 
 - `Sys/Score/analyze_skillpipe_failures.py`
-- `Sys/Score/failure_analyzer.py`
+- `Sys/Score/evaluate_gate_selection.py`
+- `Sys/Score/evaluate_trust_gate.py`
 - `tmp/diagnose_pipeline.py`
 
 ### 5.5 Public Dataset / NIKA Direction
