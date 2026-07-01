@@ -1,5 +1,10 @@
 ﻿import os, json
 import sys
+
+# ── MUST be set BEFORE any import that may touch torch / torch_npu / vLLM ──
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import time
 import math
 import re
@@ -489,8 +494,15 @@ def _report_gt_check(root_path: str, reports: list):
 def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
     card_ids = _parse_npu_cards(npus)
-    print(f"[Worker {worker_id}] 环境变量已设置 ASCEND_RT_VISIBLE_DEVICES={npus}, cards={card_ids}", flush=True)
+    print(
+        f"[Worker {worker_id}] ASCEND_RT_VISIBLE_DEVICES={npus}, "
+        f"VLLM_WORKER_MULTIPROC_METHOD={os.environ.get('VLLM_WORKER_MULTIPROC_METHOD')}, "
+        f"cards={card_ids}",
+        flush=True,
+    )
 
     # ── simple staggered start to avoid thundering herd ──────────────
     stagger_s = (worker_id - 1) * 5
