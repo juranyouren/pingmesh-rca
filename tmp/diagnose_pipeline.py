@@ -11,7 +11,19 @@
 import json, os, sys
 from collections import Counter
 
-data_root = sys.argv[1] if len(sys.argv) > 1 else "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
+
+try:
+    from Sys.config import config
+
+    DEFAULT_DATA_ROOT = config.data.nodes_labeled
+    DEFAULT_WEIGHT_PATH = config.data.alarm_weights
+except Exception:
+    DEFAULT_DATA_ROOT = "/home/sbp/lixinyang/pingmesh/data/node/nodes_max_labeled"
+    DEFAULT_WEIGHT_PATH = "/home/sbp/lixinyang/pingmesh/data/weights/classified_alarms/all_alarms.json"
+
+data_root = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DATA_ROOT
 
 # ============================================================
 # 1. 候选集大小
@@ -70,10 +82,11 @@ print("=" * 60)
 print("2. 管道内是否有初筛缩减候选")
 print("=" * 60)
 
-sys.path.insert(0, "/home/sbp/lixinyang/pingmesh")
-from Sys.RootCauseAnalyze.skill_pipeline import _score_topo, _score_temporal, rank_devices_by_skills
+from Sys.RootCauseAnalyze.skill_pipeline import rank_devices_by_skills
+from Sys.RootCauseAnalyze.skills.temporal_ranker import score_temporal
+from Sys.RootCauseAnalyze.skills.topo_ranker import score_topo
 
-wpath = "/home/sbp/lixinyang/pingmesh/data/weights/classified_alarms/all_alarms.json"
+wpath = DEFAULT_WEIGHT_PATH
 
 scored_count_dist = Counter()
 dead_device_cases = []  # 大量设备得分为 0 的 case
@@ -89,8 +102,8 @@ for dirpath, _, filenames in os.walk(data_root):
     except Exception:
         continue
 
-    scores_pr = _score_topo(nodes, info, weight_dirpath=wpath, directed=True)
-    scores_ts = _score_temporal(nodes, info, dirpath=dirpath)
+    scores_pr = score_topo(nodes, info, weight_path=wpath, directed=True)
+    scores_ts = score_temporal(nodes, info, dirpath=dirpath)
 
     n_total = len(nodes)
     n_scored = sum(1 for ip in scores_pr if scores_pr.get(ip, 0) > 0
@@ -146,27 +159,21 @@ print("=" * 60)
 # 3.1 代码层面: 推理路径是否读 label.json
 leak_sources = []
 
-# 检查 temporal_score.py
-with open("SkillBank/skills/temporal_score.py", "r", encoding="utf-8") as f:
-    ts_src = f.read()
-if "label.json" in ts_src or "label" in ts_src.lower():
-    leak_sources.append("temporal_score.py 含 label 引用")
-
 # 检查 evidence_fusion.py
 with open("Sys/RootCauseAnalyze/evidence_fusion.py", "r", encoding="utf-8") as f:
     ef_src = f.read()
 if any(s in ef_src for s in ["_read_label_timestamps", "label.json"]):
     leak_sources.append("evidence_fusion.py 含 label 引用")
 
-# 检查 skill_pipeline 的评分函数（_score_topo, _score_temporal）
-with open("Sys/RootCauseAnalyze/skill_pipeline.py", "r", encoding="utf-8") as f:
-    sp_src = f.read()
-# _score_tempo should NOT mention label
-import re
-score_funcs = re.findall(r'def _score_(topo|temporal)\((.*?)\n(.*?)\n(?=def |\n# ===)', sp_src, re.DOTALL)
-for name, sig, body in score_funcs:
-    if "label" in body.lower():
-        leak_sources.append(f"skill_pipeline._score_{name} 含 label 引用")
+# 检查当前 ranker 实现
+for path, name in [
+    ("Sys/RootCauseAnalyze/skills/topo_ranker.py", "topo_ranker.py"),
+    ("Sys/RootCauseAnalyze/skills/temporal_ranker.py", "temporal_ranker.py"),
+]:
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    if "label.json" in src:
+        leak_sources.append(f"{name} 含 label.json 引用")
 
 if leak_sources:
     for s in leak_sources:
