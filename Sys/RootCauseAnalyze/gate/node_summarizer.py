@@ -79,9 +79,10 @@ class VllmNodeSummarizer:
 
         self.llm = LLM(
             model=self.model_path,
-            tensor_parallel_size=self.tensor_parallel_size,
-            gpu_memory_utilization=0.70,
-            max_model_len=self.max_model_len,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.30,
+            max_model_len=2048,
+            max_num_seqs=1,
             trust_remote_code=True,
         )
         self.sampling_params = SamplingParams(

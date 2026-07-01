@@ -5,6 +5,7 @@ import sys
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
+import hashlib
 import time
 import math
 import re
@@ -80,13 +81,23 @@ def _report_npu_occupants(card_ids: list) -> None:
         logger.info("Could not query NPU state.", exc_info=True)
 
 
+def _case_cache_key(dirpath: str) -> str:
+    """Deterministic per-case key for the summary cache."""
+    return hashlib.sha1(os.path.abspath(dirpath).encode("utf-8")).hexdigest()
+
+
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
                  confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0,
                  summarize_nodes=False, summary_model_path=None, summary_npu_cards=None,
-                 summary_max_tokens=1024):
+                 summary_max_tokens=1024, summary_cache_dir=None):
         """
         Initialize the skill-guided RCA analyzer.
+
+        summary_cache_dir:
+            Directory of precomputed node summaries (方案 A).
+            When set, _build_final_prompt reads from this cache instead of
+            calling VllmNodeSummarizer to generate summaries live.
         """
         if model_path is None:
             model_path = config.model.model_path
@@ -124,6 +135,7 @@ class SkilledAnalyzer:
         )
         self.summary_npu_cards = _default_summary_card
         self.summary_max_tokens = int(summary_max_tokens)
+        self.summary_cache_dir = summary_cache_dir or os.environ.get("PINGMESH_SUMMARY_CACHE_DIR", "")
         self.llm = None
         self.sampling_params = None
         self._summary_model = None  # cached VllmNodeSummarizer (persistent across cases)
@@ -191,6 +203,37 @@ class SkilledAnalyzer:
                 pass
             finally:
                 self._summary_model = None
+
+    def _load_cached_node_summary(self, dirpath: str, fallback_detail: str) -> str:
+        """Load precomputed node summary from disk (方案 A).
+
+        The main inference process never initialises a vLLM summarizer;
+        it only reads JSON files that were precomputed by
+        ``scripts/precompute_node_summaries.py``.
+        """
+        if not self.summary_cache_dir:
+            return fallback_detail
+
+        key = _case_cache_key(dirpath)
+        path = os.path.join(self.summary_cache_dir, f"{key}.json")
+
+        if not os.path.exists(path):
+            logger.warning("Node summary cache missing for %s: %s", dirpath, path)
+            return fallback_detail
+
+        try:
+            data = load_json(path)
+            summary = data.get("summary", "")
+            if isinstance(summary, str) and summary.strip():
+                return summary
+            logger.warning("Node summary cache empty for %s: %s", dirpath, path)
+            return fallback_detail
+        except Exception:
+            logger.warning(
+                "Failed to load node summary cache for %s: %s",
+                dirpath, path, exc_info=True,
+            )
+            return fallback_detail
 
     def _ensure_llm(self):
         """Lazy init vLLM — polls NPU memory first, retries on OOM.
@@ -302,7 +345,15 @@ class SkilledAnalyzer:
                 )
                 return final_prompt, skill_ips, gate
 
-        # Only summarise nodes when LLM will actually be called.
+        # 方案 A：优先读离线预处理好的 node summary cache。
+        # 主推理进程不再初始化 VllmNodeSummarizer。
+        if self.summary_cache_dir:
+            detail_for_llm = self._load_cached_node_summary(dirpath, detail_compact)
+            return SKILLED_PROMPT.format(
+                SKILLRET=skill_ret, INFO=info_data, NODES=detail_for_llm,
+            ), skill_ips, gate
+
+        # 旧路径：实时调 summary 小模型（主实验应避免使用）
         detail_for_llm = self._summarize_candidate_detail(detail_compact)
 
         if self.summarize_nodes_enabled:
@@ -491,7 +542,7 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -521,6 +572,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
         summary_model_path=summary_model_path,
         summary_npu_cards=summary_npu_cards,
         summary_max_tokens=summary_max_tokens,
+        summary_cache_dir=summary_cache_dir,
     )
     # [MODIFIED] 将 target_skill_ids 传入 batch_infer
     (responses, prmpts, ret_ress, skills, skill_ips_ls, gt_ips_ls, confidence_gates) = analyzer.batch_infer(
@@ -548,7 +600,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -595,6 +647,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     summary_model_path=summary_model_path,
                     summary_npu_cards=summary_npu_cards,
                     summary_max_tokens=summary_max_tokens,
+                    summary_cache_dir=summary_cache_dir,
                 )
                 futures.append(future)
 
@@ -664,6 +717,10 @@ if __name__ == "__main__":
                    help="NPU cards for the small summary model; defaults to the worker's first NPU")
     p.add_argument("--summary-max-tokens", type=int, default=int(os.environ.get("PINGMESH_SUMMARY_MAX_TOKENS", "1024")),
                    help="Max tokens generated by the small node-summary model")
+    p.add_argument("--summary-cache-dir",
+                   default=os.environ.get("PINGMESH_SUMMARY_CACHE_DIR", ""),
+                   help="Read precomputed node summaries from this cache (方案 A). "
+                        "No summary vLLM is started in the main inference process.")
     args = p.parse_args()
 
     target_skill_ids = [str(sid) for sid in args.skills]
