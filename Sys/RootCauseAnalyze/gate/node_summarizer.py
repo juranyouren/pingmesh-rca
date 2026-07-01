@@ -75,11 +75,13 @@ class VllmNodeSummarizer:
     def __enter__(self) -> "VllmNodeSummarizer":
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.npu_cards
 
-        # Wait for NPU memory to avoid OOM from stale processes.
+        # The summary model is small (tensor_parallel_size=1), so we only
+        # need a minimal amount of free memory.  Don't wait aggressively —
+        # we expect it to share a card with the main RCA model.
         card_ids = _parse_npu_cards(self.npu_cards)
         if card_ids:
             from Sys.utils.npu_utils import wait_npu_memory
-            wait_npu_memory(card_ids, required_free_ratio=0.20, timeout=600.0, poll_interval=15.0)
+            wait_npu_memory(card_ids, required_free_ratio=0.05, timeout=60.0, poll_interval=5.0)
 
         from vllm import LLM, SamplingParams
 

@@ -101,6 +101,7 @@ class SkilledAnalyzer:
         self.summary_max_tokens = int(summary_max_tokens)
         self.llm = None
         self.sampling_params = None
+        self._summary_model = None  # cached VllmNodeSummarizer (persistent across cases)
 
         # 将 skill_id 统一转换为 string，方便检索。
         print(self.skills)
@@ -114,15 +115,45 @@ class SkilledAnalyzer:
         if not self.summarize_nodes_enabled:
             return candidate_detail
         if not self.summary_model_path:
-            raise ValueError("summarize_nodes is enabled but PINGMESH_SUMMARY_MODEL_PATH/--summary-model-path is not set")
-        from Sys.RootCauseAnalyze.gate.node_summarizer import VllmNodeSummarizer, summarize_nodes_with
+            raise ValueError(
+                "summarize_nodes is enabled but "
+                "PINGMESH_SUMMARY_MODEL_PATH/--summary-model-path is not set"
+            )
 
-        with VllmNodeSummarizer(
-            model_path=self.summary_model_path,
-            npu_cards=self.summary_npu_cards,
-            max_tokens=self.summary_max_tokens,
-        ) as summarizer:
-            return summarize_nodes_with(candidate_detail, summarize_batch=summarizer.summarize_batch)
+        from Sys.RootCauseAnalyze.gate.node_summarizer import (
+            VllmNodeSummarizer,
+            summarize_nodes_with,
+        )
+
+        # ── lazy-init + cache across cases ───────────────────────────
+        if self._summary_model is None:
+            model = VllmNodeSummarizer(
+                model_path=self.summary_model_path,
+                npu_cards=self.summary_npu_cards,
+                max_tokens=self.summary_max_tokens,
+            )
+            model.__enter__()  # init vLLM once, keep alive
+            self._summary_model = model
+            logger.info(
+                "VllmNodeSummarizer started on NPU %s, model=%s",
+                self.summary_npu_cards, self.summary_model_path,
+            )
+
+        return summarize_nodes_with(
+            candidate_detail,
+            summarize_batch=self._summary_model.summarize_batch,
+        )
+
+    def _cleanup_summarizer(self) -> None:
+        """Release the cached VllmNodeSummarizer if one was created."""
+        if self._summary_model is not None:
+            try:
+                self._summary_model.__exit__(None, None, None)
+                logger.info("VllmNodeSummarizer released.")
+            except Exception:
+                pass
+            finally:
+                self._summary_model = None
 
     def _ensure_llm(self):
         """Lazy init vLLM — polls NPU memory first, retries on OOM.
@@ -202,7 +233,6 @@ class SkilledAnalyzer:
             weight_dirpath=config.data.alarm_weights,
             top_k=self.top_k,
         )
-        detail_for_llm = self._summarize_candidate_detail(detail_compact)
 
         if not selected_skill_ids:
             skill_ret = "No deterministic skill was selected; infer from info and candidate details only."
@@ -220,6 +250,7 @@ class SkilledAnalyzer:
                 agreement_margin=self.confidence_agreement_margin,
             )
             if gate.get("decision") in ("bypass_llm", "operator_review"):
+                # Summary is not needed for bypass — use raw detail
                 gate_tag = "CONFIDENCE_GATE_BYPASS" if gate.get("decision") == "bypass_llm" else "CONFIDENCE_GATE_OPERATOR_REVIEW"
                 final_prompt = (
                     f"{gate_tag}\n"
@@ -228,9 +259,12 @@ class SkilledAnalyzer:
                     "# 算法证据\n"
                     f"{skill_ret}\n\n"
                     "# 候选设备详情\n"
-                    f"{detail_for_llm}"
+                    f"{detail_compact}"
                 )
                 return final_prompt, skill_ips, gate
+
+        # Only summarise nodes when LLM will actually be called.
+        detail_for_llm = self._summarize_candidate_detail(detail_compact)
 
         if self.summarize_nodes_enabled:
             return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=detail_for_llm), skill_ips, gate
@@ -330,10 +364,12 @@ class SkilledAnalyzer:
                 for idx, response in zip(llm_indices, llm_responses):
                     final_responses[idx] = response
 
+            self._cleanup_summarizer()
             return final_responses, final_prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list, confidence_gates
 
         except Exception as e:
             print(f"\n[Error {os.getpid()}] vLLM batch inference failed: {str(e)}")
+            self._cleanup_summarizer()
             return (["model inference failed"] * len(prompts),
                     [""] * len(prompts),
                     [""] * len(prompts),

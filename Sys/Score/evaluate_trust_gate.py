@@ -14,10 +14,18 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from Sys.RootCauseAnalyze.trust_trees.router import route_with_trust_trees
-from Sys.Score.Score_N import Scorer
+from Sys.Score.Score_N import ResponseParser, Scorer
 
 
 _JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _parse_llm_response_ips(response: Any) -> List[str]:
+    """Extract IPs from an LLM response string using Score_N's ResponseParser."""
+    if not isinstance(response, str) or not response:
+        return []
+    parser = ResponseParser()
+    return parser.parse(response).ips
 
 
 def _load_json(path: str) -> Any:
@@ -190,7 +198,17 @@ def _case_row(record: Dict[str, Any], index: int) -> Dict[str, Any]:
         temporal_tree=_tree_from_detail(details, "2"),
     )
     gt_ips = _gt_ips(record)
-    pred_ips = gate.get("recommended_ips", []) if gate.get("decision") != "operator_review" else []
+
+    # Determine evaluated IPs based on gate decision
+    if gate.get("decision") == "operator_review":
+        pred_ips: List[str] = []
+    elif gate.get("decision") == "invoke_llm":
+        # Try to use actual LLM response; fall back to recommended (combined) if unavailable
+        llm_ips = _parse_llm_response_ips(record.get("response", ""))
+        pred_ips = llm_ips if llm_ips else gate.get("recommended_ips", [])
+    else:
+        pred_ips = gate.get("recommended_ips", [])
+
     original_skill_ips = _dedupe(record.get("skill_ips", [])) or combined_ips
 
     return {
