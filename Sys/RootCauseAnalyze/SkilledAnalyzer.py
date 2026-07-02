@@ -86,6 +86,22 @@ def _case_cache_key(dirpath: str) -> str:
     return hashlib.sha1(os.path.abspath(dirpath).encode("utf-8")).hexdigest()
 
 
+def _format_skilled_prompt(skill_ret: str, info: str, nodes: str, nodes_are_summary: bool = False) -> str:
+    prompt = SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info, NODES=nodes)
+    if not nodes_are_summary:
+        return prompt
+
+    prompt = prompt.replace(
+        "**3. 候选设备详情(JSON)** - 每个候选上实际触发的告警/日志",
+        "**3. 候选设备摘要** - 小模型压缩后的候选设备告警/日志摘要",
+    )
+    prompt = prompt.replace(
+        f"# 3. 候选设备详情\n```json\n{nodes}\n```",
+        f"# 3. 候选设备摘要\n{nodes}",
+    )
+    return prompt
+
+
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
                  confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0,
@@ -347,10 +363,13 @@ class SkilledAnalyzer:
 
         # ── 确定发送给 LLM 的候选设备详情 ──────────────────────────
         # 方案 A：优先读取离线 cache；否则实时调 summarize；否则用原始 JSON。
+        detail_is_summary = False
         if self.summary_cache_dir:
             detail_for_llm = self._load_cached_node_summary(dirpath, detail_compact)
+            detail_is_summary = detail_for_llm != detail_compact
         elif self.summarize_nodes_enabled:
             detail_for_llm = self._summarize_candidate_detail(detail_compact)
+            detail_is_summary = detail_for_llm != detail_compact
         else:
             detail_for_llm = detail_compact
 
@@ -377,8 +396,11 @@ class SkilledAnalyzer:
         if len(nodes_tokens) > remaining_tokens:
             detail_for_llm = tokenizer.decode(nodes_tokens[:remaining_tokens]) + "\n...[候选详情截断]..."
 
-        return SKILLED_PROMPT.format(
-            SKILLRET=skill_ret, INFO=info_data, NODES=detail_for_llm,
+        return _format_skilled_prompt(
+            skill_ret=skill_ret,
+            info=info_data,
+            nodes=detail_for_llm,
+            nodes_are_summary=detail_is_summary,
         ), skill_ips, gate
 
     def _safe_truncate(self, text: str) -> str:
@@ -390,7 +412,14 @@ class SkilledAnalyzer:
         return text
 
     # [MODIFIED] 增加 target_skill_ids 参数
-    def batch_infer(self, dirpaths: list, prompts: list, target_skill_ids: list, batch_size: int = 8) -> list:
+    def batch_infer(
+        self,
+        dirpaths: list,
+        prompts: list,
+        target_skill_ids: list,
+        batch_size: int = 8,
+        print_first_prompt: bool = False,
+    ) -> list:
         """返回 (responses, prompts, retrieval_responses, skill_ids_list, skill_ips_list, gt_ips_list, confidence_gates)."""
         print(f"[{os.getpid()}] 正在执行技能推理(直接使用传入的技能集 {target_skill_ids}) (共 {len(prompts)} 条, Batch Size: {batch_size})...")
 
@@ -423,6 +452,10 @@ class SkilledAnalyzer:
                 skill_ids_list.append(target_skill_ids)
                 final_p, skill_ips, gate = self._build_final_prompt(original_p, target_skill_ids, dirpath)
                 final_prompts.append(final_p)
+                if print_first_prompt and len(final_prompts) == 1:
+                    print("\n========== FIRST FINAL PROMPT START ==========", flush=True)
+                    print(final_p, flush=True)
+                    print("========== FIRST FINAL PROMPT END ==========\n", flush=True)
                 skill_ips_list.append(skill_ips)
                 confidence_gates.append(gate)
                 # 读取 gt_ips
@@ -537,7 +570,7 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -574,7 +607,8 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
         dirpaths=dirpaths_chunk, 
         prompts=prompts_chunk, 
         target_skill_ids=target_skill_ids, 
-        batch_size=batch_size
+        batch_size=batch_size,
+        print_first_prompt=print_first_prompt,
     )
     
     resls=[]
@@ -595,7 +629,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -643,6 +677,7 @@ def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: 
                     summary_npu_cards=summary_npu_cards,
                     summary_max_tokens=summary_max_tokens,
                     summary_cache_dir=summary_cache_dir,
+                    print_first_prompt=bool(print_first_prompt and i == 0),
                 )
                 futures.append(future)
 
@@ -716,6 +751,8 @@ if __name__ == "__main__":
                    default=os.environ.get("PINGMESH_SUMMARY_CACHE_DIR", ""),
                    help="Read precomputed node summaries from this cache (方案 A). "
                         "No summary vLLM is started in the main inference process.")
+    p.add_argument("--print-first-prompt", action="store_true",
+                   help="Print the first final prompt after skill/gate/summary processing.")
     args = p.parse_args()
 
     target_skill_ids = [str(sid) for sid in args.skills]
@@ -748,6 +785,7 @@ if __name__ == "__main__":
             summary_npu_cards=args.summary_npu_cards or None,
             summary_max_tokens=args.summary_max_tokens,
             summary_cache_dir=args.summary_cache_dir,
+            print_first_prompt=args.print_first_prompt,
         )
         print(f"All inference workers finished in {time.time() - start_time:.2f}s.")
 

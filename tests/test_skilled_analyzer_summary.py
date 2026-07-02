@@ -2,6 +2,8 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -104,10 +106,71 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
             self.assertIn("CACHED_SUMMARY", prompt)
             self.assertFalse(hasattr(analyzer, "seen_candidate_detail"))
 
+    def test_cached_summary_is_not_wrapped_as_json_detail(self):
+        with tempfile.TemporaryDirectory() as tmp_cache, tempfile.TemporaryDirectory() as tmp_case:
+            with open(os.path.join(tmp_case, "info.json"), "w", encoding="utf-8") as f:
+                json.dump({"alarm_time": 1000}, f)
+
+            from Sys.RootCauseAnalyze.SkilledAnalyzer import _case_cache_key
+            key = _case_cache_key(tmp_case)
+            with open(os.path.join(tmp_cache, f"{key}.json"), "w", encoding="utf-8") as f:
+                json.dump({"summary": "CACHED_SUMMARY: plain text"}, f)
+
+            analyzer = SummaryAnalyzer(
+                summarize_nodes=True, model_path="unused",
+                summary_cache_dir=tmp_cache,
+            )
+            analyzer.executor = FakeExecutor()
+            _setup_fake_llm(analyzer)
+            prompt, _skill_ips, gate = analyzer._build_final_prompt("", ["1", "2"], tmp_case)
+
+            self.assertEqual(gate["decision"], "invoke_llm")
+            self.assertIn("# 3. 候选设备摘要", prompt)
+            self.assertNotIn("```json\nCACHED_SUMMARY", prompt)
+            self.assertNotIn("候选设备详情(JSON)", prompt)
+
     def test_cli_passes_summary_cache_dir_to_workers(self):
         source = Path("Sys/RootCauseAnalyze/SkilledAnalyzer.py").read_text(encoding="utf-8")
 
         self.assertIn("summary_cache_dir=args.summary_cache_dir", source)
+
+    def test_cli_and_shell_scripts_support_print_first_prompt(self):
+        analyzer_source = Path("Sys/RootCauseAnalyze/SkilledAnalyzer.py").read_text(encoding="utf-8")
+        run_inference = Path("scripts/run_inference.sh").read_text(encoding="utf-8")
+        run_experiments = Path("scripts/run_gate_pipe_experiments.sh").read_text(encoding="utf-8")
+
+        self.assertIn("--print-first-prompt", analyzer_source)
+        self.assertIn("print_first_prompt=args.print_first_prompt", analyzer_source)
+        self.assertIn("--print-first-prompt", run_inference)
+        self.assertIn("--print-first-prompt", run_experiments)
+
+    def test_batch_infer_prints_only_first_final_prompt_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b:
+            analyzer = SummaryAnalyzer(model_path="unused")
+            analyzer.executor = FakeExecutor()
+            _setup_fake_llm(analyzer)
+
+            with patch.object(
+                analyzer,
+                "_build_final_prompt",
+                side_effect=[
+                    ("FIRST_FINAL_PROMPT", ["10.0.0.1"], {"decision": "bypass_llm"}),
+                    ("SECOND_FINAL_PROMPT", ["10.0.0.2"], {"decision": "bypass_llm"}),
+                ],
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    analyzer.batch_infer(
+                        dirpaths=[tmp_a, tmp_b],
+                        prompts=["raw_a", "raw_b"],
+                        target_skill_ids=["1", "2"],
+                        batch_size=1,
+                        print_first_prompt=True,
+                    )
+
+            printed = output.getvalue()
+            self.assertIn("FIRST_FINAL_PROMPT", printed)
+            self.assertNotIn("SECOND_FINAL_PROMPT", printed)
 
 
 if __name__ == "__main__":

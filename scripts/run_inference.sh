@@ -22,10 +22,14 @@ CONF_GATE="${PINGMESH_CONFIDENCE_GATE:-0}"
 CONF_HIGH_MARGIN="${PINGMESH_CONFIDENCE_HIGH_MARGIN:-15}"
 CONF_AGREEMENT_MARGIN="${PINGMESH_CONFIDENCE_AGREEMENT_MARGIN:-8}"
 CONF_ARGS=()
+DEBUG_ARGS=()
 if [ "${CONF_GATE}" = "1" ] || [ "${CONF_GATE}" = "true" ] || [ "${CONF_GATE}" = "TRUE" ]; then
     CONF_ARGS+=(--confidence-gate)
     CONF_ARGS+=(--confidence-high-margin "${CONF_HIGH_MARGIN}")
     CONF_ARGS+=(--confidence-agreement-margin "${CONF_AGREEMENT_MARGIN}")
+fi
+if [ "${PINGMESH_PRINT_FIRST_PROMPT:-0}" = "1" ] || [ "${PINGMESH_PRINT_FIRST_PROMPT:-0}" = "true" ] || [ "${PINGMESH_PRINT_FIRST_PROMPT:-0}" = "TRUE" ]; then
+    DEBUG_ARGS+=(--print-first-prompt)
 fi
 
 echo "============================================"
@@ -46,7 +50,8 @@ python Sys/RootCauseAnalyze/SkilledAnalyzer.py \
     -b "${BATCH}" \
     -k "${TOPK}" \
     -o "${OUTDIR}" \
-    "${CONF_ARGS[@]}"
+    "${CONF_ARGS[@]}" \
+    "${DEBUG_ARGS[@]}"
 
 echo ""
 echo "--- 评分 ---"

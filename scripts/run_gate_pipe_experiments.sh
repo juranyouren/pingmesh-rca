@@ -59,6 +59,10 @@ WEIGHT_FILE="${PINGMESH_WEIGHTS_MANUAL}"
 # Summary cache (方案 A): precompute with precompute_node_summaries.py first,
 # then set PINGMESH_SUMMARY_CACHE_DIR to point to the cache directory.
 SUMMARY_CACHE_DIR="${PINGMESH_SUMMARY_CACHE_DIR:-}"
+DEBUG_ARGS=()
+if [ "${PINGMESH_PRINT_FIRST_PROMPT:-0}" = "1" ] || [ "${PINGMESH_PRINT_FIRST_PROMPT:-0}" = "true" ] || [ "${PINGMESH_PRINT_FIRST_PROMPT:-0}" = "TRUE" ]; then
+    DEBUG_ARGS+=(--print-first-prompt)
+fi
 
 mkdir -p "${WORKDIR}"
 
@@ -165,7 +169,8 @@ if has_experiment pipe_llm; then
         -n "${NPU}" \
         -b "${BATCH}" \
         -k "${TOPK}" \
-        -o "${RUN_TAG}/pipe_llm"
+        -o "${RUN_TAG}/pipe_llm" \
+        "${DEBUG_ARGS[@]}"
     score_res "${WORKDIR}/pipe_llm/res.json"
 fi
 
@@ -179,7 +184,8 @@ if has_experiment gate_pipe_llm; then
         -b "${BATCH}" \
         -k "${TOPK}" \
         -o "${RUN_TAG}/gate_pipe_llm" \
-        --confidence-gate
+        --confidence-gate \
+        "${DEBUG_ARGS[@]}"
     score_res "${WORKDIR}/gate_pipe_llm/res.json"
 fi
 
@@ -193,7 +199,8 @@ if has_experiment pipe_cache_llm; then
         -b "${BATCH}" \
         -k "${TOPK}" \
         -o "${RUN_TAG}/pipe_cache_llm" \
-        "${cache_args[@]}"
+        "${cache_args[@]}" \
+        "${DEBUG_ARGS[@]}"
     score_res "${WORKDIR}/pipe_cache_llm/res.json"
 fi
 
@@ -208,7 +215,8 @@ if has_experiment gate_pipe_cache_llm; then
         -k "${TOPK}" \
         -o "${RUN_TAG}/gate_pipe_cache_llm" \
         "${cache_args[@]}" \
-        --confidence-gate
+        --confidence-gate \
+        "${DEBUG_ARGS[@]}"
     score_res "${WORKDIR}/gate_pipe_cache_llm/res.json"
 fi
 
