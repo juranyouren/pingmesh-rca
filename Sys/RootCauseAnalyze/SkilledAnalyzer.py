@@ -747,6 +747,7 @@ if __name__ == "__main__":
             summary_model_path=args.summary_model_path,
             summary_npu_cards=args.summary_npu_cards or None,
             summary_max_tokens=args.summary_max_tokens,
+            summary_cache_dir=args.summary_cache_dir,
         )
         print(f"All inference workers finished in {time.time() - start_time:.2f}s.")
 

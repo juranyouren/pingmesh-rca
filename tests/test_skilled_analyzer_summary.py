@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from Sys.RootCauseAnalyze.SkilledAnalyzer import SkilledAnalyzer
@@ -102,6 +103,11 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
             self.assertEqual(gate["decision"], "invoke_llm")
             self.assertIn("CACHED_SUMMARY", prompt)
             self.assertFalse(hasattr(analyzer, "seen_candidate_detail"))
+
+    def test_cli_passes_summary_cache_dir_to_workers(self):
+        source = Path("Sys/RootCauseAnalyze/SkilledAnalyzer.py").read_text(encoding="utf-8")
+
+        self.assertIn("summary_cache_dir=args.summary_cache_dir", source)
 
 
 if __name__ == "__main__":
