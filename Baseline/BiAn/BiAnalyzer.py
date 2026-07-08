@@ -430,7 +430,8 @@ if __name__ == "__main__":
     import sys
     root = sys.argv[1] if len(sys.argv) > 1 else \
         "/home/sbp/lixinyang/pingmesh/data/nodes_labeled"
-    available_npus = [2, 3, 6, 7]
+    npu_arg = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("PINGMESH_NPU_CARDS", "2,3,6,7")
+    available_npus = [int(card.strip()) for card in npu_arg.split(",") if card.strip()]
 
     dirpaths = generate_prompts(root)
     print(f"BiAn: {len(dirpaths)} cases found.")
@@ -441,6 +442,7 @@ if __name__ == "__main__":
 
     print(f"Done in {elapsed:.2f}s ({elapsed/max(len(results),1):.2f}s/case)")
 
-    outdir = f"/home/sbp/lixinyang/pingmesh/data/res/bian_baseline_{int(time.time())}"
+    results_root = os.environ.get("PINGMESH_RESULTS", "/home/sbp/lixinyang/pingmesh/data/res")
+    outdir = os.path.join(results_root, f"bian_baseline_{int(time.time())}")
     save_json(results, os.path.join(outdir, "res.json"))
     print(f"Saved to {outdir}")

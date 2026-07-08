@@ -261,3 +261,15 @@
 - [ ] 清理 nkthesis.bib 中不相关的中文条目 (法律/铁路/储能等)
 - [ ] 确认所有高相关度文献已在 bib 中有正确条目
 - [ ] 补全 Group A/B/C 中仅有标题的论文的详细方法分析
+
+## 2026-07-05 补充：信任门控与 LLM 角色
+
+新增独立调研文档：`docs/文献调研补充_信任门与LLM角色.md`。
+
+补充结论：
+
+1. 本文 Trust-Tree Gate 可放入 selective prediction / reject option / abstention 的研究脉络中，核心评价应同时看自动覆盖率和自动输出错误率。
+2. COLA 是最接近的直接类比：先用统计相关挖掘处理高置信样本，只把低置信或不确定样本交给 LLM reasoning。本文将该范式从告警聚合扩展到设备级 Top-K RCA。
+3. LM-PACE 说明 RCA 推荐本身需要置信估计，本文则用 topo/temporal trust tree 替代 LLM 自评置信度。
+4. RCACopilot、RCAgent、TAMO、BiAn 证明 LLM 适合做运维语义理解、工具调用、证据组织和 operator assistance。
+5. OpenRCA 与 LLM reasoning failure studies 说明 LLM 在复杂 RCA 中仍存在长上下文、多跳因果和证据选择不稳定，因此本文不应把 LLM 写成主排序器，而应写成受门控约束的仲裁器。

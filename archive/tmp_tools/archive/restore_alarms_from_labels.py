@@ -4,8 +4,10 @@
 label.json 中 abnormal_node 的 syslogs/alarms 是保留的原始生产数据，
 不是标注信息。填回全链路文件后，所有算法公平获取同一份数据。
 
+Deprecated archived script. Prefer restoring from raw rootcause_analysis.
+
 用法（先在单 case 上试）：
-  python tmp/restore_alarms_from_labels.py --dry-run /path/to/nodes_labeled
+  python archive/tmp_tools/archive/restore_alarms_from_labels.py --dry-run /path/to/nodes_labeled
 确认无误后去掉 --dry-run 正式运行。
 """
 

@@ -390,6 +390,7 @@ if __name__ == "__main__":
 
     print(f"Done in {elapsed:.2f}s ({elapsed/max(len(results),1):.4f}s/case)")
 
-    outdir = f"/home/sbp/lixinyang/pingmesh/data/res/neceventcause_baseline_{int(time.time())}"
+    results_root = os.environ.get("PINGMESH_RESULTS", "/home/sbp/lixinyang/pingmesh/data/res")
+    outdir = os.path.join(results_root, f"neceventcause_baseline_{int(time.time())}")
     save_json(results, os.path.join(outdir, "res.json"))
     print(f"Saved to {outdir}")

@@ -5,7 +5,7 @@
   3. 是否有数据泄漏
 
 用法:
-  python tmp/diagnose_pipeline.py /path/to/nodes_labeled
+  python archive/tmp_tools/diagnose_pipeline.py /path/to/nodes_labeled
 """
 
 import json, os, sys

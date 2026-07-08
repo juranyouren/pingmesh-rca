@@ -6,12 +6,13 @@
 未命中的 case 留在原地供人工标注。
 
 用法:
-  python tmp/labeling_helper.py /path/to/nodes_extend /path/to/res.json
-  python tmp/labeling_helper.py /path/to/nodes_extend /path/to/res.json --write
-  python tmp/labeling_helper.py /path/to/nodes_extend /path/to/res.json --use-skill --write
+  python archive/tmp_tools/labeling_helper.py /path/to/nodes_extend /path/to/res.json
+  python archive/tmp_tools/labeling_helper.py /path/to/nodes_extend /path/to/res.json --write
+  python archive/tmp_tools/labeling_helper.py /path/to/nodes_extend /path/to/res.json --use-skill --write
 """
 
 import os, json, sys, shutil, re
+from pathlib import Path
 
 
 def _parse_top1_ip(response_text):
@@ -41,22 +42,7 @@ def _save_json(data, path):
     with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else "/home/sbp/lixinyang/pingmesh/data/node/nodes_extend"
-    res_path = sys.argv[2] if len(sys.argv) > 2 else ""
-    write = "--write" in sys.argv
-    use_skill = "--use-skill" in sys.argv
-
-    print(f"数据目录: {src}")
-    print(f"res.json: {res_path}")
-    print(f"预测来源: {'skill_ips' if use_skill else 'LLM response'}\n")
-
-    if not res_path:
-        print("usage: python tmp/labeling_helper.py <nodes_dir> <res.json> [--write]")
-        sys.exit(1)
-
-    res_data = _load_json(res_path)
-
+def classify_cases(res_data, use_skill=False):
     auto_labeled, need_manual = [], []
 
     for rd in res_data:
@@ -102,6 +88,51 @@ def main():
                              "pred_top1": pred_top1, "matched_idx": matched_idx,
                              "labels_before": len(labels)})
 
+    return auto_labeled, need_manual
+
+
+def write_labeled_cases(src, auto_labeled, need_manual, overwrite=False):
+    src_path = Path(src)
+    dst = Path(str(src_path).rstrip("/").rstrip("\\") + "_labeled")
+    dst.mkdir(parents=True, exist_ok=True)
+
+    for a in auto_labeled:
+        dst_dir = dst / a["csn"]
+        if dst_dir.exists():
+            if not overwrite:
+                raise FileExistsError(
+                    f"{dst_dir} already exists; pass --overwrite to replace it"
+                )
+            shutil.rmtree(dst_dir)
+        shutil.copytree(a["case_dir"], dst_dir)
+        labels = _load_json(str(dst_dir / "label.json"))
+        kept = labels[a["matched_idx"]]
+        kept["ranking"] = 1
+        _save_json([kept], str(dst_dir / "label.json"))
+
+    manual_path = dst / "need_manual.json"
+    _save_json(need_manual, str(manual_path))
+    return dst
+
+
+def main():
+    src = sys.argv[1] if len(sys.argv) > 1 else "/home/sbp/lixinyang/pingmesh/data/node/nodes_extend"
+    res_path = sys.argv[2] if len(sys.argv) > 2 else ""
+    write = "--write" in sys.argv
+    use_skill = "--use-skill" in sys.argv
+    overwrite = "--overwrite" in sys.argv
+
+    print(f"数据目录: {src}")
+    print(f"res.json: {res_path}")
+    print(f"预测来源: {'skill_ips' if use_skill else 'LLM response'}\n")
+
+    if not res_path:
+        print("usage: python archive/tmp_tools/labeling_helper.py <nodes_dir> <res.json> [--write] [--overwrite]")
+        sys.exit(1)
+
+    res_data = _load_json(res_path)
+    auto_labeled, need_manual = classify_cases(res_data, use_skill=use_skill)
+
     print(f"自动标注: {len(auto_labeled)}")
     print(f"需人工:   {len(need_manual)}\n")
 
@@ -118,32 +149,10 @@ def main():
         if len(need_manual) > 10: print(f"  ... 还有 {len(need_manual) - 10} 个")
 
     if write:
-        dst = src.rstrip("/").rstrip("\\") + "_labeled"
-        os.makedirs(dst, exist_ok=True)
-        total = 0
-        for a in auto_labeled:
-            dst_dir = os.path.join(dst, a["csn"])
-            if os.path.exists(dst_dir): shutil.rmtree(dst_dir)
-            shutil.copytree(a["case_dir"], dst_dir)
-            labels = _load_json(os.path.join(dst_dir, "label.json"))
-            kept = labels[a["matched_idx"]]
-            kept["ranking"] = 1
-            _save_json([kept], os.path.join(dst_dir, "label.json"))
-            total += 1
-        for m in need_manual:
-            dst_dir = os.path.join(dst, m["csn"])
-            if os.path.exists(dst_dir): shutil.rmtree(dst_dir)
-            shutil.copytree(m["case_dir"], dst_dir)
-            labels = _load_json(os.path.join(dst_dir, "label.json"))
-            if isinstance(labels, list) and labels:
-                labels[:] = [labels[0]]  # 只保留第一条
-                labels[0]["ranking"] = 1
-                _save_json(labels, os.path.join(dst_dir, "label.json"))
-            total += 1
-
-        print(f"\n>> 已写入 {total} 个 case -> {dst}")
+        dst = write_labeled_cases(src, auto_labeled, need_manual, overwrite=overwrite)
+        print(f"\n>> 已写入 {len(auto_labeled)} 个自动命中 case -> {dst}")
         print(f">> 自动命中 {len(auto_labeled)} 个 (label 已裁剪)")
-        print(f">> 待人工标注 {len(need_manual)} 个 (label 保留第一条, 需后续手动筛选)")
+        print(f">> 待人工标注 {len(need_manual)} 个，清单已写入 {dst / 'need_manual.json'}")
     elif not write:
         print("\n>> DRY RUN -- 加 --write 执行")
 

@@ -50,7 +50,7 @@ The current system combines deterministic ranking and local LLM review:
 | `Sys/utils/` | Shared case, alarm, ranking, and I/O utilities. |
 | `prompts/` | Active LLM prompt templates used by `SkilledAnalyzer`. |
 | `Baseline/` | Adapted TraceRCA, NetEventCause, and BiAn baselines. |
-| `scripts/` | Server-side experiment entrypoints. |
+| `scripts/` | Server-side experiment entrypoints; `run_paper_*.sh` are thesis experiment wrappers. |
 | `tests/` | Unit tests for modularization, ranker determinism, trust gate, summarizer, and failure analysis. |
 | `docs/papers/` | Paper text extractions and summaries. Original PDFs live outside the repo. |
 | `tmp/` | One-off diagnostics, labeling helpers, and data repair scripts. Keep these out of the runtime path. |
@@ -135,7 +135,7 @@ Main files:
 - `Sys/Score/analyze_skillpipe_failures.py`
 - `Sys/Score/evaluate_gate_selection.py`
 - `Sys/Score/evaluate_trust_gate.py`
-- `tmp/diagnose_pipeline.py`
+- `archive/tmp_tools/diagnose_pipeline.py` (archived diagnostic helper)
 
 ### 5.5 Public Dataset / NIKA Direction
 
@@ -195,6 +195,16 @@ For the current combined experiment driver:
 ```bash
 source scripts/common.sh
 PINGMESH_EXPERIMENTS="pipe gate_eval gate_pipe" ./scripts/run_gate_pipe_experiments.sh
+```
+
+For thesis experiments, use the split wrappers documented in
+`docs/实验脚本说明.md`:
+
+```bash
+source scripts/common.sh
+./scripts/run_paper_01_skill_ablation.sh
+./scripts/run_paper_02_gate_routing.sh
+./scripts/run_paper_03_llm_arbitration.sh
 ```
 
 ## 8. Testing

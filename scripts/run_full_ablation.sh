@@ -19,6 +19,7 @@ PREFIX="ablation"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 WORKDIR="${PINGMESH_RESULTS}/${PREFIX}_${TIMESTAMP}"
 SUMMARY="${WORKDIR}/summary.json"
+TOPK="${PINGMESH_TOP_K:-5}"
 
 mkdir -p "${WORKDIR}"
 
@@ -26,6 +27,7 @@ echo "============================================"
 echo "  Skill 消融实验 (topo + temporal)"
 echo "  数据: ${PINGMESH_DATA}"
 echo "  结果: ${WORKDIR}"
+echo "  Top-K: ${TOPK}"
 echo "============================================"
 
 # ── 6 组 ──
@@ -48,7 +50,7 @@ for combo in "${COMBOS[@]}"; do
         echo ""; echo "=== ${tag} w=[${wtag}] ==="
         python Sys/RootCauseAnalyze/skill_pipeline.py \
             -d "${PINGMESH_DATA}" \
-            -s ${skills} -k 5 -w "${wpath}" -o "${out_dir}" 2>&1 | tail -3
+            -s ${skills} -k "${TOPK}" -w "${wpath}" -o "${out_dir}" 2>&1 | tail -3
 
         res_json="${PINGMESH_RESULTS}/${out_dir}/res.json"
         if [ ! -f "${res_json}" ]; then echo "  [ERROR] res.json 不存在"; continue; fi

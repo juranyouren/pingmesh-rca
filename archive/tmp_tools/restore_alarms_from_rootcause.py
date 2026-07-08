@@ -3,7 +3,7 @@
 full_link.alarm_list 和 full_link.log_list.data。
 
 用法:
-  python tmp/restore_alarms_from_rootcause.py /path/to/pingmesh_extend [--write]
+  python archive/tmp_tools/restore_alarms_from_rootcause.py /path/to/pingmesh_extend [--write]
 """
 
 import os, json, sys, shutil

@@ -33,7 +33,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from Sys.config import config
 from Sys.RootCauseAnalyze.skills.provider import BuiltinSkillProvider
 from Sys.RootCauseAnalyze.gate.evidence import build_fused_evidence
-from Sys.RootCauseAnalyze.gate.node_summarizer import MultiCardSummarizer, summarize_devices
+from Sys.RootCauseAnalyze.gate.node_summarizer import MultiCardSummarizer
 from Sys.utils.case_utils import find_full_link_file
 from Sys.utils.io_utils import load_json, save_json
 
@@ -66,7 +66,7 @@ def main():
         "--model-path",
         default=os.environ.get(
             "PINGMESH_SUMMARY_MODEL_PATH",
-            "/home/sbp/huangzeshun/firstpaper/qwen2.5-1.5b-local",
+            "/usr/share/large_language_models/Qwen2.5-0.5B",
         ),
     )
     parser.add_argument(

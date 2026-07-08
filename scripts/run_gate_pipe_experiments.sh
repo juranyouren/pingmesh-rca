@@ -125,6 +125,12 @@ if needs_summary_cache; then
     build_cache_args
 fi
 
+if needs_gate_pipe_llm_result && ! has_experiment gate_pipe_llm; then
+    echo "[ERROR] gate_ablation/gate_selection require gate_pipe_llm in PINGMESH_EXPERIMENTS." >&2
+    echo "        Example: PINGMESH_EXPERIMENTS=\"pipe gate_pipe_llm gate_ablation gate_selection\" $0" >&2
+    exit 1
+fi
+
 PIPE_OUTDIR="${RUN_TAG}/pipe"
 PIPE_RESDIR="${PINGMESH_RESULTS}/${PIPE_OUTDIR}"
 PIPE_RES="${PIPE_RESDIR}/res.json"
