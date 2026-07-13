@@ -2,6 +2,18 @@ import json
 from unittest.mock import patch
 
 from Sys.RootCauseAnalyze.gate.evidence import _ranked_ip_union, build_fused_evidence
+from scripts.precompute_node_summaries import gib_to_bytes
+
+
+def test_kv_cache_gib_conversion_rejects_non_positive_values():
+    assert gib_to_bytes(4) == 4 * 1024**3
+    for value in (0, -1):
+        try:
+            gib_to_bytes(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("non-positive cache sizes must be rejected")
 
 
 def test_ranked_ip_union_interleaves_and_deduplicates_two_rankings():

@@ -19,6 +19,7 @@ echo "  data:       ${PINGMESH_DATA}"
 echo "  cache:      ${PINGMESH_SUMMARY_CACHE_DIR}"
 echo "  model:      ${PINGMESH_SUMMARY_MODEL_PATH}"
 echo "  npu_cards:  ${PINGMESH_SUMMARY_NPU_CARDS}"
+echo "  kv_cache:   ${PINGMESH_SUMMARY_KV_CACHE_GB} GiB per NPU"
 echo "============================================"
 
 python scripts/precompute_node_summaries.py \
@@ -26,4 +27,5 @@ python scripts/precompute_node_summaries.py \
     --out-cache "${PINGMESH_SUMMARY_CACHE_DIR}" \
     --npu-cards "${PINGMESH_SUMMARY_NPU_CARDS}" \
     --model-path "${PINGMESH_SUMMARY_MODEL_PATH}" \
+    --kv-cache-gb "${PINGMESH_SUMMARY_KV_CACHE_GB}" \
     --top-k "${PINGMESH_TOP_K}"

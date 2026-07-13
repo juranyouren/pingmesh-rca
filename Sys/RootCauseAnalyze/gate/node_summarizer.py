@@ -117,12 +117,14 @@ class VllmNodeSummarizer:
         max_tokens: int = 512,
         temperature: float = 0.1,
         max_model_len: int = 2048,
+        kv_cache_memory_bytes: int | None = None,
     ) -> None:
         self.model_path = model_path
         self.npu_cards = npu_cards
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.max_model_len = max_model_len
+        self.kv_cache_memory_bytes = kv_cache_memory_bytes
         self.llm = None
         self.sampling_params = None
 
@@ -131,7 +133,7 @@ class VllmNodeSummarizer:
 
         from vllm import LLM, SamplingParams
 
-        self.llm = LLM(
+        llm_kwargs = dict(
             model=self.model_path,
             tensor_parallel_size=1,
             gpu_memory_utilization=0.35,
@@ -139,6 +141,12 @@ class VllmNodeSummarizer:
             max_num_seqs=1,
             trust_remote_code=True,
         )
+        # Some vLLM-Ascend releases size the NPU KV cache too aggressively even
+        # when gpu_memory_utilization is low.  An explicit cap is both safer for
+        # the one-device-at-a-time summarizer and sufficient for its short input.
+        if self.kv_cache_memory_bytes is not None:
+            llm_kwargs["kv_cache_memory_bytes"] = self.kv_cache_memory_bytes
+        self.llm = LLM(**llm_kwargs)
         self.sampling_params = SamplingParams(
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -176,12 +184,14 @@ class MultiCardSummarizer:
         npu_cards: str,  # comma-separated, e.g. "4,5,6,7"
         max_tokens: int = 512,
         max_model_len: int = 2048,
+        kv_cache_memory_bytes: int | None = None,
     ) -> None:
         self.model_path = model_path
         card_list = [c.strip() for c in npu_cards.split(",") if c.strip()]
         self.cards = card_list
         self.max_tokens = max_tokens
         self.max_model_len = max_model_len
+        self.kv_cache_memory_bytes = kv_cache_memory_bytes
         self._summarizers: List[VllmNodeSummarizer] = []
 
     def __enter__(self) -> "MultiCardSummarizer":
@@ -191,6 +201,7 @@ class MultiCardSummarizer:
                 npu_cards=card,
                 max_tokens=self.max_tokens,
                 max_model_len=self.max_model_len,
+                kv_cache_memory_bytes=self.kv_cache_memory_bytes,
             )
             s.__enter__()
             self._summarizers.append(s)

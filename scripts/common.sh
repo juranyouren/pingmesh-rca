@@ -37,3 +37,6 @@ export PINGMESH_MAX_MODEL_LEN="${PINGMESH_MAX_MODEL_LEN:-16384}"
 export PINGMESH_SUMMARY_MODEL_PATH="${PINGMESH_SUMMARY_MODEL_PATH:-/usr/share/large_language_models/Qwen2.5-0.5B}"
 export PINGMESH_SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-0,1,2,3}"
 export PINGMESH_SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
+# The summary model has one active request per card.  Cap its KV cache explicitly
+# because some vLLM-Ascend versions otherwise pre-allocate nearly all HBM.
+export PINGMESH_SUMMARY_KV_CACHE_GB="${PINGMESH_SUMMARY_KV_CACHE_GB:-4}"
