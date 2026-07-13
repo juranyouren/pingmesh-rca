@@ -3,10 +3,12 @@ from datetime import datetime
 from scripts.stat_focus_device_evidence import (
     device_evidence_stats,
     event_bucket,
+    estimate_device_logs,
     markdown_summary,
     percentile,
     parse_args,
     rank_nodes_by_event_volume,
+    read_raw_case_log_total,
     timestamped_output_dir,
     aggregate_report,
 )
@@ -23,6 +25,7 @@ def test_device_evidence_stats_counts_both_sources_without_exposing_text():
     stats = device_evidence_stats(node, chars_per_token=4)
     assert stats == {
         "alarm_count": 2,
+        "observed_log_count": 1,
         "log_count": 1,
         "event_count": 3,
         "distinct_event_type_count": 2,
@@ -58,6 +61,24 @@ def test_cli_defaults_match_full_dataset_and_top5():
     assert args.data_root.as_posix() == "data/node/nodes_max_labeled"
     assert args.top_k == 5
     assert args.output_dir is None
+    assert args.raw_data_root.as_posix() == "data/raw/pingmesh_extend_dedup"
+
+
+def test_estimate_device_logs_conserves_raw_total_and_favors_alarm_devices():
+    nodes = [
+        {"mgmt_ip": "10.0.0.1", "alarms": [{}, {}]},
+        {"mgmt_ip": "10.0.0.2", "alarms": []},
+        {"mgmt_ip": "10.0.0.3", "alarms": []},
+    ]
+    estimates = estimate_device_logs(nodes, 11)
+    assert estimates == {"10.0.0.1": 7, "10.0.0.2": 2, "10.0.0.3": 2}
+    assert sum(estimates.values()) == 11
+
+
+def test_read_raw_case_log_total_supports_nested_schema(tmp_path):
+    path = tmp_path / "pingmesh-123-full.json"
+    path.write_text('{"full_link":{"log_list":{"total":"42"}}}', encoding="utf-8")
+    assert read_raw_case_log_total(path) == 42
 
 
 def test_report_and_markdown_warn_against_overclaim():

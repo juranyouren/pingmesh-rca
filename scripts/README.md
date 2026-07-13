@@ -46,3 +46,9 @@ Top-5; the output directory is generated as
 `data/res/focus_device_evidence_YYYYMMDD_HHMMSS`. It does not read
 `label.json`, does not emit alarm text, and anonymizes case/device identifiers
 by default.
+
+The case-level log count comes from `full_link.log_list.total` (also compatible
+with `loglist.total`) under `data/raw/pingmesh_extend_dedup`. Per-device log
+counts are estimates allocated in proportion to `alarm_count + 1` with the
+largest-remainder method, so the integer estimates exactly conserve each raw
+case total.

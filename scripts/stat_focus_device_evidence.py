@@ -38,6 +38,8 @@ METRICS = (
     "estimated_tokens",
 )
 
+DEFAULT_RAW_DATA_ROOT = Path("data/raw/pingmesh_extend_dedup")
+
 
 def _description_chars(events: Iterable[Any]) -> int:
     total = 0
@@ -50,17 +52,21 @@ def _description_chars(events: Iterable[Any]) -> int:
     return total
 
 
-def device_evidence_stats(node: dict[str, Any], chars_per_token: float = 4.0) -> dict[str, int]:
+def device_evidence_stats(
+    node: dict[str, Any], chars_per_token: float = 4.0, estimated_log_count: int | None = None
+) -> dict[str, int]:
     """Return count-only evidence statistics for one device."""
     alarms = node.get("alarms", []) if isinstance(node.get("alarms", []), list) else []
     logs = node.get("logs", []) if isinstance(node.get("logs", []), list) else []
     events = alarms + logs
     names = {name for name in (event_name(event) for event in events) if name}
     chars = _description_chars(events)
+    effective_log_count = len(logs) if estimated_log_count is None else estimated_log_count
     return {
         "alarm_count": len(alarms),
-        "log_count": len(logs),
-        "event_count": len(events),
+        "observed_log_count": len(logs),
+        "log_count": effective_log_count,
+        "event_count": len(alarms) + effective_log_count,
         "distinct_event_type_count": len(names),
         "description_chars": chars,
         "estimated_tokens": math.ceil(chars / chars_per_token) if chars else 0,
@@ -111,7 +117,9 @@ def event_bucket(count: int) -> str:
     return "500+"
 
 
-def rank_nodes_by_event_volume(nodes: Sequence[dict[str, Any]], top_k: int) -> list[str]:
+def rank_nodes_by_event_volume(
+    nodes: Sequence[dict[str, Any]], top_k: int, estimated_logs: dict[str, int] | None = None
+) -> list[str]:
     """Rank devices by alarm+log count with deterministic tie breaking.
 
     Alarm count, log count, and finally device IP/name are used only when total
@@ -126,10 +134,86 @@ def rank_nodes_by_event_volume(nodes: Sequence[dict[str, Any]], top_k: int) -> l
         if device_id == "unknown" or device_id in seen:
             continue
         seen.add(device_id)
-        stats = device_evidence_stats(node)
+        stats = device_evidence_stats(
+            node, estimated_log_count=estimated_logs.get(device_id) if estimated_logs is not None else None
+        )
         ranked.append((stats["event_count"], stats["alarm_count"], stats["log_count"], device_id))
     ranked.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
     return [device_id for _events, _alarms, _logs, device_id in ranked[:top_k]]
+
+
+def estimate_device_logs(nodes: Sequence[dict[str, Any]], case_log_total: int) -> dict[str, int]:
+    """Allocate a case log total by alarm_count+1 using largest remainders.
+
+    The returned integer estimates conserve the authoritative raw case total.
+    Duplicate or unknown device identifiers are ignored.
+    """
+    if case_log_total < 0:
+        raise ValueError("case log total cannot be negative")
+    weighted: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        device_id = get_device_ip(node)
+        if device_id == "unknown" or device_id in seen:
+            continue
+        seen.add(device_id)
+        alarms = node.get("alarms", [])
+        alarm_count = len(alarms) if isinstance(alarms, list) else 0
+        weighted.append((device_id, alarm_count + 1))
+    if not weighted:
+        return {}
+
+    weight_sum = sum(weight for _device_id, weight in weighted)
+    estimates: dict[str, int] = {}
+    remainders: list[tuple[int, str]] = []
+    allocated = 0
+    for device_id, weight in weighted:
+        numerator = case_log_total * weight
+        base, remainder = divmod(numerator, weight_sum)
+        estimates[device_id] = base
+        allocated += base
+        remainders.append((remainder, device_id))
+    remainders.sort(key=lambda item: (-item[0], item[1]))
+    for _remainder, device_id in remainders[: case_log_total - allocated]:
+        estimates[device_id] += 1
+    return estimates
+
+
+def raw_case_id(path: Path) -> str | None:
+    prefix = "pingmesh-"
+    if not path.name.startswith(prefix):
+        return None
+    remainder = path.name[len(prefix) :]
+    return remainder.split("-", 1)[0] or None
+
+
+def index_raw_cases(raw_data_root: Path) -> dict[str, Path]:
+    index: dict[str, Path] = {}
+    for path in sorted(raw_data_root.rglob("*.json"), key=lambda item: str(item)):
+        case_id = raw_case_id(path)
+        if case_id and case_id not in index:
+            index[case_id] = path
+    return index
+
+
+def read_raw_case_log_total(path: Path) -> int:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    containers = [payload]
+    if isinstance(payload, dict) and isinstance(payload.get("full_link"), dict):
+        containers.insert(0, payload["full_link"])
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in ("log_list", "loglist"):
+            log_list = container.get(key)
+            if isinstance(log_list, dict) and "total" in log_list:
+                total = int(log_list["total"])
+                if total < 0:
+                    raise ValueError(f"negative {key}.total")
+                return total
+    raise KeyError("missing log_list.total/loglist.total")
 
 
 def discover_cases(data_root: Path) -> list[Path]:
@@ -142,6 +226,7 @@ def discover_cases(data_root: Path) -> list[Path]:
 
 def collect_rows(
     data_root: Path,
+    raw_data_root: Path,
     top_k: int,
     chars_per_token: float,
     anonymize: bool,
@@ -149,13 +234,19 @@ def collect_rows(
     device_rows: list[dict[str, Any]] = []
     case_rows: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    raw_index = index_raw_cases(raw_data_root)
 
     for case_index, case_dir in enumerate(discover_cases(data_root), 1):
         raw_case_id = case_dir.name
         case_id = f"case_{case_index:06d}" if anonymize else raw_case_id
         try:
             nodes = load_case_nodes(str(case_dir))
-            focused_ips = rank_nodes_by_event_volume(nodes, top_k)
+            raw_path = raw_index.get(raw_case_id)
+            if raw_path is None:
+                raise FileNotFoundError("matching raw case JSON not found")
+            raw_log_total = read_raw_case_log_total(raw_path)
+            estimated_logs = estimate_device_logs(nodes, raw_log_total)
+            focused_ips = rank_nodes_by_event_volume(nodes, top_k, estimated_logs)
             focus_rank = {ip: rank for rank, ip in enumerate(focused_ips, 1)}
             current_rows: list[dict[str, Any]] = []
             for device_index, node in enumerate(nodes, 1):
@@ -164,7 +255,9 @@ def collect_rows(
                 ip = get_device_ip(node)
                 if ip == "unknown":
                     continue
-                stats = device_evidence_stats(node, chars_per_token)
+                stats = device_evidence_stats(
+                    node, chars_per_token, estimated_log_count=estimated_logs.get(ip, 0)
+                )
                 row = {
                     "case_id": case_id,
                     "device_id": f"{case_id}_device_{device_index:06d}" if anonymize else ip,
@@ -182,6 +275,8 @@ def collect_rows(
                 "case_id": case_id,
                 "all_device_count": len(current_rows),
                 "focused_device_count": len(focused),
+                "raw_case_log_total": raw_log_total,
+                "estimated_all_device_log_total": sum(row["log_count"] for row in current_rows),
                 "device_reduction_ratio": _reduction(len(focused), len(current_rows)),
             }
             for metric in METRICS:
@@ -294,7 +389,10 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"共统计 {dataset['case_count']:,} 个 case、{dataset['all_device_count']:,} 个全链路设备；"
         f"按 alarm 数与 log 数之和降序选出 {dataset['focused_device_count']:,} 个 Top-K 高事件量设备。",
         "告警与日志逐条计数；事件类型按 name/alarm_name 去重；估算 token = 描述字符数 / "
-        f"{report['config']['chars_per_token']:g}（向上取整）。结果不读取 label.json，且默认匿名化。",
+        f"{report['config']['chars_per_token']:g}（向上取整）。case 日志总量读取原始文件的 log_list.total/loglist.total，"
+        "逐设备日志数按 (alarm 数 + 1) 比例并通过最大余数法整数化，保证 case 总量守恒。"
+        "去重类型数、描述字符数与 token 数只统计节点文件中实际可用的内容，不对缺失日志文本做虚构估算。"
+        "结果不读取 label.json，且默认匿名化。",
         "",
         "## 聚焦设备：每设备证据量",
         "",
@@ -395,6 +493,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="node case 数据根目录（默认: data/node/nodes_max_labeled）",
     )
     parser.add_argument(
+        "--raw-data-root",
+        type=Path,
+        default=DEFAULT_RAW_DATA_ROOT,
+        help="含原始 case JSON 的目录（默认: data/raw/pingmesh_extend_dedup）",
+    )
+    parser.add_argument(
         "-o",
         "--output-dir",
         type=Path,
@@ -419,16 +523,21 @@ def main() -> int:
         raise SystemExit("--large-event-threshold 必须大于 0")
     if not args.data_root.is_dir():
         raise SystemExit(f"数据目录不存在: {args.data_root}")
+    if not args.raw_data_root.is_dir():
+        raise SystemExit(f"原始数据目录不存在: {args.raw_data_root}")
 
     config = {
         "top_k": args.top_k,
-        "selection": "alarm_count_plus_log_count_desc",
+        "selection": "alarm_count_plus_estimated_log_count_desc",
+        "log_count_source": "raw log_list.total/loglist.total",
+        "device_log_estimator": "largest_remainder_proportional_to_alarm_count_plus_one",
         "chars_per_token": args.chars_per_token,
         "anonymized": not args.no_anonymize,
         "large_event_threshold": args.large_event_threshold,
     }
     device_rows, case_rows, errors = collect_rows(
         args.data_root,
+        args.raw_data_root,
         args.top_k,
         args.chars_per_token,
         not args.no_anonymize,
