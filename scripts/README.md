@@ -12,6 +12,7 @@ duplicating algorithm logic and keep each experiment tied to one research questi
 | `run_paper_04_gate_policy_analysis.sh` | Gate policy comparison and route selection analysis. |
 | `run_paper_05_precompute_summary_cache.sh` | Precompute small-model candidate summaries. |
 | `run_paper_06_cached_summary_llm.sh` | Cached-summary LLM arbitration experiment. |
+| `stat_focus_device_evidence.py` | Quantify anonymized alarm/log volume on the Top-K highest-volume devices. |
 
 Typical order:
 
@@ -30,3 +31,18 @@ export PINGMESH_SUMMARY_CACHE_DIR="$PINGMESH_RESULTS/summary_cache"
 ./scripts/run_paper_05_precompute_summary_cache.sh
 ./scripts/run_paper_06_cached_summary_llm.sh
 ```
+
+Focused-device evidence-volume report:
+
+```bash
+python scripts/stat_focus_device_evidence.py \
+  --large-event-threshold 10
+```
+
+The command ranks devices by `alarm_count + log_count` and writes
+`device_statistics.csv`, `case_statistics.csv`, `report.json`, and a
+paper-ready `summary.md`. The defaults are `data/node/nodes_max_labeled` and
+Top-5; the output directory is generated as
+`data/res/focus_device_evidence_YYYYMMDD_HHMMSS`. It does not read
+`label.json`, does not emit alarm text, and anonymizes case/device identifiers
+by default.

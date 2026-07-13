@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Quantify alarm/log volume on deterministic Top-K focused devices.
+"""Quantify alarm/log volume on the Top-K highest-volume devices.
 
-The script deliberately does not read ``label.json``.  Focused devices are
-selected by the same deterministic topo/temporal skill pipeline used by the
-RCA system.  Outputs are anonymized by default and contain counts only (never
-alarm descriptions).
+The script deliberately does not read ``label.json``. Devices are ranked by
+``alarm_count + log_count``. Outputs are anonymized by default and contain
+counts only (never alarm descriptions).
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ import os
 import statistics
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -25,9 +25,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from Sys.RootCauseAnalyze.skills.fusion import rank_devices_by_skills
 from Sys.utils.alarm_utils import event_name
-from Sys.utils.case_utils import find_full_link_file, get_device_ip, load_case_info, load_case_nodes
+from Sys.utils.case_utils import find_full_link_file, get_device_ip, load_case_nodes
 
 
 METRICS = (
@@ -112,6 +111,27 @@ def event_bucket(count: int) -> str:
     return "500+"
 
 
+def rank_nodes_by_event_volume(nodes: Sequence[dict[str, Any]], top_k: int) -> list[str]:
+    """Rank devices by alarm+log count with deterministic tie breaking.
+
+    Alarm count, log count, and finally device IP/name are used only when total
+    event counts tie. Duplicate device identifiers are retained once.
+    """
+    ranked: list[tuple[int, int, int, str]] = []
+    seen: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        device_id = get_device_ip(node)
+        if device_id == "unknown" or device_id in seen:
+            continue
+        seen.add(device_id)
+        stats = device_evidence_stats(node)
+        ranked.append((stats["event_count"], stats["alarm_count"], stats["log_count"], device_id))
+    ranked.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
+    return [device_id for _events, _alarms, _logs, device_id in ranked[:top_k]]
+
+
 def discover_cases(data_root: Path) -> list[Path]:
     cases: list[Path] = []
     for dirpath, _dirnames, filenames in os.walk(data_root):
@@ -123,9 +143,6 @@ def discover_cases(data_root: Path) -> list[Path]:
 def collect_rows(
     data_root: Path,
     top_k: int,
-    skill_ids: Sequence[int],
-    directed: bool,
-    weight_file: str | None,
     chars_per_token: float,
     anonymize: bool,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
@@ -138,16 +155,7 @@ def collect_rows(
         case_id = f"case_{case_index:06d}" if anonymize else raw_case_id
         try:
             nodes = load_case_nodes(str(case_dir))
-            info = load_case_info(str(case_dir))
-            focused_ips, _details = rank_devices_by_skills(
-                nodes,
-                info,
-                str(case_dir),
-                skill_ids=skill_ids,
-                directed=directed,
-                weight_dirpath=weight_file,
-                top_k=top_k,
-            )
+            focused_ips = rank_nodes_by_event_volume(nodes, top_k)
             focus_rank = {ip: rank for rank, ip in enumerate(focused_ips, 1)}
             current_rows: list[dict[str, Any]] = []
             for device_index, node in enumerate(nodes, 1):
@@ -284,7 +292,7 @@ def markdown_summary(report: dict[str, Any]) -> str:
         "## 数据与口径",
         "",
         f"共统计 {dataset['case_count']:,} 个 case、{dataset['all_device_count']:,} 个全链路设备；"
-        f"确定性 topo+temporal 模块选出 {dataset['focused_device_count']:,} 个 Top-K 聚焦设备。",
+        f"按 alarm 数与 log 数之和降序选出 {dataset['focused_device_count']:,} 个 Top-K 高事件量设备。",
         "告警与日志逐条计数；事件类型按 name/alarm_name 去重；估算 token = 描述字符数 / "
         f"{report['config']['chars_per_token']:g}（向上取整）。结果不读取 label.json，且默认匿名化。",
         "",
@@ -341,7 +349,7 @@ def markdown_summary(report: dict[str, Any]) -> str:
     )
     if dataset["focused_device_count"] and support["focused_devices_at_or_above_threshold_ratio"] == 1.0:
         lines.append(
-            f"> 在 {dataset['case_count']:,} 个生产网络案例中，每个 Top-{report['config']['top_k']} 聚焦设备均包含至少 "
+            f"> 在 {dataset['case_count']:,} 个生产网络案例中，每个事件量 Top-{report['config']['top_k']} 设备均包含至少 "
             f"{support['large_event_threshold']} 条告警/日志；每设备中位数为 "
             f"{focused['event_count']['median']:.1f} 条，P95 为 {focused['event_count']['p95']:.1f} 条。"
         )
@@ -372,22 +380,37 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="统计确定性 Top-K 聚焦设备的告警/日志量")
-    parser.add_argument("data_root", type=Path, help="node case 数据根目录")
-    parser.add_argument("-o", "--output-dir", type=Path, default=Path("data/res/focus_device_evidence"))
+def timestamped_output_dir(now: datetime | None = None) -> Path:
+    timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
+    return Path("data/res") / f"focus_device_evidence_{timestamp}"
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="统计告警与日志总数最多的 Top-K 设备")
+    parser.add_argument(
+        "data_root",
+        type=Path,
+        nargs="?",
+        default=Path("data/node/nodes_max_labeled"),
+        help="node case 数据根目录（默认: data/node/nodes_max_labeled）",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="输出目录；默认在 data/res 下按当前时间戳生成",
+    )
     parser.add_argument("-k", "--top-k", type=int, default=5)
-    parser.add_argument("--skills", nargs="+", type=int, default=[1, 2], help="确定性 skill ID，默认 1 2")
-    parser.add_argument("--undirected", action="store_true", help="拓扑排序使用无向图")
-    parser.add_argument("--weight-file", default=None)
     parser.add_argument("--chars-per-token", type=float, default=4.0)
     parser.add_argument("--large-event-threshold", type=int, default=10, help="将“大量”定义为至少多少条事件")
     parser.add_argument("--no-anonymize", action="store_true", help="输出原始 case/device 标识（谨慎使用）")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
     args = parse_args()
+    output_dir = args.output_dir or timestamped_output_dir()
     if args.top_k < 1:
         raise SystemExit("--top-k 必须大于 0")
     if args.chars_per_token <= 0:
@@ -399,8 +422,7 @@ def main() -> int:
 
     config = {
         "top_k": args.top_k,
-        "skill_ids": args.skills,
-        "directed": not args.undirected,
+        "selection": "alarm_count_plus_log_count_desc",
         "chars_per_token": args.chars_per_token,
         "anonymized": not args.no_anonymize,
         "large_event_threshold": args.large_event_threshold,
@@ -408,23 +430,20 @@ def main() -> int:
     device_rows, case_rows, errors = collect_rows(
         args.data_root,
         args.top_k,
-        args.skills,
-        not args.undirected,
-        args.weight_file,
         args.chars_per_token,
         not args.no_anonymize,
     )
     report = aggregate_report(device_rows, case_rows, config, errors)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    write_csv(args.output_dir / "device_statistics.csv", device_rows)
-    write_csv(args.output_dir / "case_statistics.csv", case_rows)
-    (args.output_dir / "report.json").write_text(
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(output_dir / "device_statistics.csv", device_rows)
+    write_csv(output_dir / "case_statistics.csv", case_rows)
+    (output_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    (args.output_dir / "summary.md").write_text(markdown_summary(report), encoding="utf-8")
+    (output_dir / "summary.md").write_text(markdown_summary(report), encoding="utf-8")
     print(
         f"完成: {report['dataset']['case_count']} cases, "
-        f"{report['dataset']['focused_device_count']} focused devices -> {args.output_dir}"
+        f"{report['dataset']['focused_device_count']} focused devices -> {output_dir}"
     )
     return 0
 

@@ -1,8 +1,13 @@
+from datetime import datetime
+
 from scripts.stat_focus_device_evidence import (
     device_evidence_stats,
     event_bucket,
     markdown_summary,
     percentile,
+    parse_args,
+    rank_nodes_by_event_volume,
+    timestamped_output_dir,
     aggregate_report,
 )
 
@@ -32,6 +37,27 @@ def test_percentile_and_buckets_are_stable():
     assert [event_bucket(n) for n in (0, 1, 10, 50, 100, 500)] == [
         "0", "1-9", "10-49", "50-99", "100-499", "500+"
     ]
+
+
+def test_rank_nodes_by_event_volume_uses_total_then_stable_ties():
+    nodes = [
+        {"mgmt_ip": "10.0.0.3", "alarms": [{}], "logs": [{}]},
+        {"mgmt_ip": "10.0.0.2", "alarms": [{}, {}], "logs": []},
+        {"mgmt_ip": "10.0.0.1", "alarms": [{}], "logs": [{}, {}]},
+    ]
+    assert rank_nodes_by_event_volume(nodes, 2) == ["10.0.0.1", "10.0.0.2"]
+
+
+def test_timestamped_output_dir_has_stable_format():
+    output = timestamped_output_dir(datetime(2026, 7, 13, 16, 5, 9))
+    assert output.as_posix() == "data/res/focus_device_evidence_20260713_160509"
+
+
+def test_cli_defaults_match_full_dataset_and_top5():
+    args = parse_args([])
+    assert args.data_root.as_posix() == "data/node/nodes_max_labeled"
+    assert args.top_k == 5
+    assert args.output_dir is None
 
 
 def test_report_and_markdown_warn_against_overclaim():
