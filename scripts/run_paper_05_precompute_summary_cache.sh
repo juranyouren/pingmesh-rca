@@ -4,14 +4,11 @@
 # Research question:
 #   Can a small local model compress node evidence before main LLM arbitration?
 #
-# Required:
-#   PINGMESH_SUMMARY_CACHE_DIR=/path/to/cache
+# Optional overrides: PINGMESH_SUMMARY_CACHE_DIR, PINGMESH_SUMMARY_MODEL_PATH.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 source scripts/common.sh
-
-: "${PINGMESH_SUMMARY_CACHE_DIR:?Set PINGMESH_SUMMARY_CACHE_DIR to a cache output directory.}"
 
 echo "============================================"
 echo "  Paper Exp 05a: Precompute Summary Cache"

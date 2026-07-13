@@ -70,7 +70,12 @@ def main():
     )
     parser.add_argument("--data-root", "-d", default=config.data.nodes_labeled)
     parser.add_argument("--failures-from", default=None)
-    parser.add_argument("--out-cache", required=True, help="summary cache 输出目录")
+    parser.add_argument(
+        "--out-cache",
+        default=os.environ.get("PINGMESH_SUMMARY_CACHE_DIR"),
+        required="PINGMESH_SUMMARY_CACHE_DIR" not in os.environ,
+        help="summary cache 输出目录（默认读取 PINGMESH_SUMMARY_CACHE_DIR）",
+    )
     parser.add_argument(
         "--model-path",
         default=os.environ.get(

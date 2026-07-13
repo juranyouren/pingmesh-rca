@@ -33,8 +33,9 @@ export PINGMESH_MAX_TOKENS="${PINGMESH_MAX_TOKENS:-4096}"
 export PINGMESH_MAX_MODEL_LEN="${PINGMESH_MAX_MODEL_LEN:-16384}"
 
 # Small model used to summarize candidate NODES before the main RCA LLM.
-# Set this on the server when running the pipe_summary_llm experiment.
-export PINGMESH_SUMMARY_MODEL_PATH="${PINGMESH_SUMMARY_MODEL_PATH:-/usr/share/large_language_models/Qwen2.5-0.5B}"
+# Environment variables still take precedence over these shared defaults.
+export PINGMESH_SUMMARY_MODEL_PATH="${PINGMESH_SUMMARY_MODEL_PATH:-/home/sbp/huangzeshun/firstpaper/DeepSeek-R1-Distill-Qwen-1.5B-local}"
+export PINGMESH_SUMMARY_CACHE_DIR="${PINGMESH_SUMMARY_CACHE_DIR:-${PINGMESH_RESULTS}/node_summary_cache}"
 export PINGMESH_SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-0,1,2,3}"
 export PINGMESH_SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
 # The summary model has one active request per card.  Cap its KV cache explicitly
