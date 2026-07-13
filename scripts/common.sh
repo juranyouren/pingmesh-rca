@@ -36,7 +36,9 @@ export PINGMESH_MAX_MODEL_LEN="${PINGMESH_MAX_MODEL_LEN:-16384}"
 # Environment variables still take precedence over these shared defaults.
 export PINGMESH_SUMMARY_MODEL_PATH="${PINGMESH_SUMMARY_MODEL_PATH:-/home/sbp/huangzeshun/firstpaper/DeepSeek-R1-Distill-Qwen-1.5B-local}"
 export PINGMESH_SUMMARY_CACHE_DIR="${PINGMESH_SUMMARY_CACHE_DIR:-${PINGMESH_RESULTS}/node_summary_cache}"
-export PINGMESH_SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-0,1,2,3}"
+# One vLLM summary engine per process. Multi-card summary workers must use
+# separate processes; changing ASCEND_RT_VISIBLE_DEVICES inside one process is unsafe.
+export PINGMESH_SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-0}"
 export PINGMESH_SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
 # The summary model has one active request per card.  Cap its KV cache explicitly
 # because some vLLM-Ascend versions otherwise pre-allocate nearly all HBM.

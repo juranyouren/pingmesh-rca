@@ -199,10 +199,12 @@ class VllmNodeSummarizer:
 
 
 class MultiCardSummarizer:
-    """Deploy one VllmNodeSummarizer per NPU card for per-device parallelism.
+    """Run the summary model on one NPU in the current process.
 
-    Devices from each case are distributed across cards.  Cards that have
-    no devices assigned are idle for that case.
+    The historical multi-card implementation changed
+    ``ASCEND_RT_VISIBLE_DEVICES`` after the NPU runtime had already initialized.
+    vLLM engines must instead be isolated in separate processes. Until that
+    process-level scheduler exists, fail fast on multi-card configurations.
     """
 
     def __init__(
@@ -217,6 +219,11 @@ class MultiCardSummarizer:
     ) -> None:
         self.model_path = model_path
         card_list = [c.strip() for c in npu_cards.split(",") if c.strip()]
+        if len(card_list) != 1:
+            raise ValueError(
+                "Summary precomputation currently requires exactly one NPU card; "
+                "use --npu-cards 0 (multi-card engines need process isolation)."
+            )
         self.cards = card_list
         self.max_tokens = max_tokens
         self.max_model_len = max_model_len

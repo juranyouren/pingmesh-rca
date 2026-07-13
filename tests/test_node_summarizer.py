@@ -2,6 +2,7 @@ import json
 import unittest
 
 from Sys.RootCauseAnalyze.gate.node_summarizer import (
+    MultiCardSummarizer,
     build_per_device_prompt,
     summarize_devices,
     summarize_nodes_with,
@@ -9,6 +10,10 @@ from Sys.RootCauseAnalyze.gate.node_summarizer import (
 
 
 class NodeSummarizerTest(unittest.TestCase):
+    def test_multicard_configuration_requires_process_isolation(self):
+        with self.assertRaisesRegex(ValueError, "exactly one NPU card"):
+            MultiCardSummarizer(model_path="unused", npu_cards="0,1")
+
     def test_per_device_prompt_is_small(self):
         """Single device prompt should be ~200-600 chars, well under any model limit."""
         device = {

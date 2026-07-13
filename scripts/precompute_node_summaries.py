@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Precompute per-device node summaries for Pingmesh RCA cases.
 
-Deploys one small vLLM instance per NPU card (--npu-cards 4,5,6,7 → 4 instances).
-Each device is summarised independently (tiny prompt, no token overflow).
-Devices within a case are distributed across cards for parallelism.
+Deploys one small vLLM instance on one NPU card. Each device is summarised
+independently (tiny prompt, no token overflow). Multi-card engines require
+separate worker processes and are intentionally rejected by this entrypoint.
 
 Run this ONCE before main inference:
     python scripts/precompute_node_summaries.py \
         --data-root /path/to/cases \
         --out-cache /path/to/cache_dir \
-        --npu-cards 4,5,6,7 \
+        --npu-cards 0 \
         --model-path /path/to/Qwen2.5-1.5B \
         --top-k 10
 """
@@ -86,7 +86,7 @@ def main():
     parser.add_argument(
         "--npu-cards",
         default=os.environ.get("PINGMESH_SUMMARY_NPU_CARDS", "0"),
-        help="summary 模型使用的 NPU 卡，逗号分隔，每卡一个实例 (如 4,5,6,7)",
+        help="summary 模型使用的一张 NPU 卡（如 0）",
     )
     parser.add_argument("--top-k", "-k", type=int, default=config.temporal.top_k)
     parser.add_argument(
