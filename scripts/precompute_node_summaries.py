@@ -33,13 +33,15 @@ sys.path.insert(0, PROJECT_ROOT)
 from Sys.config import config
 from Sys.RootCauseAnalyze.skills.provider import BuiltinSkillProvider
 from Sys.RootCauseAnalyze.gate.evidence import build_fused_evidence
+from Sys.RootCauseAnalyze.gate.evidence import EVIDENCE_ORGANIZATION_VERSION
 from Sys.RootCauseAnalyze.gate.node_summarizer import MultiCardSummarizer
 from Sys.utils.case_utils import find_full_link_file
 from Sys.utils.io_utils import load_json, save_json
 
 
-def case_cache_key(dirpath: str) -> str:
-    return hashlib.sha1(os.path.abspath(dirpath).encode("utf-8")).hexdigest()
+def case_cache_key(dirpath: str, top_k: int) -> str:
+    material = f"{EVIDENCE_ORGANIZATION_VERSION}|top_k={top_k}|{os.path.abspath(dirpath)}"
+    return hashlib.sha1(material.encode("utf-8")).hexdigest()
 
 
 def discover_cases(data_root: str) -> List[str]:
@@ -108,6 +110,7 @@ def main():
         "model_path": args.model_path,
         "npu_cards": args.npu_cards,
         "top_k": args.top_k,
+        "evidence_organization_version": EVIDENCE_ORGANIZATION_VERSION,
         "total": len(dirpaths),
         "items": [],
     }
@@ -119,7 +122,7 @@ def main():
         max_model_len=args.max_model_len,
     ) as summarizer:
         for dirpath in dirpaths:
-            key = case_cache_key(dirpath)
+            key = case_cache_key(dirpath, args.top_k)
             out_path = out_cache / f"{key}.json"
 
             if out_path.exists() and not args.overwrite:
@@ -143,6 +146,7 @@ def main():
 
                 record = {
                     "dir": dirpath, "cache_key": key, "top_k": args.top_k,
+                    "evidence_organization_version": EVIDENCE_ORGANIZATION_VERSION,
                     "skill_ips": skill_ips, "summary": summary,
                     "raw_chars": len(detail_compact), "summary_chars": len(summary),
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),

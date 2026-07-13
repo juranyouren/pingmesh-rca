@@ -81,9 +81,14 @@ def _report_npu_occupants(card_ids: list) -> None:
         logger.info("Could not query NPU state.", exc_info=True)
 
 
-def _case_cache_key(dirpath: str) -> str:
+def _case_cache_key(dirpath: str, top_k: int | None = None) -> str:
     """Deterministic per-case key for the summary cache."""
-    return hashlib.sha1(os.path.abspath(dirpath).encode("utf-8")).hexdigest()
+    from Sys.RootCauseAnalyze.gate.evidence import EVIDENCE_ORGANIZATION_VERSION
+
+    if top_k is None:
+        top_k = config.temporal.top_k
+    material = f"{EVIDENCE_ORGANIZATION_VERSION}|top_k={top_k}|{os.path.abspath(dirpath)}"
+    return hashlib.sha1(material.encode("utf-8")).hexdigest()
 
 
 def _format_skilled_prompt(skill_ret: str, info: str, nodes: str, nodes_are_summary: bool = False) -> str:
@@ -92,12 +97,12 @@ def _format_skilled_prompt(skill_ret: str, info: str, nodes: str, nodes_are_summ
         return prompt
 
     prompt = prompt.replace(
-        "**3. 候选设备详情(JSON)** - 每个候选上实际触发的告警/日志",
-        "**3. 候选设备摘要** - 小模型压缩后的候选设备告警/日志摘要",
+        "**3. 设备状态证据(JSON 或摘要)** - 候选集合是拓扑 Top-K 与时序 Top-K 的并集",
+        "**3. 设备状态摘要** - 小模型对候选设备可观测状态的事实压缩，不包含根因判断",
     )
     prompt = prompt.replace(
-        f"# 3. 候选设备详情\n```json\n{nodes}\n```",
-        f"# 3. 候选设备摘要\n{nodes}",
+        f"# 3. 设备状态证据\n```json\n{nodes}\n```",
+        f"# 3. 设备状态摘要\n{nodes}",
     )
     return prompt
 
@@ -230,7 +235,7 @@ class SkilledAnalyzer:
         if not self.summary_cache_dir:
             return fallback_detail
 
-        key = _case_cache_key(dirpath)
+        key = _case_cache_key(dirpath, self.top_k)
         path = os.path.join(self.summary_cache_dir, f"{key}.json")
 
         if not os.path.exists(path):

@@ -1,4 +1,4 @@
-"""Node summarizer for compressing candidate-device evidence before LLM RCA.
+"""Device-state summarizer for evidence organization before LLM RCA.
 
 Design (方案 A):
     Input is a single device dict (≈ 200–2000 chars), *not* the full devices list.
@@ -31,10 +31,12 @@ def _parse_npu_cards(npu_spec: str) -> list:
 # ── per-device prompt ─────────────────────────────────────────────────
 
 _DEVICE_SUMMARY_PROMPT = (
-    "Summarize this single network device for a downstream root-cause analysis.\n"
-    "Keep the IP address. Mention role, cross count, key alarms, and whether "
-    "this device looks like a root cause or a downstream symptom.\n"
-    "Return 1-3 Chinese sentences. Do NOT invent alarms or devices.\n\n"
+    "你是网络设备状态证据压缩器，不是根因分析器。\n"
+    "请仅根据输入字段，客观描述这一台设备的可观测状态。保留 IP，描述设备角色、"
+    "cross 数、告警数量、告警名称、高严重度告警和拓扑邻接；字段缺失时不要补全。\n"
+    "禁止判断该设备是否为根因、症状设备或可疑设备；禁止给出因果解释、排名、"
+    "诊断结论、置信度或处置建议；禁止编造输入中不存在的事实。\n"
+    "输出 1-3 句简洁中文事实描述。\n\n"
     "Device JSON:\n"
     "{device_json}\n"
 )
@@ -88,7 +90,7 @@ def summarize_devices(
             parts.append(f"- {ip}: (summary unavailable)")
 
     if parts:
-        return "Candidate device summaries:\n" + "\n".join(parts)
+        return "Device state summaries:\n" + "\n".join(parts)
     return devices_json
 
 
@@ -271,4 +273,4 @@ class MultiCardSummarizer:
             text = out.strip() if out else ""
             parts.append(f"- {ip}: {text}" if text else f"- {ip}: (summary unavailable)")
 
-        return "Candidate device summaries:\n" + "\n".join(parts) if parts else devices_json
+        return "Device state summaries:\n" + "\n".join(parts) if parts else devices_json

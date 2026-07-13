@@ -33,6 +33,8 @@ TEMPORAL_DESC = (
     "Higher = alarms earlier and more concentrated near the fault reference time."
 )
 
+EVIDENCE_ORGANIZATION_VERSION = "topo-temporal-union-v1"
+
 
 def _build_info_brief(info: Dict[str, Any]) -> str:
     if not isinstance(info, dict):
@@ -48,6 +50,29 @@ def _build_candidate_raw(candidate_ips: List[str], node_by_ip: Dict[str, Dict[st
         if ip in node_by_ip
     }
     return json.dumps(raw, ensure_ascii=False, indent=2) if raw else "{}"
+
+
+def _ranked_ip_union(*rankings: List[Dict[str, Any]]) -> List[str]:
+    """Return the deterministic union of ranked device lists.
+
+    Rankings are interleaved by rank so neither topology nor temporal evidence
+    always occupies the front of the organized evidence. Duplicate and invalid
+    IPs are removed while preserving first occurrence.
+    """
+    result: List[str] = []
+    seen = set()
+    max_len = max((len(items) for items in rankings), default=0)
+    for rank_index in range(max_len):
+        for items in rankings:
+            if rank_index >= len(items):
+                continue
+            item = items[rank_index]
+            ip = item.get("ip") if isinstance(item, dict) else None
+            if not isinstance(ip, str) or not ip or ip in seen:
+                continue
+            seen.add(ip)
+            result.append(ip)
+    return result
 
 
 def build_fused_evidence(
@@ -78,19 +103,22 @@ def build_fused_evidence(
 
     weights = load_alarm_weights(weight_dirpath)
     node_by_ip = {get_device_ip(node): node for node in node_list}
+    topo_list = topo_detail.get("topk", [])
+    temporal_list = temporal_detail.get("topk", [])
     combined_list = combined_detail.get("topk", [])
+    evidence_candidate_ips = _ranked_ip_union(topo_list, temporal_list)
 
     skill_ret = json.dumps(
         {
             "topo": {
                 "description": TOPO_DESC,
-                "rankings": topo_detail.get("topk", []),
+                "rankings": topo_list,
                 "diagnostics": topo_detail.get("diagnostics", {}),
                 "trust_tree": topo_detail.get("trust_tree", {}),
             },
             "temporal": {
                 "description": TEMPORAL_DESC,
-                "rankings": temporal_detail.get("topk", []),
+                "rankings": temporal_list,
                 "diagnostics": temporal_detail.get("diagnostics", {}),
                 "trust_tree": temporal_detail.get("trust_tree", {}),
             },
@@ -107,7 +135,7 @@ def build_fused_evidence(
     )
 
     devices_detail = []
-    for ip in candidate_ips:
+    for ip in evidence_candidate_ips:
         node = node_by_ip.get(ip)
         if not node:
             continue
@@ -128,6 +156,20 @@ def build_fused_evidence(
             }
         )
 
-    candidate_detail = json.dumps({"devices": devices_detail}, ensure_ascii=False, indent=2)
-    candidate_raw = _build_candidate_raw(candidate_ips, node_by_ip)
+    candidate_detail = json.dumps(
+        {
+            "organization": {
+                "version": EVIDENCE_ORGANIZATION_VERSION,
+                "strategy": "topology_top_k_union_temporal_top_k",
+                "top_k_per_ranking": top_k,
+                "device_count": len(devices_detail),
+            },
+            "devices": devices_detail,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    candidate_raw = _build_candidate_raw(evidence_candidate_ips, node_by_ip)
+    # Keep the return value as the fused deterministic ranking. It is consumed
+    # by the existing Top-K evaluator and must not be replaced by the union.
     return skill_ret, _build_info_brief(info), candidate_detail, candidate_raw, candidate_ips

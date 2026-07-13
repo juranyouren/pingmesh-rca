@@ -23,6 +23,9 @@ class NodeSummarizerTest(unittest.TestCase):
         prompt = build_per_device_prompt(device)
         self.assertIn("10.0.0.1", prompt)
         self.assertIn("trunkdown", prompt)
+        self.assertIn("不是根因分析器", prompt)
+        self.assertIn("禁止判断该设备是否为根因", prompt)
+        self.assertNotIn("whether this device looks like a root cause", prompt)
         # Should fit in 2000 chars (safe for max_model_len=2048)
         self.assertLess(len(prompt), 2000)
 
@@ -80,6 +83,7 @@ class NodeSummarizerTest(unittest.TestCase):
         result = summarize_nodes_with(devices_json, summarize_batch=fake_batch)
         self.assertIn("10.0.0.1", result)
         self.assertIn("trunkdown", result)
+        self.assertIn("Device state summaries", result)
 
 
 if __name__ == "__main__":

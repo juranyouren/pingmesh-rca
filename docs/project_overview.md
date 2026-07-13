@@ -97,12 +97,20 @@ Main files:
 - `Sys/Score/evaluate_trust_gate.py`
 - `Sys/Score/apply_trust_gate.py`
 
-### 5.2 Small-Model Candidate Summarization
+### 5.2 SECL Evidence Organization And Device-State Summarization
 
-`run_gate_pipe_experiments.sh` now contains experiment modes for candidate-node
-summary before main LLM review, such as `pipe_summary_llm` and
-`gate_pipe_summary_llm`. The goal is to reduce prompt size while preserving the
-evidence needed for semantic arbitration.
+The evidence sent to the main LLM is organized from the union of the topology
+Top-K and temporal Top-K device rankings, rather than only the fused Top-K.
+This preserves candidates supported strongly by either independent view. The
+fused ranking remains the deterministic evaluation baseline and is not replaced
+by the union.
+
+The optional small model only compresses the observable state of each device.
+Its prompt explicitly forbids root-cause, symptom, causality, ranking,
+confidence, or remediation judgments. Root-cause comparison is reserved for
+the main LLM after it receives both rankings and all device-state summaries.
+Summary caches are versioned by the evidence-organization strategy and Top-K
+value so stale fused-only caches are not reused.
 
 Main files:
 

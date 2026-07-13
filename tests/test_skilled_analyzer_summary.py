@@ -106,6 +106,11 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
             self.assertIn("CACHED_SUMMARY", prompt)
             self.assertFalse(hasattr(analyzer, "seen_candidate_detail"))
 
+    def test_summary_cache_key_changes_with_evidence_top_k(self):
+        from Sys.RootCauseAnalyze.SkilledAnalyzer import _case_cache_key
+
+        self.assertNotEqual(_case_cache_key("case-a", 5), _case_cache_key("case-a", 10))
+
     def test_cached_summary_is_not_wrapped_as_json_detail(self):
         with tempfile.TemporaryDirectory() as tmp_cache, tempfile.TemporaryDirectory() as tmp_case:
             with open(os.path.join(tmp_case, "info.json"), "w", encoding="utf-8") as f:
@@ -125,7 +130,7 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
             prompt, _skill_ips, gate = analyzer._build_final_prompt("", ["1", "2"], tmp_case)
 
             self.assertEqual(gate["decision"], "invoke_llm")
-            self.assertIn("# 3. 候选设备摘要", prompt)
+            self.assertIn("# 3. 设备状态摘要", prompt)
             self.assertNotIn("```json\nCACHED_SUMMARY", prompt)
             self.assertNotIn("候选设备详情(JSON)", prompt)
 
