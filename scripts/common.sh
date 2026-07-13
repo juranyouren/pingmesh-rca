@@ -40,3 +40,5 @@ export PINGMESH_SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
 # The summary model has one active request per card.  Cap its KV cache explicitly
 # because some vLLM-Ascend versions otherwise pre-allocate nearly all HBM.
 export PINGMESH_SUMMARY_KV_CACHE_GB="${PINGMESH_SUMMARY_KV_CACHE_GB:-4}"
+# Fallback for older vLLM-Ascend releases that do not accept a byte-level cap.
+export PINGMESH_SUMMARY_NUM_GPU_BLOCKS="${PINGMESH_SUMMARY_NUM_GPU_BLOCKS:-256}"

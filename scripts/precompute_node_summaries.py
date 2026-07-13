@@ -97,6 +97,11 @@ def main():
         default=float(os.environ.get("PINGMESH_SUMMARY_KV_CACHE_GB", "4")),
         help="per-NPU KV cache cap in GiB; prevents vLLM-Ascend cache over-allocation",
     )
+    parser.add_argument(
+        "--num-gpu-blocks-override", type=int,
+        default=int(os.environ.get("PINGMESH_SUMMARY_NUM_GPU_BLOCKS", "256")),
+        help="fallback KV-block cap for older vLLM without byte-level cache caps",
+    )
     parser.add_argument("--overwrite", action="store_true")
 
     args = parser.parse_args()
@@ -114,6 +119,7 @@ def main():
     print(f"[precompute] npu_cards={args.npu_cards}")
     print(f"[precompute] max_model_len={args.max_model_len}")
     print(f"[precompute] kv_cache_gb={args.kv_cache_gb}")
+    print(f"[precompute] num_gpu_blocks_override={args.num_gpu_blocks_override}")
     print(f"[precompute] out_cache={out_cache}")
 
     executor = BuiltinSkillProvider()
@@ -124,6 +130,7 @@ def main():
         "npu_cards": args.npu_cards,
         "top_k": args.top_k,
         "kv_cache_gb": args.kv_cache_gb,
+        "num_gpu_blocks_override": args.num_gpu_blocks_override,
         "evidence_organization_version": EVIDENCE_ORGANIZATION_VERSION,
         "total": len(dirpaths),
         "items": [],
@@ -135,6 +142,7 @@ def main():
         max_tokens=args.summary_max_tokens,
         max_model_len=args.max_model_len,
         kv_cache_memory_bytes=gib_to_bytes(args.kv_cache_gb),
+        num_gpu_blocks_override=args.num_gpu_blocks_override,
     ) as summarizer:
         for dirpath in dirpaths:
             key = case_cache_key(dirpath, args.top_k)

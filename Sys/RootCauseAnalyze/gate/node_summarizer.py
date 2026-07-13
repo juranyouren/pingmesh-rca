@@ -10,6 +10,7 @@ Design (方案 A):
 from __future__ import annotations
 
 import gc
+import inspect
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,6 +27,25 @@ def _parse_npu_cards(npu_spec: str) -> list:
         if part.isdigit():
             cards.append(int(part))
     return cards
+
+
+def _cache_limit_kwargs(
+    supported_engine_args: set[str],
+    *,
+    kv_cache_memory_bytes: int | None,
+    num_gpu_blocks_override: int | None,
+) -> dict:
+    """Choose the KV-cache cap option supported by the installed vLLM."""
+    if kv_cache_memory_bytes is not None and "kv_cache_memory_bytes" in supported_engine_args:
+        return {"kv_cache_memory_bytes": kv_cache_memory_bytes}
+    if num_gpu_blocks_override is not None and "num_gpu_blocks_override" in supported_engine_args:
+        return {"num_gpu_blocks_override": num_gpu_blocks_override}
+    if kv_cache_memory_bytes is not None or num_gpu_blocks_override is not None:
+        raise RuntimeError(
+            "Installed vLLM exposes neither kv_cache_memory_bytes nor "
+            "num_gpu_blocks_override; cannot safely cap the summary KV cache."
+        )
+    return {}
 
 
 # ── per-device prompt ─────────────────────────────────────────────────
@@ -118,6 +138,7 @@ class VllmNodeSummarizer:
         temperature: float = 0.1,
         max_model_len: int = 2048,
         kv_cache_memory_bytes: int | None = None,
+        num_gpu_blocks_override: int | None = None,
     ) -> None:
         self.model_path = model_path
         self.npu_cards = npu_cards
@@ -125,6 +146,7 @@ class VllmNodeSummarizer:
         self.temperature = temperature
         self.max_model_len = max_model_len
         self.kv_cache_memory_bytes = kv_cache_memory_bytes
+        self.num_gpu_blocks_override = num_gpu_blocks_override
         self.llm = None
         self.sampling_params = None
 
@@ -132,6 +154,7 @@ class VllmNodeSummarizer:
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = self.npu_cards
 
         from vllm import LLM, SamplingParams
+        from vllm.engine.arg_utils import EngineArgs
 
         llm_kwargs = dict(
             model=self.model_path,
@@ -142,10 +165,15 @@ class VllmNodeSummarizer:
             trust_remote_code=True,
         )
         # Some vLLM-Ascend releases size the NPU KV cache too aggressively even
-        # when gpu_memory_utilization is low.  An explicit cap is both safer for
-        # the one-device-at-a-time summarizer and sufficient for its short input.
-        if self.kv_cache_memory_bytes is not None:
-            llm_kwargs["kv_cache_memory_bytes"] = self.kv_cache_memory_bytes
+        # when gpu_memory_utilization is low. Use a byte cap when available, or
+        # the older block-count cap for the one-device-at-a-time summarizer.
+        llm_kwargs.update(
+            _cache_limit_kwargs(
+                set(inspect.signature(EngineArgs).parameters),
+                kv_cache_memory_bytes=self.kv_cache_memory_bytes,
+                num_gpu_blocks_override=self.num_gpu_blocks_override,
+            )
+        )
         self.llm = LLM(**llm_kwargs)
         self.sampling_params = SamplingParams(
             temperature=self.temperature,
@@ -185,6 +213,7 @@ class MultiCardSummarizer:
         max_tokens: int = 512,
         max_model_len: int = 2048,
         kv_cache_memory_bytes: int | None = None,
+        num_gpu_blocks_override: int | None = None,
     ) -> None:
         self.model_path = model_path
         card_list = [c.strip() for c in npu_cards.split(",") if c.strip()]
@@ -192,6 +221,7 @@ class MultiCardSummarizer:
         self.max_tokens = max_tokens
         self.max_model_len = max_model_len
         self.kv_cache_memory_bytes = kv_cache_memory_bytes
+        self.num_gpu_blocks_override = num_gpu_blocks_override
         self._summarizers: List[VllmNodeSummarizer] = []
 
     def __enter__(self) -> "MultiCardSummarizer":
@@ -202,6 +232,7 @@ class MultiCardSummarizer:
                 max_tokens=self.max_tokens,
                 max_model_len=self.max_model_len,
                 kv_cache_memory_bytes=self.kv_cache_memory_bytes,
+                num_gpu_blocks_override=self.num_gpu_blocks_override,
             )
             s.__enter__()
             self._summarizers.append(s)
