@@ -148,7 +148,9 @@ def build_fused_evidence(
                 "cross": node.get("cross", 0),
                 "alarm_count": len(names),
                 "alarms": names[:DETAIL_MAX_ALARMS_PER_NODE],
-                "high_severity_alarms": high_alarms[:10],
+                # These alarms come from the project's manual weighting rules;
+                # the name must not imply device-reported severity or causality.
+                "high_weight_alarms": high_alarms[:10],
                 "topology": {
                     "upstream": node.get("linked_from", [])[:10],
                     "downstream": node.get("linked_to", [])[:10],

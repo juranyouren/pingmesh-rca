@@ -130,9 +130,44 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
             prompt, _skill_ips, gate = analyzer._build_final_prompt("", ["1", "2"], tmp_case)
 
             self.assertEqual(gate["decision"], "invoke_llm")
-            self.assertIn("# 3. 设备状态摘要", prompt)
+            self.assertIn("# 3. 候选设备状态摘要", prompt)
             self.assertNotIn("```json\nCACHED_SUMMARY", prompt)
             self.assertNotIn("候选设备详情(JSON)", prompt)
+
+    def test_cached_think_content_is_removed_from_main_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp_cache, tempfile.TemporaryDirectory() as tmp_case:
+            from Sys.RootCauseAnalyze.SkilledAnalyzer import _case_cache_key
+
+            key = _case_cache_key(tmp_case)
+            with open(os.path.join(tmp_cache, f"{key}.json"), "w", encoding="utf-8") as f:
+                json.dump({
+                    "summary": (
+                        "Device state summaries:\n"
+                        "- 10.0.0.1: <think>very long reasoning</think>"
+                        "存在 trunkdown 告警。"
+                    )
+                }, f)
+
+            analyzer = SummaryAnalyzer(model_path="unused", summary_cache_dir=tmp_cache)
+            analyzer.executor = FakeExecutor()
+            _setup_fake_llm(analyzer)
+            prompt, _skill_ips, _gate = analyzer._build_final_prompt("", ["1", "2"], tmp_case)
+
+            self.assertNotIn("<think>", prompt)
+            self.assertNotIn("very long reasoning", prompt)
+            self.assertIn("存在 trunkdown 告警", prompt)
+
+    def test_arbitration_prompt_explains_score_scale_and_output_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            analyzer = SummaryAnalyzer(model_path="unused")
+            analyzer.executor = FakeExecutor()
+            _setup_fake_llm(analyzer)
+            prompt, _skill_ips, _gate = analyzer._build_final_prompt("", ["1", "2"], tmp)
+
+            self.assertIn("禁止直接比较其分数数值大小", prompt)
+            self.assertIn('"invocation_reason": "confidence_gate_disabled"', prompt)
+            self.assertIn('"decision": "keep_baseline | adjust_ranking | insufficient_evidence"', prompt)
+            self.assertIn('"supporting_evidence"', prompt)
 
     def test_cli_passes_summary_cache_dir_to_workers(self):
         source = Path("Sys/RootCauseAnalyze/SkilledAnalyzer.py").read_text(encoding="utf-8")

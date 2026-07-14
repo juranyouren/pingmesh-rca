@@ -13,8 +13,35 @@ import gc
 import inspect
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Sequence
+
+
+SUMMARY_PROMPT_VERSION = "device-state-summary-v2"
+
+_REASONING_BLOCK = re.compile(
+    r"<(?:think|analysis)\b[^>]*>.*?</(?:think|analysis)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_UNCLOSED_REASONING_BLOCK = re.compile(
+    r"<(?:think|analysis)\b[^>]*>.*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_reasoning_content(text: str) -> str:
+    """Remove hidden chain-of-thought blocks from a summary-model response.
+
+    DeepSeek-style models may return ``<think>...</think>`` in ``text`` rather
+    than a separate reasoning field.  Cache files and the main RCA prompt must
+    contain only the final device-state summary.
+    """
+    if not isinstance(text, str):
+        return ""
+    cleaned = _REASONING_BLOCK.sub("", text)
+    cleaned = _UNCLOSED_REASONING_BLOCK.sub("", cleaned)
+    return cleaned.strip()
 
 
 def _parse_npu_cards(npu_spec: str) -> list:
@@ -53,7 +80,8 @@ def _cache_limit_kwargs(
 _DEVICE_SUMMARY_PROMPT = (
     "你是网络设备状态证据压缩器，不是根因分析器。\n"
     "请仅根据输入字段，客观描述这一台设备的可观测状态。保留 IP，描述设备角色、"
-    "cross 数、告警数量、告警名称、高严重度告警和拓扑邻接；字段缺失时不要补全。\n"
+    "cross 数、告警数量、告警名称、高权重告警和拓扑邻接；高权重仅表示规则权重，"
+    "不表示已确认因果关系；字段缺失时不要补全。\n"
     "禁止判断该设备是否为根因、症状设备或可疑设备；禁止给出因果解释、排名、"
     "诊断结论、置信度或处置建议；禁止编造输入中不存在的事实。\n"
     "输出 1-3 句简洁中文事实描述。\n\n"
@@ -95,7 +123,10 @@ def summarize_devices(
     if not prompts:
         return devices_json
 
-    outputs = list(summarize_batch(prompts))
+    outputs = [
+        strip_reasoning_content(str(item)) if item else ""
+        for item in summarize_batch(prompts)
+    ]
     parts: List[str] = []
     for i, out in enumerate(outputs):
         ip = (
@@ -103,7 +134,7 @@ def summarize_devices(
             if i < len(devices) and isinstance(devices[i], dict)
             else f"device_{i}"
         )
-        text = str(out).strip() if out else ""
+        text = strip_reasoning_content(str(out)) if out else ""
         if text:
             parts.append(f"- {ip}: {text}")
         else:
@@ -192,7 +223,7 @@ class VllmNodeSummarizer:
             raise RuntimeError("VllmNodeSummarizer must be used as a context manager")
         applied_prompts = [[{"role": "user", "content": p}] for p in prompts]
         outputs = self.llm.chat(applied_prompts, self.sampling_params)
-        return [item.outputs[0].text for item in outputs]
+        return [strip_reasoning_content(item.outputs[0].text) for item in outputs]
 
 
 # ── parallel pool ─────────────────────────────────────────────────────
@@ -319,7 +350,7 @@ class MultiCardSummarizer:
                 if tasks[i][0] < len(devices)
                 else f"device_{i}"
             )
-            text = out.strip() if out else ""
+            text = strip_reasoning_content(out) if out else ""
             parts.append(f"- {ip}: {text}" if text else f"- {ip}: (summary unavailable)")
 
         return "Device state summaries:\n" + "\n".join(parts) if parts else devices_json
