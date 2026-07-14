@@ -34,7 +34,11 @@ from Sys.config import config
 from Sys.RootCauseAnalyze.skills.provider import BuiltinSkillProvider
 from Sys.RootCauseAnalyze.gate.evidence import build_fused_evidence
 from Sys.RootCauseAnalyze.gate.evidence import EVIDENCE_ORGANIZATION_VERSION
-from Sys.RootCauseAnalyze.gate.node_summarizer import MultiCardSummarizer
+from Sys.RootCauseAnalyze.gate.node_summarizer import (
+    MultiCardSummarizer,
+    SUMMARY_PROMPT_VERSION,
+    strip_reasoning_content,
+)
 from Sys.utils.case_utils import find_full_link_file
 from Sys.utils.io_utils import load_json, save_json
 
@@ -170,11 +174,14 @@ def main():
                     top_k=args.top_k,
                 )
 
-                summary = summarizer.summarize_devices(detail_compact)
+                summary = strip_reasoning_content(
+                    summarizer.summarize_devices(detail_compact)
+                )
 
                 record = {
                     "dir": dirpath, "cache_key": key, "top_k": args.top_k,
                     "evidence_organization_version": EVIDENCE_ORGANIZATION_VERSION,
+                    "summary_prompt_version": SUMMARY_PROMPT_VERSION,
                     "skill_ips": skill_ips, "summary": summary,
                     "raw_chars": len(detail_compact), "summary_chars": len(summary),
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),

@@ -4,6 +4,7 @@ import unittest
 from Sys.RootCauseAnalyze.gate.node_summarizer import (
     MultiCardSummarizer,
     build_per_device_prompt,
+    strip_reasoning_content,
     summarize_devices,
     summarize_nodes_with,
 )
@@ -22,7 +23,7 @@ class NodeSummarizerTest(unittest.TestCase):
             "cross": 3,
             "alarm_count": 2,
             "alarms": ["trunkdown", "bgp_down"],
-            "high_severity_alarms": ["trunkdown"],
+            "high_weight_alarms": ["trunkdown"],
             "topology": {"upstream": ["10.0.0.2"], "downstream": ["10.0.0.3"]},
         }
         prompt = build_per_device_prompt(device)
@@ -89,6 +90,26 @@ class NodeSummarizerTest(unittest.TestCase):
         self.assertIn("10.0.0.1", result)
         self.assertIn("trunkdown", result)
         self.assertIn("Device state summaries", result)
+
+    def test_strips_think_content_before_building_summary(self):
+        devices_json = json.dumps({
+            "devices": [{"ip": "10.0.0.1", "role": "leaf"}]
+        })
+
+        result = summarize_devices(
+            devices_json,
+            summarize_batch=lambda _prompts: [
+                "<think>long private reasoning that must not be cached</think>"
+                "10.0.0.1 是 leaf 设备。"
+            ],
+        )
+
+        self.assertNotIn("<think>", result)
+        self.assertNotIn("private reasoning", result)
+        self.assertIn("10.0.0.1 是 leaf 设备", result)
+
+    def test_strips_unclosed_reasoning_block(self):
+        self.assertEqual(strip_reasoning_content("<think>unfinished reasoning"), "")
 
 
 if __name__ == "__main__":

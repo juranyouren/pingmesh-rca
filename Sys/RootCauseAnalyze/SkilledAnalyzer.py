@@ -91,20 +91,70 @@ def _case_cache_key(dirpath: str, top_k: int | None = None) -> str:
     return hashlib.sha1(material.encode("utf-8")).hexdigest()
 
 
-def _format_skilled_prompt(skill_ret: str, info: str, nodes: str, nodes_are_summary: bool = False) -> str:
-    prompt = SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info, NODES=nodes)
-    if not nodes_are_summary:
-        return prompt
-
-    prompt = prompt.replace(
-        "**3. 设备状态证据(JSON 或摘要)** - 候选集合是拓扑 Top-K 与时序 Top-K 的并集",
-        "**3. 设备状态摘要** - 小模型对候选设备可观测状态的事实压缩，不包含根因判断",
+def _format_skilled_prompt(
+    skill_ret: str,
+    info: str,
+    nodes: str,
+    gate_context: str,
+    nodes_are_summary: bool = False,
+) -> str:
+    prompt = SKILLED_PROMPT.format(
+        SKILLRET=skill_ret,
+        INFO=info,
+        NODES=nodes,
+        GATE_CONTEXT=gate_context,
     )
-    prompt = prompt.replace(
-        f"# 3. 设备状态证据\n```json\n{nodes}\n```",
-        f"# 3. 设备状态摘要\n{nodes}",
-    )
+    if nodes_are_summary:
+        prompt = prompt.replace(
+            "# 3. 候选设备状态证据",
+            "# 3. 候选设备状态摘要",
+        )
     return prompt
+
+
+def _build_gate_context(gate: dict, skill_ret: str) -> str:
+    """Build a compact, label-free explanation of why arbitration is needed."""
+    try:
+        evidence = json.loads(skill_ret)
+        if not isinstance(evidence, dict):
+            evidence = {}
+    except (TypeError, json.JSONDecodeError):
+        evidence = {}
+
+    def _top_ip(method: str):
+        if method == "combined":
+            rows = evidence.get("combined_score_rankings", [])
+        else:
+            rows = (evidence.get(method, {}) or {}).get("rankings", [])
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            return rows[0].get("ip")
+        return None
+
+    combined_rows = evidence.get("combined_score_rankings", [])
+    fallback_ips = [
+        row.get("ip") for row in combined_rows[:3]
+        if isinstance(row, dict) and row.get("ip")
+    ] if isinstance(combined_rows, list) else []
+    agreement = gate.get("agreement", {}) if isinstance(gate, dict) else {}
+    method_top_ips = agreement.get("method_top_ips", {}) if isinstance(agreement, dict) else {}
+    trees = gate.get("trust_trees", {}) if isinstance(gate, dict) else {}
+
+    context = {
+        "invocation_reason": gate.get("reason", "unknown") if isinstance(gate, dict) else "unknown",
+        "policy_version": gate.get("policy_version") if isinstance(gate, dict) else None,
+        "method_top_ips": {
+            "topo": method_top_ips.get("topo") or _top_ip("topo"),
+            "temporal": method_top_ips.get("temporal") or _top_ip("temporal"),
+            "combined": method_top_ips.get("combined") or _top_ip("combined"),
+        },
+        "trust_states": {
+            name: tree.get("state")
+            for name in ("topo", "temporal")
+            if isinstance((tree := trees.get(name, {})), dict) and tree.get("state")
+        },
+        "default_fallback_ips": fallback_ips,
+    }
+    return json.dumps(context, ensure_ascii=False, indent=2)
 
 
 class SkilledAnalyzer:
@@ -244,7 +294,9 @@ class SkilledAnalyzer:
 
         try:
             data = load_json(path)
-            summary = data.get("summary", "")
+            from Sys.RootCauseAnalyze.gate.node_summarizer import strip_reasoning_content
+
+            summary = strip_reasoning_content(data.get("summary", ""))
             if isinstance(summary, str) and summary.strip():
                 return summary
             logger.warning("Node summary cache empty for %s: %s", dirpath, path)
@@ -382,19 +434,28 @@ class SkilledAnalyzer:
         tokenizer = self.llm.get_tokenizer()
         max_input_tokens = int(self.llm.llm_engine.model_config.max_model_len * 0.8)
 
-        base_len = len(tokenizer.encode(SKILLED_PROMPT.format(SKILLRET="", INFO="", NODES="")))
+        gate_context = _build_gate_context(gate, skill_ret)
+        base_len = len(tokenizer.encode(_format_skilled_prompt(
+            skill_ret="", info="", nodes="", gate_context=gate_context,
+        )))
         remaining_tokens = max_input_tokens - base_len
 
         skill_tokens = tokenizer.encode(skill_ret)
         if len(skill_tokens) > remaining_tokens:
             skill_ret = tokenizer.decode(skill_tokens[:remaining_tokens]) + "\n...[证据表过长截断]..."
-            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO="", NODES=""), skill_ips, gate
+            return _format_skilled_prompt(
+                skill_ret=skill_ret, info="", nodes="",
+                gate_context=gate_context,
+            ), skill_ips, gate
         remaining_tokens -= len(skill_tokens)
 
         info_tokens = tokenizer.encode(info_data)
         if len(info_tokens) > remaining_tokens:
             info_data = tokenizer.decode(info_tokens[:remaining_tokens]) + "\n...[Info 截断]..."
-            return SKILLED_PROMPT.format(SKILLRET=skill_ret, INFO=info_data, NODES=""), skill_ips, gate
+            return _format_skilled_prompt(
+                skill_ret=skill_ret, info=info_data, nodes="",
+                gate_context=gate_context,
+            ), skill_ips, gate
         remaining_tokens -= len(info_tokens)
 
         nodes_tokens = tokenizer.encode(detail_for_llm)
@@ -405,6 +466,7 @@ class SkilledAnalyzer:
             skill_ret=skill_ret,
             info=info_data,
             nodes=detail_for_llm,
+            gate_context=gate_context,
             nodes_are_summary=detail_is_summary,
         ), skill_ips, gate
 
