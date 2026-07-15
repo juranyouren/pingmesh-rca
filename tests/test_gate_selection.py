@@ -451,6 +451,25 @@ class GateSelectionIntegrationTest(unittest.TestCase):
         self.assertEqual(summary["evaluated"], 0)
         self.assertEqual(summary["skipped"]["no_gt"], 1)
 
+    def test_all_methods_miss_is_reported_without_crashing(self):
+        case_dir = self._make_case_dir("case_all_miss", ["10.0.0.99"])
+        record = self._make_record(
+            case_dir,
+            topo_rankings=[("10.0.0.1", 98.0, {})],
+            temporal_rankings=[("10.0.0.2", 0.90, {})],
+            llm_ips=["10.0.0.3"],
+        )
+
+        out_dir = os.path.join(self.tmp_dir.name, "all_miss_output")
+        summary = self._run_eval([record], out_dir)
+
+        self.assertEqual(summary["all_miss"], 1)
+        self.assertEqual(summary["llm_tied_for_best"], 0)
+        self.assertEqual(summary["llm_win_rate"], 0.0)
+        with open(os.path.join(out_dir, "gate_selection_cases.jsonl"), encoding="utf-8") as f:
+            row = json.loads(next(f))
+        self.assertEqual(row["llm_vs_best"], "all_miss")
+
     def test_skips_cases_with_malformed_prompt(self):
         """Cases where prompt cannot yield skill_ret should be skipped."""
         dir1 = self._make_case_dir("case_001", ["10.0.0.1"])

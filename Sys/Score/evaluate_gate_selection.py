@@ -262,10 +262,16 @@ def evaluate_gate_selection(res_path: str, out_dir: str) -> Dict[str, Any]:
         elif best == "tie":
             # 检查 LLM 是否在并列最优中
             llm_r = llm_m["best_rank"]
-            best_r = min(
-                m["best_rank"] for m in [topo_m, temp_m, llm_m] if m["best_rank"] is not None
-            )
-            if llm_r == best_r:
+            valid_ranks = [
+                m["best_rank"]
+                for m in [topo_m, temp_m, llm_m]
+                if m["best_rank"] is not None
+            ]
+            if not valid_ranks:
+                # All three methods miss the GT. This is not a useful LLM tie
+                # and must not be counted toward the LLM win rate.
+                llm_vs_best = "all_miss"
+            elif llm_r == min(valid_ranks):
                 llm_vs_best = "llm_tied_for_best"
             else:
                 llm_vs_best = "llm_worse"
@@ -304,6 +310,7 @@ def evaluate_gate_selection(res_path: str, out_dir: str) -> Dict[str, Any]:
     llm_best = _count_bool(r["llm_vs_best"] == "llm_best" for r in case_rows)
     llm_tied = _count_bool(r["llm_vs_best"] == "llm_tied_for_best" for r in case_rows)
     llm_worse = _count_bool(r["llm_vs_best"] == "llm_worse" for r in case_rows)
+    all_miss = _count_bool(r["llm_vs_best"] == "all_miss" for r in case_rows)
 
     # LLM worse 时, 统计谁更好
     better_is_topo = 0
@@ -321,7 +328,7 @@ def evaluate_gate_selection(res_path: str, out_dir: str) -> Dict[str, Any]:
 
     # 按 reason 分组
     by_reason: Dict[str, Dict[str, Any]] = defaultdict(
-        lambda: {"n": 0, "llm_best": 0, "llm_tied": 0, "llm_worse": 0,
+        lambda: {"n": 0, "llm_best": 0, "llm_tied": 0, "llm_worse": 0, "all_miss": 0,
                  "topo_top1": 0, "temporal_top1": 0, "llm_top1": 0}
     )
     for r in case_rows:
@@ -331,8 +338,10 @@ def evaluate_gate_selection(res_path: str, out_dir: str) -> Dict[str, Any]:
             by_reason[reason]["llm_best"] += 1
         elif r["llm_vs_best"] == "llm_tied_for_best":
             by_reason[reason]["llm_tied"] += 1
-        else:
+        elif r["llm_vs_best"] == "llm_worse":
             by_reason[reason]["llm_worse"] += 1
+        else:
+            by_reason[reason]["all_miss"] += 1
         if r["topo_top1_hit"]:
             by_reason[reason]["topo_top1"] += 1
         if r["temporal_top1_hit"]:
@@ -380,6 +389,7 @@ def evaluate_gate_selection(res_path: str, out_dir: str) -> Dict[str, Any]:
         "llm_best": llm_best,
         "llm_tied_for_best": llm_tied,
         "llm_worse": llm_worse,
+        "all_miss": all_miss,
         "llm_win_rate": round((llm_best + llm_tied) / evaluated, 4) if evaluated else 0.0,
         "when_llm_worse": {
             "better_is_topo": better_is_topo,
@@ -397,7 +407,7 @@ def evaluate_gate_selection(res_path: str, out_dir: str) -> Dict[str, Any]:
     write_json(os.path.join(out_dir, "gate_selection_summary.json"), summary)
 
     csv_fields = [
-        "reason", "n", "llm_best", "llm_tied", "llm_worse",
+        "reason", "n", "llm_best", "llm_tied", "llm_worse", "all_miss",
         "llm_win_rate", "topo_top1", "temporal_top1", "llm_top1",
     ]
     csv_path = os.path.join(out_dir, "gate_selection_summary.csv")
