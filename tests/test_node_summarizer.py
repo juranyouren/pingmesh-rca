@@ -4,6 +4,7 @@ import unittest
 from Sys.RootCauseAnalyze.gate.node_summarizer import (
     MultiCardSummarizer,
     VllmNodeSummarizer,
+    build_lossless_skeleton,
     build_per_device_prompt,
     strip_reasoning_content,
     summarize_devices,
@@ -130,6 +131,23 @@ class NodeSummarizerTest(unittest.TestCase):
         self.assertEqual(summarizer.max_num_seqs, 8)
         with self.assertRaisesRegex(ValueError, "max_num_seqs must be positive"):
             VllmNodeSummarizer(model_path="unused", npu_cards="0", max_num_seqs=0)
+
+    def test_skeleton_ablation_has_exact_facts_without_model_semantics(self):
+        devices_json = json.dumps({
+            "devices": [{
+                "ip": "10.0.0.1",
+                "role": "leaf",
+                "alarms": ["trunkdown"],
+                "high_weight_alarms": ["trunkdown"],
+                "topology": {"upstream": ["10.0.0.2"], "downstream": []},
+            }]
+        })
+
+        result = build_lossless_skeleton(devices_json)
+        record = json.loads(result.split("\n", 1)[1])
+
+        self.assertEqual(record["alarms_exact"], ["trunkdown"])
+        self.assertNotIn("semantic_summary", record)
 
     def test_strips_think_content_before_building_summary(self):
         devices_json = json.dumps({

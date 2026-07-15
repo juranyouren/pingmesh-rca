@@ -24,6 +24,7 @@ import json
 import time
 import argparse
 import hashlib
+from contextlib import nullcontext
 from pathlib import Path
 from typing import List
 
@@ -36,7 +37,9 @@ from Sys.RootCauseAnalyze.gate.evidence import build_fused_evidence
 from Sys.RootCauseAnalyze.gate.evidence import EVIDENCE_ORGANIZATION_VERSION
 from Sys.RootCauseAnalyze.gate.node_summarizer import (
     MultiCardSummarizer,
+    SKELETON_FORMAT_VERSION,
     SUMMARY_PROMPT_VERSION,
+    build_lossless_skeleton,
     strip_reasoning_content,
 )
 from Sys.utils.case_utils import find_full_link_file
@@ -120,6 +123,10 @@ def main():
         help="fallback KV-block cap for older vLLM without byte-level cache caps",
     )
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--skeleton-only", action="store_true",
+        help="write deterministic lossless skeleton caches without loading a summary model",
+    )
 
     args = parser.parse_args()
 
@@ -133,6 +140,7 @@ def main():
 
     print(f"[precompute] cases={len(dirpaths)}")
     print(f"[precompute] model={args.model_path}")
+    print(f"[precompute] mode={'skeleton_only' if args.skeleton_only else 'hybrid_v3'}")
     print(f"[precompute] npu_cards={args.npu_cards}")
     print(f"[precompute] max_model_len={args.max_model_len}")
     print(f"[precompute] max_num_seqs={args.max_num_seqs}")
@@ -142,12 +150,13 @@ def main():
 
     executor = BuiltinSkillProvider()
 
+    summary_version = SKELETON_FORMAT_VERSION if args.skeleton_only else SUMMARY_PROMPT_VERSION
     manifest = {
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "model_path": args.model_path,
+        "model_path": None if args.skeleton_only else args.model_path,
         "npu_cards": args.npu_cards,
         "top_k": args.top_k,
-        "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+        "summary_prompt_version": summary_version,
         "max_num_seqs": args.max_num_seqs,
         "kv_cache_gb": args.kv_cache_gb,
         "num_gpu_blocks_override": args.num_gpu_blocks_override,
@@ -156,7 +165,7 @@ def main():
         "items": [],
     }
 
-    with MultiCardSummarizer(
+    summarizer_context = nullcontext(None) if args.skeleton_only else MultiCardSummarizer(
         model_path=args.model_path,
         npu_cards=args.npu_cards,
         max_tokens=args.summary_max_tokens,
@@ -164,7 +173,8 @@ def main():
         max_num_seqs=args.max_num_seqs,
         kv_cache_memory_bytes=gib_to_bytes(args.kv_cache_gb),
         num_gpu_blocks_override=args.num_gpu_blocks_override,
-    ) as summarizer:
+    )
+    with summarizer_context as summarizer:
         for dirpath in dirpaths:
             key = case_cache_key(dirpath, args.top_k)
             out_path = out_cache / f"{key}.json"
@@ -186,14 +196,16 @@ def main():
                     top_k=args.top_k,
                 )
 
-                summary = strip_reasoning_content(
-                    summarizer.summarize_devices(detail_compact)
+                summary = (
+                    build_lossless_skeleton(detail_compact)
+                    if args.skeleton_only
+                    else strip_reasoning_content(summarizer.summarize_devices(detail_compact))
                 )
 
                 record = {
                     "dir": dirpath, "cache_key": key, "top_k": args.top_k,
                     "evidence_organization_version": EVIDENCE_ORGANIZATION_VERSION,
-                    "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+                    "summary_prompt_version": summary_version,
                     "skill_ips": skill_ips, "summary": summary,
                     "raw_chars": len(detail_compact), "summary_chars": len(summary),
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),

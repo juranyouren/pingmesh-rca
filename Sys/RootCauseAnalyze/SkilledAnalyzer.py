@@ -210,7 +210,13 @@ class SkilledAnalyzer:
         )
         self.summary_npu_cards = _default_summary_card
         self.summary_max_tokens = int(summary_max_tokens)
-        self.summary_cache_dir = summary_cache_dir or os.environ.get("PINGMESH_SUMMARY_CACHE_DIR", "")
+        # None means "use the environment default"; an explicit empty string
+        # disables cache use for raw-evidence ablation runs.
+        self.summary_cache_dir = (
+            os.environ.get("PINGMESH_SUMMARY_CACHE_DIR", "")
+            if summary_cache_dir is None
+            else summary_cache_dir
+        )
         self.llm = None
         self.sampling_params = None
         self._summary_model = None  # cached VllmNodeSummarizer (persistent across cases)

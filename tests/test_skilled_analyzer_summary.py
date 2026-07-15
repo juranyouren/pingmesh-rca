@@ -174,6 +174,11 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
 
         self.assertIn("summary_cache_dir=args.summary_cache_dir", source)
 
+    def test_explicit_empty_cache_dir_disables_environment_default(self):
+        with patch.dict(os.environ, {"PINGMESH_SUMMARY_CACHE_DIR": "ENV_CACHE"}):
+            analyzer = SummaryAnalyzer(model_path="unused", summary_cache_dir="")
+        self.assertEqual(analyzer.summary_cache_dir, "")
+
     def test_cli_and_shell_scripts_support_print_first_prompt(self):
         analyzer_source = Path("Sys/RootCauseAnalyze/SkilledAnalyzer.py").read_text(encoding="utf-8")
         run_inference = Path("scripts/run_inference.sh").read_text(encoding="utf-8")
@@ -183,6 +188,15 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
         self.assertIn("print_first_prompt=args.print_first_prompt", analyzer_source)
         self.assertIn("--print-first-prompt", run_inference)
         self.assertIn("--print-first-prompt", run_experiments)
+
+    def test_v3_ablation_script_covers_raw_skeleton_and_hybrid(self):
+        script = Path("scripts/run_paper_07_v3_summary_ablation.sh").read_text(encoding="utf-8")
+
+        self.assertIn("gate_raw_llm", script)
+        self.assertIn("gate_skeleton_llm", script)
+        self.assertIn("gate_hybrid_v3_llm", script)
+        self.assertIn("--skeleton-only", script)
+        self.assertIn('cache_args+=(--summary-cache-dir "")', script)
 
     def test_batch_infer_prints_only_first_final_prompt_when_requested(self):
         with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b:
