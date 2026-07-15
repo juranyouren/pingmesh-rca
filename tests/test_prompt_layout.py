@@ -9,7 +9,9 @@ def test_prompts_package_exports_runtime_prompts():
 
     assert "Root Cause Device Localization" in PROMPT
     assert "拓扑 Top-K 与时序 Top-K 的并集" in SKILLED_PROMPT
-    assert "小模型摘要只描述设备状态，不包含根因判断" in SKILLED_PROMPT
+    assert "精确字段由程序无损保留" in SKILLED_PROMPT
+    assert "semantic_summary" in SKILLED_PROMPT
+    assert "不包含根因判断" in SKILLED_PROMPT
 
 
 def test_root_utils_package_removed_and_sys_utils_remains():

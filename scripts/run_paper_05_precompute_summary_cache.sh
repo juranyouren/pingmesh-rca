@@ -16,6 +16,7 @@ echo "  data:       ${PINGMESH_DATA}"
 echo "  cache:      ${PINGMESH_SUMMARY_CACHE_DIR}"
 echo "  model:      ${PINGMESH_SUMMARY_MODEL_PATH}"
 echo "  npu_cards:  ${PINGMESH_SUMMARY_NPU_CARDS}"
+echo "  concurrency:${PINGMESH_SUMMARY_MAX_NUM_SEQS} sequences"
 echo "  kv_cache:   ${PINGMESH_SUMMARY_KV_CACHE_GB} GiB per NPU"
 echo "  kv_blocks:  ${PINGMESH_SUMMARY_NUM_GPU_BLOCKS} (old vLLM fallback)"
 echo "============================================"
@@ -25,6 +26,7 @@ python scripts/precompute_node_summaries.py \
     --out-cache "${PINGMESH_SUMMARY_CACHE_DIR}" \
     --npu-cards "${PINGMESH_SUMMARY_NPU_CARDS}" \
     --model-path "${PINGMESH_SUMMARY_MODEL_PATH}" \
+    --max-num-seqs "${PINGMESH_SUMMARY_MAX_NUM_SEQS}" \
     --kv-cache-gb "${PINGMESH_SUMMARY_KV_CACHE_GB}" \
     --num-gpu-blocks-override "${PINGMESH_SUMMARY_NUM_GPU_BLOCKS}" \
     --top-k "${PINGMESH_TOP_K}"

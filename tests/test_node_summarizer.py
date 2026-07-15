@@ -3,6 +3,7 @@ import unittest
 
 from Sys.RootCauseAnalyze.gate.node_summarizer import (
     MultiCardSummarizer,
+    VllmNodeSummarizer,
     build_per_device_prompt,
     strip_reasoning_content,
     summarize_devices,
@@ -31,6 +32,8 @@ class NodeSummarizerTest(unittest.TestCase):
         self.assertIn("trunkdown", prompt)
         self.assertIn("不是根因分析器", prompt)
         self.assertIn("禁止判断该设备是否为根因", prompt)
+        self.assertIn("结构化事实会由程序原样保留", prompt)
+        self.assertIn("不要展示思考过程", prompt)
         self.assertNotIn("whether this device looks like a root cause", prompt)
         # Should fit in 2000 chars (safe for max_model_len=2048)
         self.assertLess(len(prompt), 2000)
@@ -68,6 +71,7 @@ class NodeSummarizerTest(unittest.TestCase):
         self.assertEqual(len(seen_prompts), 2)
         self.assertIn("10.0.0.1", result)
         self.assertIn("10.0.0.2", result)
+        self.assertIn("lossless facts + semantic annotation", result)
 
     def test_handles_empty_devices(self):
         result = summarize_devices('{"devices": []}', summarize_batch=lambda x: [])
@@ -89,7 +93,43 @@ class NodeSummarizerTest(unittest.TestCase):
         result = summarize_nodes_with(devices_json, summarize_batch=fake_batch)
         self.assertIn("10.0.0.1", result)
         self.assertIn("trunkdown", result)
-        self.assertIn("Device state summaries", result)
+        self.assertIn("Device evidence records", result)
+        self.assertIn('"alarms_exact":["trunkdown"]', result)
+        self.assertIn('"semantic_summary":"leaf device 10.0.0.1 with trunkdown"', result)
+
+    def test_exact_facts_survive_even_when_model_omits_them(self):
+        devices_json = json.dumps({
+            "devices": [{
+                "ip": "10.0.0.1",
+                "role": "leaf",
+                "cross": 3,
+                "alarm_count": 2,
+                "alarms": ["trunkdown", "bgp_down"],
+                "high_weight_alarms": ["trunkdown"],
+                "topology": {
+                    "upstream": ["10.0.0.2"],
+                    "downstream": ["10.0.0.3"],
+                },
+            }]
+        }, ensure_ascii=False)
+
+        result = summarize_devices(
+            devices_json,
+            summarize_batch=lambda _prompts: ["观察到链路及路由会话异常。"],
+        )
+        record = json.loads(result.split("\n", 1)[1])
+
+        self.assertEqual(record["ip"], "10.0.0.1")
+        self.assertEqual(record["alarms_exact"], ["trunkdown", "bgp_down"])
+        self.assertEqual(record["high_weight_alarms"], ["trunkdown"])
+        self.assertEqual(record["upstream"], ["10.0.0.2"])
+        self.assertEqual(record["semantic_summary"], "观察到链路及路由会话异常。")
+
+    def test_summary_engine_defaults_to_parallel_sequences(self):
+        summarizer = VllmNodeSummarizer(model_path="unused", npu_cards="0")
+        self.assertEqual(summarizer.max_num_seqs, 8)
+        with self.assertRaisesRegex(ValueError, "max_num_seqs must be positive"):
+            VllmNodeSummarizer(model_path="unused", npu_cards="0", max_num_seqs=0)
 
     def test_strips_think_content_before_building_summary(self):
         devices_json = json.dumps({

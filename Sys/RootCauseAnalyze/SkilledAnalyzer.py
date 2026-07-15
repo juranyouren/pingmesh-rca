@@ -84,10 +84,14 @@ def _report_npu_occupants(card_ids: list) -> None:
 def _case_cache_key(dirpath: str, top_k: int | None = None) -> str:
     """Deterministic per-case key for the summary cache."""
     from Sys.RootCauseAnalyze.gate.evidence import EVIDENCE_ORGANIZATION_VERSION
+    from Sys.RootCauseAnalyze.gate.node_summarizer import SUMMARY_PROMPT_VERSION
 
     if top_k is None:
         top_k = config.temporal.top_k
-    material = f"{EVIDENCE_ORGANIZATION_VERSION}|top_k={top_k}|{os.path.abspath(dirpath)}"
+    material = (
+        f"{EVIDENCE_ORGANIZATION_VERSION}|{SUMMARY_PROMPT_VERSION}|"
+        f"top_k={top_k}|{os.path.abspath(dirpath)}"
+    )
     return hashlib.sha1(material.encode("utf-8")).hexdigest()
 
 
@@ -240,6 +244,7 @@ class SkilledAnalyzer:
                     model_path=self.summary_model_path,
                     npu_cards=self.summary_npu_cards,
                     max_tokens=self.summary_max_tokens,
+                    max_num_seqs=int(os.environ.get("PINGMESH_SUMMARY_MAX_NUM_SEQS", "8")),
                 )
                 model.__enter__()
                 self._summary_model = model

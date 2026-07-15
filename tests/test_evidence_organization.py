@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from Sys.RootCauseAnalyze.gate.evidence import _ranked_ip_union, build_fused_evidence
 from Sys.RootCauseAnalyze.gate.node_summarizer import _cache_limit_kwargs
-from scripts.precompute_node_summaries import gib_to_bytes
+from scripts.precompute_node_summaries import case_cache_key, gib_to_bytes
 
 
 def test_kv_cache_gib_conversion_rejects_non_positive_values():
@@ -28,6 +28,12 @@ def test_cache_cap_uses_blocks_when_byte_limit_is_unavailable():
         kv_cache_memory_bytes=4,
         num_gpu_blocks_override=256,
     ) == {"num_gpu_blocks_override": 256}
+
+
+def test_precompute_and_runtime_use_same_versioned_cache_key():
+    from Sys.RootCauseAnalyze.SkilledAnalyzer import _case_cache_key
+
+    assert case_cache_key("case-a", 5) == _case_cache_key("case-a", 5)
 
 
 def test_ranked_ip_union_interleaves_and_deduplicates_two_rankings():

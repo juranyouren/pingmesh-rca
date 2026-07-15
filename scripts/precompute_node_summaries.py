@@ -51,7 +51,10 @@ def gib_to_bytes(value: float) -> int:
 
 
 def case_cache_key(dirpath: str, top_k: int) -> str:
-    material = f"{EVIDENCE_ORGANIZATION_VERSION}|top_k={top_k}|{os.path.abspath(dirpath)}"
+    material = (
+        f"{EVIDENCE_ORGANIZATION_VERSION}|{SUMMARY_PROMPT_VERSION}|"
+        f"top_k={top_k}|{os.path.abspath(dirpath)}"
+    )
     return hashlib.sha1(material.encode("utf-8")).hexdigest()
 
 
@@ -102,6 +105,11 @@ def main():
         default=int(os.environ.get("PINGMESH_SUMMARY_MAX_TOKENS", "512")),
     )
     parser.add_argument(
+        "--max-num-seqs", type=int,
+        default=int(os.environ.get("PINGMESH_SUMMARY_MAX_NUM_SEQS", "8")),
+        help="maximum per-device summary sequences scheduled concurrently by vLLM",
+    )
+    parser.add_argument(
         "--kv-cache-gb", type=float,
         default=float(os.environ.get("PINGMESH_SUMMARY_KV_CACHE_GB", "4")),
         help="per-NPU KV cache cap in GiB; prevents vLLM-Ascend cache over-allocation",
@@ -127,6 +135,7 @@ def main():
     print(f"[precompute] model={args.model_path}")
     print(f"[precompute] npu_cards={args.npu_cards}")
     print(f"[precompute] max_model_len={args.max_model_len}")
+    print(f"[precompute] max_num_seqs={args.max_num_seqs}")
     print(f"[precompute] kv_cache_gb={args.kv_cache_gb}")
     print(f"[precompute] num_gpu_blocks_override={args.num_gpu_blocks_override}")
     print(f"[precompute] out_cache={out_cache}")
@@ -138,6 +147,8 @@ def main():
         "model_path": args.model_path,
         "npu_cards": args.npu_cards,
         "top_k": args.top_k,
+        "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+        "max_num_seqs": args.max_num_seqs,
         "kv_cache_gb": args.kv_cache_gb,
         "num_gpu_blocks_override": args.num_gpu_blocks_override,
         "evidence_organization_version": EVIDENCE_ORGANIZATION_VERSION,
@@ -150,6 +161,7 @@ def main():
         npu_cards=args.npu_cards,
         max_tokens=args.summary_max_tokens,
         max_model_len=args.max_model_len,
+        max_num_seqs=args.max_num_seqs,
         kv_cache_memory_bytes=gib_to_bytes(args.kv_cache_gb),
         num_gpu_blocks_override=args.num_gpu_blocks_override,
     ) as summarizer:

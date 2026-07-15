@@ -2,9 +2,9 @@
 
 Design (方案 A):
     Input is a single device dict (≈ 200–2000 chars), *not* the full devices list.
-    The small model sees exactly one device at a time — no token overflow.
-    Multiple VllmNodeSummarizer instances can be deployed in parallel across
-    different NPU cards to process all devices in a case concurrently.
+    Exact device facts are retained deterministically; the small model only adds
+    a short semantic annotation. Per-device prompts are submitted as one vLLM
+    batch and scheduled concurrently on a single NPU.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Sequence
 
 
-SUMMARY_PROMPT_VERSION = "device-state-summary-v2"
+SUMMARY_PROMPT_VERSION = "device-evidence-hybrid-v3"
 
 _REASONING_BLOCK = re.compile(
     r"<(?:think|analysis)\b[^>]*>.*?</(?:think|analysis)\s*>",
@@ -78,13 +78,14 @@ def _cache_limit_kwargs(
 # ── per-device prompt ─────────────────────────────────────────────────
 
 _DEVICE_SUMMARY_PROMPT = (
-    "你是网络设备状态证据压缩器，不是根因分析器。\n"
-    "请仅根据输入字段，客观描述这一台设备的可观测状态。保留 IP，描述设备角色、"
-    "cross 数、告警数量、告警名称、高权重告警和拓扑邻接；高权重仅表示规则权重，"
-    "不表示已确认因果关系；字段缺失时不要补全。\n"
+    "你是网络设备告警语义标注器，不是根因分析器。结构化事实会由程序原样保留，"
+    "你只需要把告警名称归纳为这一台设备的可观测网络状态。\n"
+    "必须基于输入中的告警名称；字段缺失时不要补全。高权重仅表示规则权重，"
+    "不表示已确认因果关系。\n"
     "禁止判断该设备是否为根因、症状设备或可疑设备；禁止给出因果解释、排名、"
     "诊断结论、置信度或处置建议；禁止编造输入中不存在的事实。\n"
-    "输出 1-3 句简洁中文事实描述。\n\n"
+    "不要展示思考过程。直接输出一句简洁中文状态语义；没有告警时输出“未观察到告警”。"
+    "不要输出 JSON、列表、IP、角色、cross 数或拓扑邻接。\n\n"
     "Device JSON:\n"
     "{device_json}\n"
 )
@@ -94,6 +95,41 @@ def build_per_device_prompt(device: Dict) -> str:
     """Build a tiny prompt for ONE device. Expected input chars: 200–2000."""
     device_json = json.dumps(device, ensure_ascii=False, indent=2)
     return _DEVICE_SUMMARY_PROMPT.format(device_json=device_json)
+
+
+def _hybrid_device_record(device: Dict, semantic_summary: str) -> Dict:
+    """Retain exact facts deterministically and attach model semantics."""
+    topology = device.get("topology", {})
+    if not isinstance(topology, dict):
+        topology = {}
+    return {
+        "ip": device.get("ip"),
+        "role": device.get("role", "UNKNOWN"),
+        "cross": device.get("cross", 0),
+        "alarm_count": device.get("alarm_count", 0),
+        "alarms_exact": device.get("alarms", []),
+        "high_weight_alarms": device.get("high_weight_alarms", []),
+        "upstream": topology.get("upstream", []),
+        "downstream": topology.get("downstream", []),
+        "semantic_summary": semantic_summary or "(semantic summary unavailable)",
+    }
+
+
+def _format_hybrid_summary(
+    tasks: Sequence[tuple[int, Dict, str]],
+    outputs: Sequence[str],
+) -> str:
+    records = []
+    for index, (_device_index, device, _prompt) in enumerate(tasks):
+        text = strip_reasoning_content(outputs[index]) if index < len(outputs) else ""
+        records.append(_hybrid_device_record(device, text))
+    if not records:
+        return ""
+    lines = [
+        json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        for record in records
+    ]
+    return "Device evidence records (lossless facts + semantic annotation):\n" + "\n".join(lines)
 
 
 # ── batch helpers ─────────────────────────────────────────────────────
@@ -119,30 +155,20 @@ def summarize_devices(
     if not isinstance(devices, list) or not devices:
         return devices_json
 
-    prompts = [build_per_device_prompt(d) for d in devices if isinstance(d, dict)]
-    if not prompts:
+    tasks = [
+        (index, device, build_per_device_prompt(device))
+        for index, device in enumerate(devices)
+        if isinstance(device, dict)
+    ]
+    if not tasks:
         return devices_json
 
+    prompts = [task[2] for task in tasks]
     outputs = [
         strip_reasoning_content(str(item)) if item else ""
         for item in summarize_batch(prompts)
     ]
-    parts: List[str] = []
-    for i, out in enumerate(outputs):
-        ip = (
-            devices[i].get("ip", f"device_{i}")
-            if i < len(devices) and isinstance(devices[i], dict)
-            else f"device_{i}"
-        )
-        text = strip_reasoning_content(str(out)) if out else ""
-        if text:
-            parts.append(f"- {ip}: {text}")
-        else:
-            parts.append(f"- {ip}: (summary unavailable)")
-
-    if parts:
-        return "Device state summaries:\n" + "\n".join(parts)
-    return devices_json
+    return _format_hybrid_summary(tasks, outputs) or devices_json
 
 
 def summarize_nodes_with(
@@ -168,6 +194,7 @@ class VllmNodeSummarizer:
         max_tokens: int = 512,
         temperature: float = 0.1,
         max_model_len: int = 2048,
+        max_num_seqs: int = 8,
         kv_cache_memory_bytes: int | None = None,
         num_gpu_blocks_override: int | None = None,
     ) -> None:
@@ -176,6 +203,9 @@ class VllmNodeSummarizer:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.max_model_len = max_model_len
+        if max_num_seqs <= 0:
+            raise ValueError("max_num_seqs must be positive")
+        self.max_num_seqs = int(max_num_seqs)
         self.kv_cache_memory_bytes = kv_cache_memory_bytes
         self.num_gpu_blocks_override = num_gpu_blocks_override
         self.llm = None
@@ -192,7 +222,9 @@ class VllmNodeSummarizer:
             tensor_parallel_size=1,
             gpu_memory_utilization=0.35,
             max_model_len=self.max_model_len,
-            max_num_seqs=1,
+            # All per-device prompts are submitted together; continuous
+            # batching schedules up to this many sequences concurrently.
+            max_num_seqs=self.max_num_seqs,
             trust_remote_code=True,
         )
         # Some vLLM-Ascend releases size the NPU KV cache too aggressively even
@@ -245,6 +277,7 @@ class MultiCardSummarizer:
         npu_cards: str,  # comma-separated, e.g. "4,5,6,7"
         max_tokens: int = 512,
         max_model_len: int = 2048,
+        max_num_seqs: int = 8,
         kv_cache_memory_bytes: int | None = None,
         num_gpu_blocks_override: int | None = None,
     ) -> None:
@@ -258,6 +291,9 @@ class MultiCardSummarizer:
         self.cards = card_list
         self.max_tokens = max_tokens
         self.max_model_len = max_model_len
+        if max_num_seqs <= 0:
+            raise ValueError("max_num_seqs must be positive")
+        self.max_num_seqs = int(max_num_seqs)
         self.kv_cache_memory_bytes = kv_cache_memory_bytes
         self.num_gpu_blocks_override = num_gpu_blocks_override
         self._summarizers: List[VllmNodeSummarizer] = []
@@ -269,6 +305,7 @@ class MultiCardSummarizer:
                 npu_cards=card,
                 max_tokens=self.max_tokens,
                 max_model_len=self.max_model_len,
+                max_num_seqs=self.max_num_seqs,
                 kv_cache_memory_bytes=self.kv_cache_memory_bytes,
                 num_gpu_blocks_override=self.num_gpu_blocks_override,
             )
@@ -342,15 +379,4 @@ class MultiCardSummarizer:
                 all_results.get(t[0], "") for t in tasks
             ]
 
-        # Build combined summary
-        parts: List[str] = []
-        for i, out in enumerate(outputs):
-            ip = (
-                devices[tasks[i][0]].get("ip", f"device_{i}")
-                if tasks[i][0] < len(devices)
-                else f"device_{i}"
-            )
-            text = strip_reasoning_content(out) if out else ""
-            parts.append(f"- {ip}: {text}" if text else f"- {ip}: (summary unavailable)")
-
-        return "Device state summaries:\n" + "\n".join(parts) if parts else devices_json
+        return _format_hybrid_summary(tasks, outputs) or devices_json

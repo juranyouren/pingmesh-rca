@@ -40,8 +40,11 @@ export PINGMESH_SUMMARY_CACHE_DIR="${PINGMESH_SUMMARY_CACHE_DIR:-${PINGMESH_RESU
 # separate processes; changing ASCEND_RT_VISIBLE_DEVICES inside one process is unsafe.
 export PINGMESH_SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-0}"
 export PINGMESH_SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
-# The summary model has one active request per card.  Cap its KV cache explicitly
-# because some vLLM-Ascend versions otherwise pre-allocate nearly all HBM.
+# Per-device prompts are submitted together and scheduled by vLLM continuous
+# batching on the summary NPU. Lower this if the installed Ascend stack runs OOM.
+export PINGMESH_SUMMARY_MAX_NUM_SEQS="${PINGMESH_SUMMARY_MAX_NUM_SEQS:-8}"
+# Cap the summary KV cache explicitly because some vLLM-Ascend versions
+# otherwise pre-allocate nearly all HBM.
 export PINGMESH_SUMMARY_KV_CACHE_GB="${PINGMESH_SUMMARY_KV_CACHE_GB:-4}"
 # Fallback for older vLLM-Ascend releases that do not accept a byte-level cap.
 export PINGMESH_SUMMARY_NUM_GPU_BLOCKS="${PINGMESH_SUMMARY_NUM_GPU_BLOCKS:-256}"
