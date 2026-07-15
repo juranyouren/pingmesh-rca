@@ -5,10 +5,30 @@
 #   Can a small local model compress node evidence before main LLM arbitration?
 #
 # Optional overrides: PINGMESH_SUMMARY_CACHE_DIR, PINGMESH_SUMMARY_MODEL_PATH.
+#
+# Common commands:
+#   # First run with the hybrid-v3 cache and 8-way vLLM continuous batching:
+#   git pull origin main
+#   source scripts/common.sh
+#   export PINGMESH_SUMMARY_CACHE_DIR="$PINGMESH_RESULTS/node_summary_cache_hybrid_v3"
+#   export PINGMESH_SUMMARY_MAX_NUM_SEQS=8
+#   ./scripts/run_paper_05_precompute_summary_cache.sh
+#
+#   # OOM fallback / higher-throughput tuning:
+#   PINGMESH_SUMMARY_MAX_NUM_SEQS=4 ./scripts/run_paper_05_precompute_summary_cache.sh
+#   PINGMESH_SUMMARY_MAX_NUM_SEQS=16 ./scripts/run_paper_05_precompute_summary_cache.sh
+#
+#   # Force regeneration of cache files that already exist:
+#   PINGMESH_SUMMARY_OVERWRITE=1 ./scripts/run_paper_05_precompute_summary_cache.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 source scripts/common.sh
+
+overwrite_args=()
+if [ "${PINGMESH_SUMMARY_OVERWRITE:-0}" = "1" ] || [ "${PINGMESH_SUMMARY_OVERWRITE:-0}" = "true" ]; then
+    overwrite_args+=(--overwrite)
+fi
 
 echo "============================================"
 echo "  Paper Exp 05a: Precompute Summary Cache"
@@ -29,4 +49,5 @@ python scripts/precompute_node_summaries.py \
     --max-num-seqs "${PINGMESH_SUMMARY_MAX_NUM_SEQS}" \
     --kv-cache-gb "${PINGMESH_SUMMARY_KV_CACHE_GB}" \
     --num-gpu-blocks-override "${PINGMESH_SUMMARY_NUM_GPU_BLOCKS}" \
-    --top-k "${PINGMESH_TOP_K}"
+    --top-k "${PINGMESH_TOP_K}" \
+    "${overwrite_args[@]}"
