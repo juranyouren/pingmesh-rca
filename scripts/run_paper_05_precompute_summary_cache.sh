@@ -25,6 +25,31 @@ cd "$(dirname "$0")/.."
 
 source scripts/common.sh
 
+if [ "$(dirname "${PINGMESH_SUMMARY_CACHE_DIR}")" = "/" ]; then
+    echo "[ERROR] Refusing to write the summary cache directly under /." >&2
+    echo "        PINGMESH_RESULTS was probably unset when the cache path was exported." >&2
+    echo "        Run: source scripts/common.sh" >&2
+    echo '             export PINGMESH_SUMMARY_CACHE_DIR="$PINGMESH_RESULTS/node_summary_cache_hybrid_v3"' >&2
+    exit 2
+fi
+
+if [[ "${PINGMESH_SUMMARY_NPU_CARDS}" == *,* ]]; then
+    echo "[ERROR] Summary precomputation currently uses exactly one NPU." >&2
+    echo "        Run: export PINGMESH_SUMMARY_NPU_CARDS=0" >&2
+    exit 2
+fi
+
+if ! [[ "${PINGMESH_SUMMARY_MAX_NUM_SEQS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] PINGMESH_SUMMARY_MAX_NUM_SEQS must be a positive integer." >&2
+    exit 2
+fi
+
+max_case_candidates=$((2 * PINGMESH_TOP_K))
+if [ "${PINGMESH_SUMMARY_MAX_NUM_SEQS}" -gt "${max_case_candidates}" ]; then
+    echo "[WARNING] concurrency=${PINGMESH_SUMMARY_MAX_NUM_SEQS} exceeds the maximum"
+    echo "          ${max_case_candidates} candidate devices per case; it will not add throughput."
+fi
+
 overwrite_args=()
 if [ "${PINGMESH_SUMMARY_OVERWRITE:-0}" = "1" ] || [ "${PINGMESH_SUMMARY_OVERWRITE:-0}" = "true" ]; then
     overwrite_args+=(--overwrite)
