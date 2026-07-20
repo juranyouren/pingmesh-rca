@@ -161,14 +161,6 @@ def _build_gate_context(gate: dict, skill_ret: str) -> str:
     return json.dumps(context, ensure_ascii=False, indent=2)
 
 
-def _cached_evidence_mode(summary: str) -> str:
-    if summary.startswith("Device evidence records (lossless facts only):"):
-        return "skeleton_v3"
-    if summary.startswith("Device evidence records (lossless facts + semantic annotation):"):
-        return "hybrid_v3"
-    return "cached_summary"
-
-
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
                  confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0,
@@ -443,19 +435,11 @@ class SkilledAnalyzer:
         if self.summary_cache_dir:
             detail_for_llm = self._load_cached_node_summary(dirpath, detail_compact)
             detail_is_summary = detail_for_llm != detail_compact
-            evidence_mode = (
-                _cached_evidence_mode(detail_for_llm)
-                if detail_is_summary
-                else "raw_cache_fallback"
-            )
         elif self.summarize_nodes_enabled:
             detail_for_llm = self._summarize_candidate_detail(detail_compact)
             detail_is_summary = detail_for_llm != detail_compact
-            evidence_mode = "live_summary" if detail_is_summary else "raw_live_fallback"
         else:
             detail_for_llm = detail_compact
-            evidence_mode = "raw"
-        gate["evidence_mode"] = evidence_mode
 
         self._ensure_llm()
         tokenizer = self.llm.get_tokenizer()
