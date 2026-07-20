@@ -7,7 +7,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from Sys.RootCauseAnalyze.SkilledAnalyzer import SkilledAnalyzer
+from Sys.RootCauseAnalyze.SkilledAnalyzer import SkilledAnalyzer, _cached_evidence_mode
 
 
 class FakeExecutor:
@@ -78,6 +78,7 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
             prompt, _skill_ips, gate = analyzer._build_final_prompt("", ["1", "2"], tmp)
 
             self.assertEqual(gate["decision"], "invoke_llm")
+            self.assertEqual(gate["evidence_mode"], "live_summary")
             self.assertIn("SMALL_MODEL_SUMMARY", prompt)
             self.assertNotIn('"devices"', prompt)
             self.assertIn('"devices"', analyzer.seen_candidate_detail)
@@ -103,6 +104,7 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
             prompt, _skill_ips, gate = analyzer._build_final_prompt("", ["1", "2"], tmp_case)
 
             self.assertEqual(gate["decision"], "invoke_llm")
+            self.assertEqual(gate["evidence_mode"], "cached_summary")
             self.assertIn("CACHED_SUMMARY", prompt)
             self.assertFalse(hasattr(analyzer, "seen_candidate_detail"))
 
@@ -110,6 +112,18 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
         from Sys.RootCauseAnalyze.SkilledAnalyzer import _case_cache_key
 
         self.assertNotEqual(_case_cache_key("case-a", 5), _case_cache_key("case-a", 10))
+
+    def test_cache_evidence_modes_are_distinguishable(self):
+        self.assertEqual(
+            _cached_evidence_mode("Device evidence records (lossless facts only):\n{}"),
+            "skeleton_v3",
+        )
+        self.assertEqual(
+            _cached_evidence_mode(
+                "Device evidence records (lossless facts + semantic annotation):\n{}"
+            ),
+            "hybrid_v3",
+        )
 
     def test_cached_summary_is_not_wrapped_as_json_detail(self):
         with tempfile.TemporaryDirectory() as tmp_cache, tempfile.TemporaryDirectory() as tmp_case:
@@ -197,6 +211,8 @@ class SkilledAnalyzerSummaryTest(unittest.TestCase):
         self.assertIn("gate_hybrid_v3_llm", script)
         self.assertIn("--skeleton-only", script)
         self.assertIn('cache_args+=(--summary-cache-dir "")', script)
+        self.assertIn("[evidence-audit]", script)
+        self.assertNotIn('PINGMESH_V3_ABLATION_TEMPERATURE:-0.0', script)
 
     def test_batch_infer_prints_only_first_final_prompt_when_requested(self):
         with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b:
