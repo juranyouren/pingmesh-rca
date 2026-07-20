@@ -19,7 +19,6 @@ from typing import Callable, Dict, List, Sequence
 
 
 SUMMARY_PROMPT_VERSION = "device-evidence-hybrid-v3"
-SKELETON_FORMAT_VERSION = "device-evidence-skeleton-v3"
 
 _REASONING_BLOCK = re.compile(
     r"<(?:think|analysis)\b[^>]*>.*?</(?:think|analysis)\s*>",
@@ -98,8 +97,8 @@ def build_per_device_prompt(device: Dict) -> str:
     return _DEVICE_SUMMARY_PROMPT.format(device_json=device_json)
 
 
-def _lossless_device_record(device: Dict) -> Dict:
-    """Retain the exact compact facts used by all V3 ablation variants."""
+def _hybrid_device_record(device: Dict, semantic_summary: str) -> Dict:
+    """Retain exact facts deterministically and attach model semantics."""
     topology = device.get("topology", {})
     if not isinstance(topology, dict):
         topology = {}
@@ -112,35 +111,8 @@ def _lossless_device_record(device: Dict) -> Dict:
         "high_weight_alarms": device.get("high_weight_alarms", []),
         "upstream": topology.get("upstream", []),
         "downstream": topology.get("downstream", []),
+        "semantic_summary": semantic_summary or "(semantic summary unavailable)",
     }
-
-
-def _hybrid_device_record(device: Dict, semantic_summary: str) -> Dict:
-    """Attach model semantics without allowing it to alter exact facts."""
-    record = _lossless_device_record(device)
-    record["semantic_summary"] = semantic_summary or "(semantic summary unavailable)"
-    return record
-
-
-def build_lossless_skeleton(devices_json: str) -> str:
-    """Build the deterministic V3 skeleton-only ablation input."""
-    try:
-        wrapper = json.loads(devices_json)
-        devices = wrapper.get("devices", []) if isinstance(wrapper, dict) else []
-    except (json.JSONDecodeError, TypeError):
-        return devices_json
-    records = [
-        _lossless_device_record(device)
-        for device in devices
-        if isinstance(device, dict)
-    ] if isinstance(devices, list) else []
-    if not records:
-        return devices_json
-    lines = [
-        json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-        for record in records
-    ]
-    return "Device evidence records (lossless facts only):\n" + "\n".join(lines)
 
 
 def _format_hybrid_summary(

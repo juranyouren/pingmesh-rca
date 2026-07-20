@@ -176,7 +176,6 @@ if has_experiment pipe_llm; then
         -b "${BATCH}" \
         -k "${TOPK}" \
         -o "${RUN_TAG}/pipe_llm" \
-        --summary-cache-dir "" \
         "${DEBUG_ARGS[@]}"
     score_res "${WORKDIR}/pipe_llm/res.json"
 fi
@@ -191,7 +190,6 @@ if has_experiment gate_pipe_llm; then
         -b "${BATCH}" \
         -k "${TOPK}" \
         -o "${RUN_TAG}/gate_pipe_llm" \
-        --summary-cache-dir "" \
         --confidence-gate \
         "${DEBUG_ARGS[@]}"
     score_res "${WORKDIR}/gate_pipe_llm/res.json"

@@ -12,7 +12,6 @@ duplicating algorithm logic and keep each experiment tied to one research questi
 | `run_paper_04_gate_policy_analysis.sh` | Gate policy comparison and route selection analysis. |
 | `run_paper_05_precompute_summary_cache.sh` | Precompute small-model candidate summaries. |
 | `run_paper_06_cached_summary_llm.sh` | Cached-summary LLM arbitration experiment. |
-| `run_paper_07_v3_summary_ablation.sh` | Raw vs lossless-skeleton vs hybrid-V3 gated LLM ablation. |
 | `stat_focus_device_evidence.py` | Quantify anonymized alarm/log volume on the Top-K highest-volume devices. |
 
 Typical order:
@@ -31,9 +30,6 @@ source scripts/common.sh
 export PINGMESH_SUMMARY_CACHE_DIR="$PINGMESH_RESULTS/summary_cache"
 ./scripts/run_paper_05_precompute_summary_cache.sh
 ./scripts/run_paper_06_cached_summary_llm.sh
-
-# V3 contribution ablation (requires the hybrid cache from paper_05):
-./scripts/run_paper_07_v3_summary_ablation.sh
 ```
 
 Focused-device evidence-volume report:
