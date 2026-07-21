@@ -32,6 +32,33 @@ python Sys_v1/RootCauseAnalyze/SkilledAnalyzer.py \
 
 其余消融只需替换 `--ablation`。`m1` 不会初始化小模型或大模型。M1+M3 即使传入 `--summarize-nodes` 也不会执行 M2。
 
+### 一键运行消融实验
+
+默认依次运行四种消融并在每组结束后执行 `Score_N`：
+
+```bash
+bash Sys_v1/run_ablation_experiments.sh
+```
+
+也可以只运行指定模式：
+
+```bash
+bash Sys_v1/run_ablation_experiments.sh m1 m123
+```
+
+常用参数通过环境变量覆盖：
+
+```bash
+RUN_TAG=paper_v1 \
+SYS_V1_MAIN_NPU_CARDS=4,5 \
+SYS_V1_SUMMARY_NPU_CARD=0 \
+SYS_V1_TOP_K=10 \
+SYS_V1_BATCH_SIZE=4 \
+bash Sys_v1/run_ablation_experiments.sh
+```
+
+默认输出到 `$PINGMESH_RESULTS/${RUN_TAG}_<mode>/`。设置 `SYS_V1_SKIP_SCORE=1` 可只运行推理、不自动评测。
+
 ## 邻接告警上下文控制
 
 ```bash
