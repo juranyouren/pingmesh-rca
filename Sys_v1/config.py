@@ -1,80 +1,119 @@
-from __future__ import annotations
+"""
+Central configuration for pingmesh RCA system.
+ALL values read from environment variables (set by scripts/common.sh).
+Edit common.sh to change defaults; export to override per-session.
 
-from dataclasses import dataclass
+Usage:
+    from Sys_v1.config import config
+    model = LLM(model=config.model.model_path, ...)
+    data_root = config.data.nodes_labeled
+"""
 
+import os
 
-@dataclass(frozen=True)
-class AblationSpec:
-    """Executable definition of one simple ablation.
+# ══════════════════════════════════════════════════════════════════
+# Base paths (all from env)
+# ══════════════════════════════════════════════════════════════════
 
-    ``candidate_scope`` determines which devices enter the decision stage:
-
-    - ``topology_top_k``: M1 focuses the device set.
-    - ``all_devices``: M1 is absent; M2 processes every device.
-    """
-
-    name: str
-    description: str
-    enable_m1: bool
-    enable_m2: bool
-    enable_m3: bool
-    use_topology_score: bool
-    use_temporal_score: bool
-    candidate_scope: str
-    enable_gate: bool
+_ROOT = os.environ.get("PINGMESH_PROJECT_ROOT", "/home/sbp/lixinyang/pingmesh")
 
 
-ABLATION_SPECS = {
-    "m1": AblationSpec(
-        name="m1",
-        description="M1 topology ranking is used directly as the final ranking.",
-        enable_m1=True,
-        enable_m2=False,
-        enable_m3=False,
-        use_topology_score=True,
-        use_temporal_score=False,
-        candidate_scope="topology_top_k",
-        enable_gate=False,
-    ),
-    "m1_m3": AblationSpec(
-        name="m1_m3",
-        description="M1 topology ranking followed by M3 confidence routing and optional LLM review.",
-        enable_m1=True,
-        enable_m2=False,
-        enable_m3=True,
-        use_topology_score=True,
-        use_temporal_score=False,
-        candidate_scope="topology_top_k",
-        enable_gate=True,
-    ),
-    "m2_m3": AblationSpec(
-        name="m2_m3",
-        description="M2 scans all devices without topology ranking; M3 uses temporal scoring and optional LLM review.",
-        enable_m1=False,
-        enable_m2=True,
-        enable_m3=True,
-        use_topology_score=False,
-        use_temporal_score=True,
-        candidate_scope="all_devices",
-        enable_gate=True,
-    ),
-    "m123": AblationSpec(
-        name="m123",
-        description="Full M1 + M2 + M3 system with equal-weight topology/temporal fusion.",
-        enable_m1=True,
-        enable_m2=True,
-        enable_m3=True,
-        use_topology_score=True,
-        use_temporal_score=True,
-        candidate_scope="topology_top_k",
-        enable_gate=True,
-    ),
-}
+class DataPaths:
+    def __init__(self, root=_ROOT):
+        self.pingmesh_raw = os.path.join(root, "data", "raw", "pingmesh_v1")
+        self.nodes_labeled = os.environ.get("PINGMESH_DATA", os.path.join(root, "data", "node", "nodes_max_labeled"))
+        self.results       = os.environ.get("PINGMESH_RESULTS", os.path.join(root, "data", "res"))
+        self.alarm_weights = os.environ.get("PINGMESH_WEIGHTS_MANUAL", os.path.join(root, "data", "weights", "classified_alarms", "all_alarms.json"))
 
 
-def get_ablation_spec(name: str) -> AblationSpec:
-    try:
-        return ABLATION_SPECS[name]
-    except KeyError as exc:
-        choices = ", ".join(ABLATION_SPECS)
-        raise ValueError(f"Unknown ablation {name!r}; choose one of: {choices}") from exc
+class SkillPaths:
+    def __init__(self, root=_ROOT):
+        self.skills_folder = os.path.join(root, "Sys_v1", "RootCauseAnalyze", "skills")
+        self.skills_json   = os.path.join(root, "Sys_v1", "RootCauseAnalyze", "skills", "builtin_skills.json")
+        self.checklist     = os.path.join(root, "Sys_v1", "RootCauseAnalyze", "gate", "check_list.json")
+
+
+# ══════════════════════════════════════════════════════════════════
+# Model (all from env)
+# ══════════════════════════════════════════════════════════════════
+
+class ModelConfig:
+    def __init__(self):
+        self.model_path   = os.environ.get("PINGMESH_MODEL_PATH", "/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B")
+        self.npu_cards    = os.environ.get("PINGMESH_NPU_CARDS", "0,1,2,3,4,5,6,7")
+        self.npu_groups   = [[0, 1], [2, 3], [4, 5], [6, 7]]
+        self.gpu_memory_utilization = 0.85
+        self.max_model_len   = int(os.environ.get("PINGMESH_MAX_MODEL_LEN", "16384"))
+        self.trust_remote_code = True
+        self.temperature      = float(os.environ.get("PINGMESH_TEMPERATURE", "0.6"))
+        self.max_tokens       = int(os.environ.get("PINGMESH_MAX_TOKENS", "4096"))
+        self.repetition_penalty = 1.05
+        self.top_p            = 0.95
+        self.batch_size       = int(os.environ.get("PINGMESH_BATCH_SIZE", "8"))
+        self.safe_truncate_tokens = 2000
+
+
+# ══════════════════════════════════════════════════════════════════
+# Algorithm parameters
+# ══════════════════════════════════════════════════════════════════
+
+class PageRankConfig:
+    def __init__(self):
+        self.alpha = 0.85
+        self.default_personalization = 0.1
+        self.fallback_weights = {"stachg_todwn": 100, "trunkdown": 100, "vlan接口down(dcn)": 100}
+        self.endpoint_bonus = 0.5
+        self.cross_multiplier = 0.5
+        self.log_only_score = 0.5
+        self.alarm_no_weight_score = 2.0
+        self.directed = True
+
+
+class TemporalConfig:
+    def __init__(self):
+        self.window_ms = 300000
+        self.density_cap = 20.0
+        self.weight_burst = 0.40
+        self.weight_early = 0.35
+        self.weight_density = 0.25
+        self.top_k = int(os.environ.get("PINGMESH_TOP_K", "10"))
+
+
+class SkillConfig:
+    def __init__(self):
+        env_skills = os.environ.get("PINGMESH_SKILLS", "")
+        self.skill_ids = [int(x) for x in env_skills.split()] if env_skills else [1, 2]
+        self.short_mode = 0
+
+
+class EvidenceConfig:
+    def __init__(self):
+        self.neighbor_alarm_mode = os.environ.get(
+            "PINGMESH_NEIGHBOR_ALARM_MODE", "highest_weight"
+        )
+        self.max_neighbor_devices = int(
+            os.environ.get("PINGMESH_MAX_NEIGHBOR_DEVICES", "8")
+        )
+        self.max_neighbor_alarms = int(
+            os.environ.get("PINGMESH_MAX_NEIGHBOR_ALARMS", "3")
+        )
+        self.summary_context_max_chars = int(
+            os.environ.get("PINGMESH_SUMMARY_CONTEXT_MAX_CHARS", "3500")
+        )
+
+
+# ══════════════════════════════════════════════════════════════════
+# Unified config object
+# ══════════════════════════════════════════════════════════════════
+
+class Config:
+    def __init__(self):
+        self.data = DataPaths()
+        self.skills = SkillPaths()
+        self.model = ModelConfig()
+        self.pagerank = PageRankConfig()
+        self.temporal = TemporalConfig()
+        self.skill = SkillConfig()
+        self.evidence = EvidenceConfig()
+
+config = Config()
