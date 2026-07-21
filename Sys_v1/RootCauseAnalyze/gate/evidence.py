@@ -32,9 +32,9 @@ INFO_KEYS = [
 ]
 
 TOPO_DESC = (
-    "Directed PageRank on the physical topology graph. Personalization uses only "
-    "topology-derived path-crossing and source/sink proximity features; alarms and logs "
-    "do not affect this score. Higher means a stronger topology-focused candidate."
+    "Personalized PageRank on the directed physical topology graph. The initial "
+    "personalization value uses alarm rule weight, path-crossing enhancement, and "
+    "source/sink proximity; PageRank then propagates suspicion through topology."
 )
 
 TEMPORAL_DESC = (

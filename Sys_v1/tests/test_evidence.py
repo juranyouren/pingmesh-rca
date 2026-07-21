@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from Sys_v1.RootCauseAnalyze.gate import evidence
 from Sys_v1.RootCauseAnalyze.gate.evidence import (
     build_fused_evidence,
@@ -93,18 +91,25 @@ def test_m2_m3_collects_evidence_for_all_devices_even_when_top_k_is_one():
     assert "adjacent_alarm_context" in devices[0]
 
 
-def test_m1_does_not_collect_alarm_evidence_or_load_alarm_weights(monkeypatch):
+def test_m1_uses_alarm_weight_seed_without_collecting_m2_evidence(monkeypatch):
     nodes = [
         _node("A", alarms=[{"alarm_name": "critical"}], downstream=["B"], cross=2),
         _node("B", alarms=[{"alarm_name": "peer"}], upstream=["A"]),
     ]
+    monkeypatch.setattr(
+        topo_ranker,
+        "load_alarm_weights",
+        lambda *_args, **_kwargs: {"critical": 100, "peer": 1},
+    )
+    # M1 loads weights inside the topology ranker, but must not invoke M2's
+    # evidence-table weight loading or expose alarm records to M3.
     monkeypatch.setattr(
         evidence,
         "load_alarm_weights",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("M2 leaked into M1")),
     )
 
-    _skill_ret, _info, detail, raw, _ranked = build_fused_evidence(
+    skill_ret, _info, detail, raw, ranked = build_fused_evidence(
         nodes,
         {},
         "",
@@ -114,7 +119,11 @@ def test_m1_does_not_collect_alarm_evidence_or_load_alarm_weights(monkeypatch):
         enable_m2=False,
     )
     devices = json.loads(detail)["devices"]
+    topo_rows = json.loads(skill_ret)["topo"]["rankings"]
 
+    assert ranked[0] == "A"
+    assert topo_rows[0]["max_alarm_weight"] == 100
+    assert topo_rows[0]["seed_type"] == "alarm_weight"
     assert raw == "{}"
     assert all("alarms" not in device for device in devices)
     assert all("adjacent_alarm_context" not in device for device in devices)
@@ -167,14 +176,19 @@ def test_full_pipeline_fuses_topology_and_temporal_with_strict_mean(monkeypatch)
     assert [row["combined_score"] for row in details["combined"]["topk"]] == [0.6, 0.6]
 
 
-def test_topology_score_is_independent_of_alarm_content():
+def test_topology_score_changes_when_alarm_weight_seed_changes(monkeypatch):
     base = [
         _node("A", downstream=["B"], cross=2),
         _node("B", upstream=["A"], downstream=["C"]),
         _node("C", upstream=["B"]),
     ]
     changed = [dict(node) for node in base]
-    changed[2] = dict(changed[2], alarms=[{"alarm_name": "critical"}] * 50)
+    changed[2] = dict(changed[2], alarms=[{"alarm_name": "critical"}])
+    monkeypatch.setattr(
+        topo_ranker,
+        "load_alarm_weights",
+        lambda *_args, **_kwargs: {"critical": 100},
+    )
 
     if topo_ranker.nx is None:
         detail_a = topo_ranker.topo_details(
@@ -189,4 +203,4 @@ def test_topology_score_is_independent_of_alarm_content():
         score_a = topo_ranker.score_topo(base, {})
         score_b = topo_ranker.score_topo(changed, {})
 
-    assert score_a == pytest.approx(score_b)
+    assert score_a != score_b

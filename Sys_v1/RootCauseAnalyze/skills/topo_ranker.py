@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, List, Tuple
 
 from Sys_v1.RootCauseAnalyze.trust_trees.topo_tree import assess_topo_tree
+from Sys_v1.utils.alarm_utils import load_alarm_weights, node_alarm_weight, node_events, event_name
 from Sys_v1.utils.case_utils import get_device_ip
 from Sys_v1.utils.ranking_utils import sorted_score_items
 
@@ -24,7 +25,7 @@ SKILL_META = {
     "skill_id": "1",
     "skill_name": "topology_pagerank_rank",
     "python_executor": "score_topo",
-    "target_error": "Topology-only PageRank ranking using graph structure, path crossing, and endpoint proximity.",
+    "target_error": "Topology/PageRank ranking with alarm weights, cross count, and endpoint proximity.",
 }
 
 
@@ -45,37 +46,24 @@ def parse_endpoint_ips(info: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     )
 
 
-def source_sink_related(
-    ip: str,
-    node: Dict[str, Any],
-    source_ips: List[str],
-    sink_ips: List[str],
-) -> bool:
+def source_sink_related(ip: str, node: Dict[str, Any], source_ips: List[str], sink_ips: List[str]) -> bool:
     endpoints = set(source_ips + sink_ips)
     if ip in endpoints:
         return True
-    neighbors = set((node.get("linked_to", []) or []) + (node.get("linked_from", []) or []))
+    neighbors = set(node.get("linked_to", []) + node.get("linked_from", []))
     return bool(neighbors & endpoints)
 
 
-def _cross_count(node: Dict[str, Any]) -> float:
-    try:
-        return max(0.0, float(node.get("cross", 0) or 0))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _topology_seed(node: Dict[str, Any], related: bool) -> Tuple[float, str]:
-    """Build an M1 seed without consulting alarms, logs, or their weights."""
-    cross = _cross_count(node)
-    score = 0.1 + cross + (0.5 if related else 0.0)
-    if cross > 0:
-        seed_type = "path_crossing"
-    elif related:
-        seed_type = "endpoint_proximity"
-    else:
-        seed_type = "baseline"
-    return score, seed_type
+def seed_type(node: Dict[str, Any], max_weight: int, related: bool) -> str:
+    if max_weight > 0:
+        return "alarm_weight"
+    if node.get("alarms"):
+        return "alarm_count"
+    if node.get("logs"):
+        return "log"
+    if related:
+        return "endpoint"
+    return "baseline"
 
 
 def score_topo(
@@ -85,15 +73,10 @@ def score_topo(
     weight_path: str | None = None,
     directed: bool = True,
 ) -> Dict[str, float]:
-    """Score devices from topology information only.
-
-    ``weight_path`` remains in the signature for compatibility with ``Sys``;
-    it is intentionally ignored so M1 cannot leak M2 alarm evidence.
-    """
-    del weight_path
     if nx is None:
         return {}
 
+    weights = load_alarm_weights(weight_path)
     source_ips, sink_ips = parse_endpoint_ips(info)
     ip_set = set()
     node_by_ip: Dict[str, Dict[str, Any]] = {}
@@ -105,43 +88,57 @@ def score_topo(
             continue
         ip_set.add(ip)
         node_by_ip[ip] = node
-        related = source_sink_related(ip, node, source_ips, sink_ips)
-        personalization[ip] = _topology_seed(node, related)[0]
+        try:
+            cross_count = int(node.get("cross", 0))
+        except Exception:
+            cross_count = 0
+
+        max_weight = 0
+        for evt in node_events(node):
+            name = event_name(evt)
+            weight = weights.get(str(name).lower(), 0) if name else 0
+            max_weight = max(max_weight, weight)
+
+        entity_score = 0.0
+        if max_weight > 0:
+            entity_score += float(max_weight)
+        elif node.get("alarms"):
+            entity_score += len(node["alarms"]) * 2.0
+        elif node.get("logs"):
+            entity_score += 0.5
+        if entity_score > 0 and cross_count > 0:
+            entity_score += entity_score * cross_count * 0.5
+
+        personalization[ip] = 0.1 + entity_score + (0.5 if ip in source_ips or ip in sink_ips else 0.0)
 
     if not ip_set:
         return {}
 
     graph = nx.DiGraph() if directed else nx.Graph()
-    graph.add_nodes_from(ip_set)
     for ip, node in node_by_ip.items():
+        graph.add_node(ip)
         if directed:
-            for upstream in node.get("linked_from", []) or []:
+            for upstream in node.get("linked_from", []):
                 if upstream in ip_set:
                     graph.add_edge(ip, upstream)
-            for downstream in node.get("linked_to", []) or []:
+            for downstream in node.get("linked_to", []):
                 if downstream in ip_set:
                     graph.add_edge(downstream, ip)
         else:
-            for neighbor in (node.get("linked_to", []) or []) + (node.get("linked_from", []) or []):
-                if neighbor in ip_set:
-                    graph.add_edge(ip, neighbor)
+            for neighbor in node.get("linked_to", []) + node.get("linked_from", []):
+                graph.add_edge(ip, neighbor)
+
+    for node_id in graph.nodes:
+        personalization.setdefault(node_id, 0.1)
 
     try:
-        raw_scores = nx.pagerank(
-            graph,
-            alpha=_DEFAULT_PAGERANK_ALPHA,
-            personalization=personalization,
-        )
+        raw_scores = nx.pagerank(graph, alpha=_DEFAULT_PAGERANK_ALPHA, personalization=personalization)
     except Exception:
         return {}
     if not raw_scores:
         return {}
     max_score = max(raw_scores.values())
-    return (
-        {ip: score / max_score for ip, score in raw_scores.items()}
-        if max_score > 0
-        else {}
-    )
+    return {ip: score / max_score for ip, score in raw_scores.items()} if max_score > 0 else {}
 
 
 def topo_details(
@@ -153,52 +150,48 @@ def topo_details(
     directed: bool,
     top_k: int,
 ) -> Dict[str, Any]:
-    del weight_path
+    weights = load_alarm_weights(weight_path)
     source_ips, sink_ips = parse_endpoint_ips(info)
-    node_by_ip = {
-        get_device_ip(node): node
-        for node in node_list
-        if get_device_ip(node) != "unknown"
-    }
+    node_by_ip = {get_device_ip(node): node for node in node_list if get_device_ip(node) != "unknown"}
 
     fallback_scores = {}
     for ip, node in node_by_ip.items():
+        max_weight, _hit_names = node_alarm_weight(node, weights)
         related = source_sink_related(ip, node, source_ips, sink_ips)
-        fallback_scores[ip] = _topology_seed(node, related)[0]
-    fallback_max = max(fallback_scores.values(), default=0.0)
-    if fallback_max > 0:
-        fallback_scores = {
-            ip: score / fallback_max for ip, score in fallback_scores.items()
-        }
+        try:
+            cross = float(node.get("cross", 0) or 0)
+        except (TypeError, ValueError):
+            cross = 0.0
+        fallback_scores[ip] = (
+            max_weight
+            + cross
+            + len(node.get("alarms", [])) * 2.0
+            + len(node.get("logs", [])) * 0.5
+            + (0.5 if related else 0.0)
+        )
 
     ranking_scores = scores or fallback_scores
-    directed_scores = (
-        scores
-        if directed
-        else score_topo(node_list, info, directed=True)
-    )
-    undirected_scores = score_topo(node_list, info, directed=False) if scores else {}
+    directed_scores = scores if directed else score_topo(node_list, info, weight_path=weight_path, directed=True)
+    undirected_scores = score_topo(node_list, info, weight_path=weight_path, directed=False) if scores else {}
     directed_top3 = [ip for ip, _ in sorted_score_items(directed_scores or {}, 3)]
     undirected_top3 = [ip for ip, _ in sorted_score_items(undirected_scores or {}, 3)]
 
     rankings = []
-    for rank, (ip, score) in enumerate(sorted_score_items(ranking_scores, top_k), 1):
+    for rank, (ip, score) in enumerate(sorted_score_items(ranking_scores or {}, top_k), 1):
         node = node_by_ip.get(ip, {})
+        max_weight, hit_names = node_alarm_weight(node, weights)
         related = source_sink_related(ip, node, source_ips, sink_ips)
-        _seed_score, seed_type = _topology_seed(node, related)
         rankings.append(
             {
                 "rank": rank,
                 "ip": ip,
                 "pr_score": round(score, 6),
                 "cross": node.get("cross", 0),
+                "max_alarm_weight": max_weight,
+                "high_weight_alarm_hit": max_weight > 0,
+                "high_weight_alarms": hit_names[:10],
                 "source_sink_related": related,
-                "seed_type": seed_type,
-                # Retained as explicit neutral values for trust-tree schema
-                # compatibility; alarms never participate in the M1 score.
-                "max_alarm_weight": 0,
-                "high_weight_alarm_hit": False,
-                "high_weight_alarms": [],
+                "seed_type": seed_type(node, max_weight, related),
             }
         )
 
@@ -211,7 +204,6 @@ def topo_details(
             "pagerank_available": bool(scores),
             "directed_top3": directed_top3,
             "undirected_top3": undirected_top3,
-            "alarm_evidence_used": False,
         },
     }
     block["trust_tree"] = assess_topo_tree(block)
