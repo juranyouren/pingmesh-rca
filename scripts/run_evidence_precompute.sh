@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# 用法（在项目根目录执行）：
+#
+#   source scripts/common.sh
+#   export PINGMESH_DATA=/path/to/nodes_labeled
+#   export PINGMESH_SUMMARY_MODEL_PATH=/path/to/local-small-model
+#   export PINGMESH_SUMMARY_NPU_CARDS=0,1,2,3  # 每张卡启动一个相同模型副本
+#   export PINGMESH_SUMMARY_BATCH_SIZE=8
+#   bash scripts/run_evidence_precompute.sh
+#
+# 默认输出：data/evidence_Table
+# 强制重建：PINGMESH_EVIDENCE_OVERWRITE=1 bash scripts/run_evidence_precompute.sh
+# 小规模试跑：bash scripts/run_evidence_precompute.sh --limit-cases 2
+# 自定义输出：export PINGMESH_EVIDENCE_TABLE_DIR=/path/to/evidence_Table
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
