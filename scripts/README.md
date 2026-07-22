@@ -4,6 +4,26 @@ Use `scripts/common.sh` as the single source of server paths and model defaults.
 The `run_paper_*.sh` scripts are thin wrappers for thesis experiments; they avoid
 duplicating algorithm logic and keep each experiment tied to one research question.
 
+## Current M1/M13/M23/M123 workflow
+
+Precompute all-device neighbour-aware summaries and evidence tables once:
+
+```bash
+export PINGMESH_SUMMARY_NPU_CARDS=0,1,2,3
+bash scripts/run_evidence_precompute.sh
+```
+
+Then run the isolated ablations. Each semicolon-separated NPU group loads one
+replica of the same large model:
+
+```bash
+export PINGMESH_LLM_NPU_GROUPS='0,1;2,3'
+bash scripts/run_ablation_study.sh
+```
+
+Use `bash scripts/run_ablation_study.sh --plan-only` to generate Gate decisions,
+the rerun-case list, and exact large-model prompts without starting vLLM.
+
 | Script | Purpose |
 | --- | --- |
 | `run_paper_01_skill_ablation.sh` | Topology, temporal, and fused deterministic ablation. |
