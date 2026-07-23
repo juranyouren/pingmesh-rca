@@ -35,6 +35,7 @@ from Sys.utils.case_utils import find_full_link_file, get_device_ip, load_case_i
 
 
 EVIDENCE_TABLE_SCHEMA_VERSION = "evidence-table-v1"
+SUMMARY_PARSER_VERSION = "json-first-after-think-v2"
 _REASONING_BLOCK = re.compile(
     r"<(?:think|analysis)\b[^>]*>.*?</(?:think|analysis)\s*>",
     re.IGNORECASE | re.DOTALL,
@@ -307,11 +308,42 @@ def strip_reasoning(text: str) -> str:
     return _UNCLOSED_REASONING_BLOCK.sub("", cleaned).strip()
 
 
+def _balanced_json_objects(text: str) -> List[str]:
+    """Extract balanced ``{...}`` candidates while respecting JSON strings."""
+    candidates: List[str] = []
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text or ""):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidates.append(text[start : index + 1])
+                start = None
+    return candidates
+
+
 def parse_summary(raw_response: str) -> tuple[str, str]:
-    cleaned = strip_reasoning(raw_response)
-    candidates = re.findall(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL | re.IGNORECASE)
-    candidates.append(cleaned)
-    for candidate in reversed(candidates):
+    raw = raw_response or ""
+
+    # First priority: find a valid JSON object anywhere in the complete model
+    # response. The final valid object wins when the model emits more than one.
+    for candidate in reversed(_balanced_json_objects(raw)):
         try:
             data = json.loads(candidate)
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -319,7 +351,16 @@ def parse_summary(raw_response: str) -> tuple[str, str]:
         summary = data.get("summary") if isinstance(data, dict) else None
         if isinstance(summary, str) and summary.strip():
             return summary.strip(), "json"
-    return cleaned, "raw_fallback"
+
+    # Second priority: reasoning models may produce a plain-text final answer
+    # after </think>. When JSON parsing failed, that suffix is the summary.
+    closing_tags = list(_CLOSING_REASONING_TAG.finditer(raw))
+    if closing_tags:
+        after_think = raw[closing_tags[-1].end() :].strip()
+        if after_think:
+            return after_think, "after_think"
+
+    return strip_reasoning(raw), "raw_fallback"
 
 
 def _vllm_cache_kwargs(kv_cache_gb: float, num_gpu_blocks_override: int) -> Dict[str, Any]:
@@ -393,6 +434,7 @@ def _summary_worker(worker: Dict[str, Any]) -> Dict[str, Any]:
                     "raw_response": raw,
                     "summary": summary,
                     "parse_mode": parse_mode,
+                    "parser_version": SUMMARY_PARSER_VERSION,
                     "amortized_inference_seconds": amortized,
                 }
             )
@@ -449,6 +491,9 @@ def _build_evidence_row(
             "prompt_version": SUMMARY_PROMPT_VERSION,
             "prompt_tokens": result.get("prompt_tokens"),
             "parse_mode": result.get("parse_mode"),
+            "parser_version": result.get(
+                "parser_version", SUMMARY_PARSER_VERSION
+            ),
             **(result.get("context_policy") or {}),
         },
         "provenance": {
@@ -616,6 +661,7 @@ def main() -> None:
             {
                 "schema_version": EVIDENCE_TABLE_SCHEMA_VERSION,
                 "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+                "summary_parser_version": SUMMARY_PARSER_VERSION,
                 "case_id": cid,
                 "source_dir": dirpath,
                 "device_count": len(rows),
@@ -654,6 +700,7 @@ def main() -> None:
             "model_path": args.model_path,
             "npu_cards": cards,
             "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+            "summary_parser_version": SUMMARY_PARSER_VERSION,
             "case_count": len(case_records),
             "device_count": device_count,
             "cases": case_records,

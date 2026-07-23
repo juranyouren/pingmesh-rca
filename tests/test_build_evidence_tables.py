@@ -108,3 +108,28 @@ def test_parse_summary_uses_content_after_last_closing_think_tag():
         "目标设备与上游邻居同时出现链路告警",
         "json",
     )
+
+
+def test_parse_summary_prefers_valid_json_before_after_think_fallback():
+    raw = (
+        '{"summary":"JSON 摘要优先"}\n'
+        "额外思考内容</think>\n"
+        "标签后的普通文本"
+    )
+
+    assert parse_summary(raw) == ("JSON 摘要优先", "json")
+
+
+def test_parse_summary_falls_back_to_plain_text_after_think():
+    raw = "模型思考过程，其中包含 {无效 JSON}。</think>\n最终的关联摘要"
+
+    assert parse_summary(raw) == ("最终的关联摘要", "after_think")
+
+
+def test_parse_summary_treats_malformed_json_after_think_as_plain_summary():
+    raw = '推理内容</think>\n{"summary":"缺少结束引号}'
+
+    assert parse_summary(raw) == (
+        '{"summary":"缺少结束引号}',
+        "after_think",
+    )
