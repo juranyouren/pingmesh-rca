@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the M1/M13/M23/M123 ablation study from precomputed evidence.
+"""Run selective and forced-all-LLM ablations from precomputed evidence.
 
 Inference never reads labels.  ``Sys.Score.Score_N`` is invoked only after all
 predictions have been materialized in ``res.json``.
@@ -8,6 +8,7 @@ predictions have been materialized in ``res.json``.
 from __future__ import annotations
 
 import argparse
+import csv
 import gc
 import json
 import os
@@ -25,7 +26,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from prompts.ablation_rca import ABLATION_RCA_PROMPT, ABLATION_RCA_PROMPT_VERSION
+from prompts.ablation_rca import (
+    ABLATION_RCA_PROMPT,
+    ABLATION_RCA_PROMPT_VERSION,
+    ALL_LLM_EVIDENCE_PROMPT,
+    ALL_LLM_EVIDENCE_PROMPT_VERSION,
+    ALL_LLM_RERANK_PROMPT,
+    ALL_LLM_RERANK_PROMPT_VERSION,
+)
 from Sys.RootCauseAnalyze.skills.topo_ranker import score_topo, topo_details
 from Sys.RootCauseAnalyze.trust_trees.router import route_with_trust_trees
 from Sys.RootCauseAnalyze.trust_trees.temporal_tree import assess_temporal_tree
@@ -35,7 +43,8 @@ from Sys.utils.ranking_utils import sorted_score_items
 from scripts.build_evidence_tables import case_key, discover_cases
 
 
-MODES = ("m1", "m13", "m23", "m123")
+ALL_LLM_MODES = ("m123_all_llm_rerank", "m123_all_llm_evidence")
+MODES = ("m1", "m13", "m23", "m123", *ALL_LLM_MODES)
 _JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
 FAULT_INFO_KEYS = (
     "alarm_name",
@@ -51,6 +60,35 @@ FAULT_INFO_KEYS = (
     "task_num",
     "alarm_description",
 )
+
+
+def _pipeline_mode(mode: str) -> str:
+    """Return the algorithmic pipeline shared by a public experiment mode."""
+    return "m123" if mode in ALL_LLM_MODES else mode
+
+
+def _prompt_variant(mode: str) -> str:
+    if mode == "m123_all_llm_rerank":
+        return "rerank"
+    if mode == "m123_all_llm_evidence":
+        return "evidence_judge"
+    return "selective"
+
+
+def _prompt_version(mode: str) -> str:
+    if mode == "m123_all_llm_rerank":
+        return ALL_LLM_RERANK_PROMPT_VERSION
+    if mode == "m123_all_llm_evidence":
+        return ALL_LLM_EVIDENCE_PROMPT_VERSION
+    return ABLATION_RCA_PROMPT_VERSION
+
+
+def _prompt_template(mode: str) -> str:
+    if mode == "m123_all_llm_rerank":
+        return ALL_LLM_RERANK_PROMPT
+    if mode == "m123_all_llm_evidence":
+        return ALL_LLM_EVIDENCE_PROMPT
+    return ABLATION_RCA_PROMPT
 
 
 def _save_json(data: Any, path: Path) -> None:
@@ -284,6 +322,7 @@ def assess_ablation_gate(
 
 
 def _project_evidence_row(row: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    mode = _pipeline_mode(mode)
     projected = {
         "candidate_ip": row.get("candidate_ip"),
         "role": row.get("role", "UNKNOWN"),
@@ -328,6 +367,7 @@ def constrain_llm_response(
     allowed = list(dict.fromkeys(allowed_candidates))
     allowed_set = set(allowed)
     parsed: Dict[str, Any] = {}
+    parse_success = False
     blocks = _JSON_BLOCK.findall(raw_response or "")
     candidates = [*reversed(blocks), raw_response or ""]
     for candidate in candidates:
@@ -337,6 +377,7 @@ def constrain_llm_response(
             continue
         if isinstance(value, dict):
             parsed = value
+            parse_success = True
             break
     raw_ips = parsed.get("ip", []) if parsed else []
     if isinstance(raw_ips, str):
@@ -363,6 +404,8 @@ def constrain_llm_response(
         "ip": valid_ips[:5],
     }
     audit = {
+        "parse_success": parse_success,
+        "parsed_payload": parsed,
         "raw_ips": raw_ips,
         "rejected_ips": rejected_ips,
         "used_initial_ranking_fallback": used_fallback,
@@ -381,6 +424,7 @@ def _ranking_evidence(
     temporal_detail: Dict[str, Any] | None,
     top_k: int,
 ) -> Dict[str, Any]:
+    mode = _pipeline_mode(mode)
     result: Dict[str, Any] = {
         "initial_ranking": list(initial_rows[:top_k]),
         "allowed_candidate_ips": _ips(initial_rows, top_k),
@@ -406,6 +450,44 @@ def _build_llm_prompt(
     ranking_evidence: Dict[str, Any],
     evidence_rows: Sequence[Dict[str, Any]],
 ) -> str:
+    if mode == "m123_all_llm_evidence":
+        pagerank_rows = (
+            (ranking_evidence.get("pagerank") or {}).get("rankings", [])
+        )
+        pagerank_by_ip = {
+            row.get("ip"): {
+                key: value
+                for key, value in row.items()
+                if key not in {"rank", "combined_score", "evidence_score"}
+            }
+            for row in pagerank_rows
+            if isinstance(row, dict) and row.get("ip")
+        }
+        allowed = sorted(ranking_evidence.get("allowed_candidate_ips", []))
+        pagerank_evidence = {
+            "allowed_candidate_ips": allowed,
+            "pagerank_features": [
+                {"ip": ip, **pagerank_by_ip.get(ip, {})}
+                for ip in allowed
+            ],
+        }
+        rows_by_ip = {
+            row.get("candidate_ip"): row
+            for row in evidence_rows
+            if isinstance(row, dict) and row.get("candidate_ip")
+        }
+        ordered_rows = [
+            rows_by_ip.get(ip, {"candidate_ip": ip})
+            for ip in allowed
+        ]
+        return ALL_LLM_EVIDENCE_PROMPT.format(
+            FAULT_INFO=json.dumps(_fault_info_view(info), ensure_ascii=False, indent=2),
+            PAGERANK_EVIDENCE=json.dumps(
+                pagerank_evidence, ensure_ascii=False, indent=2
+            ),
+            EVIDENCE_ROWS=json.dumps(ordered_rows, ensure_ascii=False, indent=2),
+        )
+
     gate_context = {
         "confidence": gate.get("confidence"),
         "reason": gate.get("reason"),
@@ -416,7 +498,12 @@ def _build_llm_prompt(
         },
         "allowed_candidate_ips": ranking_evidence.get("allowed_candidate_ips", []),
     }
-    return ABLATION_RCA_PROMPT.format(
+    template = (
+        ALL_LLM_RERANK_PROMPT
+        if mode == "m123_all_llm_rerank"
+        else ABLATION_RCA_PROMPT
+    )
+    return template.format(
         MODE=mode.upper(),
         GATE_CONTEXT=json.dumps(gate_context, ensure_ascii=False, indent=2),
         FAULT_INFO=json.dumps(_fault_info_view(info), ensure_ascii=False, indent=2),
@@ -436,6 +523,7 @@ def build_case_plan(
     weight_file: str | None,
 ) -> Dict[str, Any]:
     started = time.perf_counter()
+    pipeline_mode = _pipeline_mode(mode)
     nodes = load_case_nodes(dirpath)
     info = load_case_info(dirpath)
     node_by_ip = {
@@ -450,10 +538,10 @@ def build_case_plan(
     topo_scores: Dict[str, float] = {}
     topo_candidates: List[str] = []
     topo_seconds = 0.0
-    if mode in ("m1", "m13", "m123"):
+    if pipeline_mode in ("m1", "m13", "m123"):
         stage = time.perf_counter()
         raw_topo_scores = score_topo(nodes, info, weight_path=weight_file, directed=True)
-        if mode == "m1" and raw_topo_scores:
+        if pipeline_mode == "m1" and raw_topo_scores:
             pure_rankings = [
                 {"rank": rank, "ip": ip, "pr_score": round(float(score), 6)}
                 for rank, (ip, score) in enumerate(
@@ -489,11 +577,11 @@ def build_case_plan(
         topo_candidates = _ips(topo_detail.get("rankings", []), effective_k)
         topo_seconds = time.perf_counter() - stage
 
-    candidate_ips = all_ips if mode == "m23" else topo_candidates
+    candidate_ips = all_ips if pipeline_mode == "m23" else topo_candidates
     temporal_detail: Dict[str, Any] | None = None
     temporal_scores: Dict[str, float] = {}
     evidence_rank_seconds = 0.0
-    if mode in ("m23", "m123"):
+    if pipeline_mode in ("m23", "m123"):
         stage = time.perf_counter()
         if evidence_table is None:
             raise ValueError(f"{mode} requires a precomputed evidence table")
@@ -502,9 +590,9 @@ def build_case_plan(
         )
         evidence_rank_seconds = time.perf_counter() - stage
 
-    if mode in ("m1", "m13"):
+    if pipeline_mode in ("m1", "m13"):
         initial_rows = list((topo_detail or {}).get("rankings", []))
-    elif mode == "m23":
+    elif pipeline_mode == "m23":
         initial_rows = list((temporal_detail or {}).get("rankings", []))
     else:
         combined_scores = {
@@ -527,11 +615,20 @@ def build_case_plan(
 
     gate_started = time.perf_counter()
     gate = assess_ablation_gate(
-        mode=mode,
+        mode=pipeline_mode,
         initial_ranking=initial_ips,
         topo_detail=topo_detail,
         temporal_detail=temporal_detail,
     )
+    if mode in ALL_LLM_MODES:
+        gate = {
+            **gate,
+            "natural_decision": gate.get("decision"),
+            "natural_route": gate.get("route"),
+            "forced_llm": True,
+            "decision": "invoke_llm",
+            "route": "llm",
+        }
     gate_seconds = time.perf_counter() - gate_started
 
     table_rows = (evidence_table or {}).get("rows", [])
@@ -542,10 +639,12 @@ def build_case_plan(
     }
     allowed_ips = initial_ips[:effective_k]
     projected_rows = [
-        _project_evidence_row(row_by_ip.get(ip, {"candidate_ip": ip}), mode)
+        _project_evidence_row(row_by_ip.get(ip, {"candidate_ip": ip}), pipeline_mode)
         for ip in allowed_ips
     ]
-    ranking = _ranking_evidence(mode, initial_rows, topo_detail, temporal_detail, effective_k)
+    ranking = _ranking_evidence(
+        pipeline_mode, initial_rows, topo_detail, temporal_detail, effective_k
+    )
     prompt = ""
     if gate.get("decision") == "invoke_llm":
         prompt = _build_llm_prompt(
@@ -556,9 +655,9 @@ def build_case_plan(
             evidence_rows=projected_rows,
         )
 
-    if mode == "m1":
+    if pipeline_mode == "m1":
         evidence_devices = 0
-    elif mode == "m23":
+    elif pipeline_mode == "m23":
         evidence_devices = len(all_ips)
     else:
         evidence_devices = len(topo_candidates)
@@ -572,6 +671,9 @@ def build_case_plan(
         "case_id": cid,
         "dir": dirpath,
         "mode": mode,
+        "pipeline_mode": pipeline_mode,
+        "prompt_variant": _prompt_variant(mode),
+        "prompt_version": _prompt_version(mode),
         "device_count": len(all_ips),
         "evidence_device_count": evidence_devices,
         "initial_ranking": initial_ips,
@@ -623,6 +725,7 @@ def _llm_worker(spec: Dict[str, Any]) -> Dict[str, Any]:
     init_seconds = time.perf_counter() - init_started
     records: List[Dict[str, Any]] = []
     inference_seconds = 0.0
+    tokenizer = None
     for offset in range(0, len(spec["tasks"]), spec["batch_size"]):
         batch = spec["tasks"][offset : offset + spec["batch_size"]]
         applied = [[{"role": "user", "content": item["prompt"]}] for item in batch]
@@ -631,14 +734,43 @@ def _llm_worker(spec: Dict[str, Any]) -> Dict[str, Any]:
         batch_seconds = time.perf_counter() - started
         inference_seconds += batch_seconds
         amortized = batch_seconds / max(len(batch), 1)
-        for task, output in zip(batch, outputs):
+        for task, messages, output in zip(batch, applied, outputs):
+            completion = output.outputs[0]
+            prompt_token_ids = getattr(output, "prompt_token_ids", None)
+            completion_token_ids = getattr(completion, "token_ids", None)
+            token_count_source = "vllm_token_ids"
+            if prompt_token_ids is None or completion_token_ids is None:
+                if tokenizer is None:
+                    tokenizer = llm.get_tokenizer()
+                token_count_source = "tokenizer_fallback"
+            if prompt_token_ids is None:
+                try:
+                    prompt_token_ids = tokenizer.apply_chat_template(
+                        messages, tokenize=True, add_generation_prompt=True
+                    )
+                except (AttributeError, TypeError, ValueError):
+                    prompt_token_ids = tokenizer.encode(
+                        task["prompt"], add_special_tokens=True
+                    )
+            if completion_token_ids is None:
+                completion_token_ids = tokenizer.encode(
+                    completion.text, add_special_tokens=False
+                )
+            prompt_tokens = len(prompt_token_ids)
+            completion_tokens = len(completion_token_ids)
             records.append(
                 {
                     "case_id": task["case_id"],
-                    "raw_response": output.outputs[0].text.strip(),
+                    "raw_response": completion.text.strip(),
                     "worker_id": spec["worker_id"],
                     "npu_group": spec["npu_group"],
                     "amortized_batch_inference_seconds": amortized,
+                    "token_usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                        "source": token_count_source,
+                    },
                 }
             )
     part_path = Path(spec["part_path"])
@@ -652,6 +784,15 @@ def _llm_worker(spec: Dict[str, Any]) -> Dict[str, Any]:
         "model_init_seconds": init_seconds,
         "inference_seconds": inference_seconds,
         "worker_wall_seconds": time.perf_counter() - worker_started,
+        "prompt_tokens": sum(
+            record["token_usage"]["prompt_tokens"] for record in records
+        ),
+        "completion_tokens": sum(
+            record["token_usage"]["completion_tokens"] for record in records
+        ),
+        "total_tokens": sum(
+            record["token_usage"]["total_tokens"] for record in records
+        ),
         "part_path": str(part_path),
     }
 
@@ -707,6 +848,348 @@ def _run_llm_tasks(
     return result, sorted(stats, key=lambda item: item["worker_id"]), wall_seconds
 
 
+def _summarize_token_usage(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    per_case = []
+    for result in results:
+        usage = result.get("token_usage") or {}
+        if not result.get("reran_with_llm"):
+            continue
+        per_case.append(
+            {
+                "case_id": result.get("case_id"),
+                "prompt_variant": result.get("prompt_variant"),
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                "source": usage.get("source", "unknown"),
+            }
+        )
+    per_case.sort(key=lambda item: str(item["case_id"]))
+    count = len(per_case)
+    prompt_total = sum(item["prompt_tokens"] for item in per_case)
+    completion_total = sum(item["completion_tokens"] for item in per_case)
+    total = sum(item["total_tokens"] for item in per_case)
+    return {
+        "llm_case_count": count,
+        "prompt_tokens": {
+            "total": prompt_total,
+            "average_per_llm_case": prompt_total / count if count else 0.0,
+        },
+        "completion_tokens": {
+            "total": completion_total,
+            "average_per_llm_case": completion_total / count if count else 0.0,
+        },
+        "total_tokens": {
+            "total": total,
+            "average_per_llm_case": total / count if count else 0.0,
+        },
+        "per_case": per_case,
+    }
+
+
+def _rank_diff(initial: Sequence[str], final: Sequence[str]) -> Dict[str, Any]:
+    initial_top5 = list(initial[:5])
+    final_top5 = list(final[:5])
+    all_ips = list(dict.fromkeys([*initial_top5, *final_top5]))
+    movements = []
+    for ip in all_ips:
+        old_rank = initial_top5.index(ip) + 1 if ip in initial_top5 else None
+        new_rank = final_top5.index(ip) + 1 if ip in final_top5 else None
+        movements.append(
+            {
+                "ip": ip,
+                "initial_rank": old_rank,
+                "final_rank": new_rank,
+                "rank_delta": (
+                    old_rank - new_rank
+                    if old_rank is not None and new_rank is not None
+                    else None
+                ),
+            }
+        )
+    return {
+        "initial_top5": initial_top5,
+        "final_top5": final_top5,
+        "changed_top1": initial_top5[:1] != final_top5[:1],
+        "changed_order": initial_top5 != final_top5,
+        "added_to_top5": [ip for ip in final_top5 if ip not in initial_top5],
+        "removed_from_top5": [ip for ip in initial_top5 if ip not in final_top5],
+        "movements": movements,
+    }
+
+
+def _badcase_labels(
+    *,
+    initial_eval: Dict[str, Any],
+    final_eval: Dict[str, Any],
+    candidate_hit: bool,
+    output_filter: Dict[str, Any],
+    gate: Dict[str, Any],
+    topo_top1: str | None,
+    evidence_top1: str | None,
+) -> Dict[str, Any]:
+    tags: List[str] = []
+    if not output_filter.get("parse_success", True) or output_filter.get(
+        "used_initial_ranking_fallback", False
+    ):
+        tags.append("output_parse_failure")
+    if not candidate_hit:
+        tags.append("candidate_miss")
+    if initial_eval.get("top1_hit") and not final_eval.get("top1_hit"):
+        tags.append("llm_harm")
+    if not initial_eval.get("top1_hit") and not final_eval.get("top1_hit"):
+        tags.append("persistent_failure")
+        if candidate_hit:
+            tags.append("llm_failed_to_correct")
+    if gate.get("confidence") == "high":
+        tags.append("gate_overconfidence")
+    if topo_top1 and evidence_top1 and topo_top1 != evidence_top1:
+        tags.append("evidence_conflict")
+
+    priority = (
+        "output_parse_failure",
+        "candidate_miss",
+        "llm_harm",
+        "llm_failed_to_correct",
+        "persistent_failure",
+    )
+    primary = next((label for label in priority if label in tags), "persistent_failure")
+    return {
+        "primary_error_type": primary,
+        "secondary_tags": [tag for tag in tags if tag != primary],
+    }
+
+
+def _write_badcase_index(rows: Sequence[Dict[str, Any]], path: Path) -> None:
+    fieldnames = [
+        "case_id",
+        "source_dir",
+        "primary_error_type",
+        "secondary_tags",
+        "gate_confidence",
+        "initial_top1",
+        "final_top1",
+        "ground_truth_ips",
+        "best_final_rank",
+        "prompt_tokens",
+        "completion_tokens",
+        "badcase_dir",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_all_llm_evaluation_artifacts(
+    *,
+    mode: str,
+    plans: Sequence[Dict[str, Any]],
+    results: Sequence[Dict[str, Any]],
+    run_dir: Path,
+    evidence_root: Path,
+) -> Dict[str, Any]:
+    """Write label-aware diagnostics only after inference has fully completed."""
+    from Sys.Score.Score_N import Prediction, Scorer
+
+    scorer = Scorer(str(run_dir / "res.json"))
+    plans_by_id = {plan["case_id"]: plan for plan in plans}
+    transition_counts = {
+        "correct_to_correct": 0,
+        "correct_to_wrong": 0,
+        "wrong_to_correct": 0,
+        "wrong_to_wrong": 0,
+    }
+    evaluated_cases = 0
+    case_records: List[Dict[str, Any]] = []
+    badcase_index: List[Dict[str, Any]] = []
+
+    for result in results:
+        case_id = result["case_id"]
+        plan = plans_by_id[case_id]
+        ground_truth = scorer._get_groundtruth(result["dir"])
+        if not ground_truth.ips:
+            case_records.append(
+                {
+                    "case_id": case_id,
+                    "dir": result["dir"],
+                    "prompt_variant": result.get("prompt_variant"),
+                    "evaluation_status": "skipped_no_ground_truth",
+                    "token_usage": result.get("token_usage", {}),
+                }
+            )
+            continue
+
+        evaluated_cases += 1
+        initial_prediction = Prediction(ips=list(plan["initial_ranking"]))
+        final_prediction = scorer.parser.parse(result.get("response", ""))
+        initial_eval = scorer.evaluator.evaluate(ground_truth, initial_prediction)
+        final_eval = scorer.evaluator.evaluate(ground_truth, final_prediction)
+        initial_correct = bool(initial_eval.get("top1_hit"))
+        final_correct = bool(final_eval.get("top1_hit"))
+        transition = (
+            ("correct" if initial_correct else "wrong")
+            + "_to_"
+            + ("correct" if final_correct else "wrong")
+        )
+        transition_counts[transition] += 1
+
+        candidate_hit = any(
+            ip in set(plan["initial_ranking"]) for ip in ground_truth.ips
+        )
+        topo_top1 = (_ips((plan.get("topo_detail") or {}).get("rankings", []), 1) or [None])[0]
+        evidence_top1 = (
+            _ips((plan.get("temporal_detail") or {}).get("rankings", []), 1)
+            or [None]
+        )[0]
+        rank_diff = _rank_diff(plan["initial_ranking"], final_prediction.ips)
+        labels = (
+            _badcase_labels(
+                initial_eval=initial_eval,
+                final_eval=final_eval,
+                candidate_hit=candidate_hit,
+                output_filter=result.get("llm_output_filter") or {},
+                gate=plan["gate"],
+                topo_top1=topo_top1,
+                evidence_top1=evidence_top1,
+            )
+            if not final_correct
+            else {"primary_error_type": None, "secondary_tags": []}
+        )
+        evaluation = {
+            "ground_truth_ips": ground_truth.ips,
+            "ground_truth_source": ground_truth.source,
+            "candidate_contains_ground_truth": candidate_hit,
+            "initial": initial_eval,
+            "final": final_eval,
+            "transition": transition,
+            **labels,
+        }
+        case_record = {
+            "case_id": case_id,
+            "dir": result["dir"],
+            "prompt_variant": result.get("prompt_variant"),
+            "prompt_version": result.get("prompt_version"),
+            "gate_confidence": plan["gate"].get("confidence"),
+            "gate_natural_decision": plan["gate"].get(
+                "natural_decision", plan["gate"].get("decision")
+            ),
+            "forced_llm": bool(plan["gate"].get("forced_llm")),
+            "baseline_ranking": list(plan["initial_ranking"]),
+            "llm_ranking": list(final_prediction.ips),
+            "rank_diff": rank_diff,
+            "evaluation": evaluation,
+            "token_usage": result.get("token_usage", {}),
+            "runtime": result.get("runtime", {}),
+        }
+        case_records.append(case_record)
+        if final_correct:
+            continue
+
+        badcase_dir = run_dir / "badcases" / case_id
+        badcase_dir.mkdir(parents=True, exist_ok=True)
+        evidence_path = evidence_root / "cases" / case_id / "evidence_table.json"
+        evidence_table = _load_json(evidence_path) if evidence_path.exists() else {
+            "error": "precomputed evidence table not found",
+            "expected_path": str(evidence_path),
+        }
+        parsed_payload = (
+            result.get("llm_output_filter") or {}
+        ).get("parsed_payload", {})
+        rankings = {
+            "baseline_ranking": plan["initial_ranking"],
+            "baseline_rows": plan["initial_rows"],
+            "pagerank": plan.get("topo_detail"),
+            "evidence": plan.get("temporal_detail"),
+        }
+        source_refs = {
+            "source_case_dir": result["dir"],
+            "evidence_table_path": str(evidence_path),
+            "prompt_path": str(run_dir / "llm_prompts" / f"{case_id}.txt"),
+            "raw_output_path": str(
+                run_dir / "llm_raw_outputs" / f"{case_id}.txt"
+            ),
+            "ground_truth_source": ground_truth.source,
+        }
+        overview = "\n".join(
+            [
+                f"# Bad case: {case_id}",
+                "",
+                f"- Prompt variant: `{result.get('prompt_variant')}`",
+                f"- Primary error: `{labels['primary_error_type']}`",
+                f"- Secondary tags: `{', '.join(labels['secondary_tags']) or 'none'}`",
+                f"- Gate confidence: `{plan['gate'].get('confidence')}`",
+                f"- Gate natural decision: `{plan['gate'].get('natural_decision')}`",
+                f"- Ground truth: `{', '.join(ground_truth.ips)}`",
+                f"- Baseline Top-5: `{', '.join(plan['initial_ranking'][:5])}`",
+                f"- LLM Top-5: `{', '.join(final_prediction.ips[:5])}`",
+                f"- Transition: `{transition}`",
+                f"- Prompt tokens: `{(result.get('token_usage') or {}).get('prompt_tokens', 0)}`",
+                f"- Completion tokens: `{(result.get('token_usage') or {}).get('completion_tokens', 0)}`",
+                "",
+                "按编号查看 Gate、两类排序、完整证据表、实际 Prompt、原始输出和解析结果。",
+            ]
+        )
+        (badcase_dir / "00_overview.md").write_text(overview + "\n", encoding="utf-8")
+        _save_json(evaluation, badcase_dir / "01_evaluation.json")
+        _save_json(plan["gate"], badcase_dir / "02_gate.json")
+        _save_json(rankings, badcase_dir / "03_rankings.json")
+        _save_json(evidence_table, badcase_dir / "04_evidence_table.json")
+        (badcase_dir / "05_prompt.txt").write_text(
+            result.get("prompt", ""), encoding="utf-8"
+        )
+        (badcase_dir / "06_llm_raw_output.txt").write_text(
+            result.get("llm_raw_response", ""), encoding="utf-8"
+        )
+        _save_json(parsed_payload, badcase_dir / "07_llm_parsed_output.json")
+        _save_json(rank_diff, badcase_dir / "08_rank_diff.json")
+        _save_json(
+            {
+                **(result.get("runtime") or {}),
+                "token_usage": result.get("token_usage", {}),
+            },
+            badcase_dir / "09_timing.json",
+        )
+        _save_json(source_refs, badcase_dir / "10_source_refs.json")
+        badcase_index.append(
+            {
+                "case_id": case_id,
+                "source_dir": result["dir"],
+                "primary_error_type": labels["primary_error_type"],
+                "secondary_tags": "|".join(labels["secondary_tags"]),
+                "gate_confidence": plan["gate"].get("confidence"),
+                "initial_top1": plan["initial_ranking"][0]
+                if plan["initial_ranking"]
+                else "",
+                "final_top1": final_prediction.ips[0] if final_prediction.ips else "",
+                "ground_truth_ips": "|".join(ground_truth.ips),
+                "best_final_rank": final_eval.get("best_rank") or "",
+                "prompt_tokens": (result.get("token_usage") or {}).get(
+                    "prompt_tokens", 0
+                ),
+                "completion_tokens": (result.get("token_usage") or {}).get(
+                    "completion_tokens", 0
+                ),
+                "badcase_dir": str(badcase_dir),
+            }
+        )
+
+    _write_jsonl(case_records, run_dir / "cases.jsonl")
+    transition_summary = {
+        "mode": mode,
+        "evaluated_case_count": evaluated_cases,
+        **transition_counts,
+    }
+    _save_json(transition_summary, run_dir / "transition_matrix.json")
+    _write_badcase_index(badcase_index, run_dir / "badcase_index.csv")
+    return {
+        "evaluated_case_count": evaluated_cases,
+        "badcase_count": len(badcase_index),
+        "transition_matrix": transition_summary,
+    }
+
+
 def run_mode(
     *,
     mode: str,
@@ -719,6 +1202,9 @@ def run_mode(
     if run_dir.exists():
         raise FileExistsError(f"run directory already exists: {run_dir}")
     run_dir.mkdir(parents=True)
+    (run_dir / "prompt_template.txt").write_text(
+        _prompt_template(mode), encoding="utf-8"
+    )
     mode_started = time.perf_counter()
     plans: List[Dict[str, Any]] = []
     for index, dirpath in enumerate(dirpaths, 1):
@@ -747,9 +1233,16 @@ def run_mode(
     _write_jsonl(plans, run_dir / "case_plans.jsonl")
     rerun_plans = [plan for plan in plans if plan["gate"].get("decision") == "invoke_llm"]
     confidence_counts: Dict[str, int] = {}
+    natural_decision_counts: Dict[str, int] = {}
     for plan in plans:
         confidence = str(plan["gate"].get("confidence", "unknown"))
         confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+        natural_decision = str(
+            plan["gate"].get("natural_decision", plan["gate"].get("decision", "unknown"))
+        )
+        natural_decision_counts[natural_decision] = (
+            natural_decision_counts.get(natural_decision, 0) + 1
+        )
     for plan in rerun_plans:
         (run_dir / "llm_prompts").mkdir(parents=True, exist_ok=True)
         (run_dir / "llm_prompts" / f"{plan['case_id']}.txt").write_text(
@@ -762,9 +1255,22 @@ def run_mode(
             "rerun_case_count": len(rerun_plans),
             "rerun_case_ids": [plan["case_id"] for plan in rerun_plans],
             "confidence_counts": confidence_counts,
-            "prompt_version": ABLATION_RCA_PROMPT_VERSION,
+            "natural_decision_counts": natural_decision_counts,
+            "forced_llm": mode in ALL_LLM_MODES,
+            "prompt_variant": _prompt_variant(mode),
+            "prompt_version": _prompt_version(mode),
         },
         run_dir / "run_plan.json",
+    )
+    _save_json(
+        {
+            "mode": mode,
+            "case_count": len(plans),
+            "confidence_counts": confidence_counts,
+            "natural_decision_counts": natural_decision_counts,
+            "forced_llm": mode in ALL_LLM_MODES,
+        },
+        run_dir / "gate_distribution.json",
     )
     if args.plan_only:
         return {
@@ -772,6 +1278,8 @@ def run_mode(
             "case_count": len(plans),
             "rerun_case_count": len(rerun_plans),
             "confidence_counts": confidence_counts,
+            "prompt_variant": _prompt_variant(mode),
+            "prompt_version": _prompt_version(mode),
             "plan_only": True,
             "run_dir": str(run_dir),
         }
@@ -805,15 +1313,31 @@ def run_mode(
                     "case_id": plan["case_id"],
                     "dir": plan["dir"],
                     "confidence": plan["gate"].get("confidence"),
+                    "natural_decision": plan["gate"].get(
+                        "natural_decision", plan["gate"].get("decision")
+                    ),
+                    "forced_llm": bool(plan["gate"].get("forced_llm")),
                     "reason": plan["gate"].get("reason"),
+                    "prompt_variant": plan["prompt_variant"],
+                    "prompt_version": plan["prompt_version"],
                     "prompt_path": str(run_dir / "llm_prompts" / f"{plan['case_id']}.txt"),
                     "response_path": str(response_path),
+                    "token_usage": llm_record.get("token_usage", {}),
                 }
             )
             plan["runtime"]["llm_batch_amortized_seconds"] = llm_record.get(
                 "amortized_batch_inference_seconds", 0.0
             )
             plan["runtime"]["llm_effective_wall_seconds"] = llm_effective_per_case
+            token_usage = llm_record.get(
+                "token_usage",
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "source": "missing",
+                },
+            )
         else:
             response = _make_bypass_response(plan["gate"], plan["initial_ranking"])
             raw_response = ""
@@ -825,6 +1349,12 @@ def run_mode(
             }
             plan["runtime"]["llm_batch_amortized_seconds"] = 0.0
             plan["runtime"]["llm_effective_wall_seconds"] = 0.0
+            token_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "source": "not_invoked",
+            }
         plan["runtime"]["estimated_case_total_seconds"] = (
             plan["runtime"]["plan_seconds"]
             + plan["runtime"]["evidence_estimated_seconds"]
@@ -835,12 +1365,15 @@ def run_mode(
                 "dir": plan["dir"],
                 "case_id": plan["case_id"],
                 "ablation": mode,
+                "prompt_variant": plan["prompt_variant"],
+                "prompt_version": plan["prompt_version"],
                 "skill_ips": plan["initial_ranking"],
                 "confidence_gate": plan["gate"],
                 "reran_with_llm": reran,
                 "prompt": plan["prompt"] if reran else "",
                 "llm_raw_response": raw_response,
                 "llm_output_filter": output_filter,
+                "token_usage": token_usage,
                 "response": response,
                 "ranking_evidence": plan["ranking_evidence"],
                 "runtime": plan["runtime"],
@@ -849,6 +1382,8 @@ def run_mode(
 
     _save_json(results, run_dir / "res.json")
     _save_json(rerun_manifest, run_dir / "rerun_cases.json")
+    token_usage_summary = _summarize_token_usage(results)
+    _save_json(token_usage_summary, run_dir / "token_usage.json")
     observed_run_wall_seconds = time.perf_counter() - mode_started
     evidence_estimated_total = sum(
         plan["runtime"]["evidence_estimated_seconds"] for plan in plans
@@ -856,6 +1391,7 @@ def run_mode(
 
     scoring_started = time.perf_counter()
     metrics = None
+    diagnostic_summary = None
     if not args.skip_score:
         # Evaluation-only import: this is the first point at which labels may be read.
         from Sys.Score.Score_N import Scorer
@@ -870,12 +1406,21 @@ def run_mode(
             {"mode": mode, "evaluation_source": "skill_ips" if mode == "m1" else "response", **final_metrics},
             run_dir / "final_metrics.json",
         )
+        if mode in ALL_LLM_MODES:
+            diagnostic_summary = _write_all_llm_evaluation_artifacts(
+                mode=mode,
+                plans=plans,
+                results=results,
+                run_dir=run_dir,
+                evidence_root=Path(args.evidence_root),
+            )
     scoring_seconds = time.perf_counter() - scoring_started
     timing = {
         "mode": mode,
         "case_count": len(plans),
         "rerun_case_count": len(rerun_plans),
         "confidence_counts": confidence_counts,
+        "natural_decision_counts": natural_decision_counts,
         "evidence_average_seconds_per_device": evidence_average_seconds if mode != "m1" else 0.0,
         "evidence_estimated_total_seconds": evidence_estimated_total,
         "observed_ablation_wall_seconds": observed_run_wall_seconds,
@@ -885,6 +1430,11 @@ def run_mode(
             observed_run_wall_seconds + evidence_estimated_total + scoring_seconds
         ),
         "llm_stage_wall_seconds": llm_wall_seconds,
+        "token_usage": {
+            key: value
+            for key, value in token_usage_summary.items()
+            if key != "per_case"
+        },
         "llm_worker_stats": worker_stats,
     }
     _save_json(timing, run_dir / "timing.json")
@@ -895,12 +1445,15 @@ def run_mode(
         "run_dir": str(run_dir),
         "timing": timing,
         "metrics": metrics,
+        "diagnostics": diagnostic_summary,
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run isolated M1/M13/M23/M123 ablations from cached evidence."
+        description=(
+            "Run M1/M13/M23/M123 and forced-all-LLM ablations from cached evidence."
+        )
     )
     parser.add_argument("--data-root", "-d", required=True)
     parser.add_argument("--evidence-root", required=True)
@@ -933,7 +1486,7 @@ def main() -> None:
     if args.top_k <= 0:
         raise SystemExit("--top-k must be positive")
     if any(mode != "m1" for mode in args.modes) and not args.plan_only and not args.model_path:
-        raise SystemExit("--model-path is required for M13/M23/M123 inference")
+        raise SystemExit("--model-path is required for any LLM ablation inference")
 
     dirpaths = discover_cases(args.data_root)
     if args.limit_cases is not None:
@@ -952,6 +1505,17 @@ def main() -> None:
     (root / "large_model_prompt_template.txt").write_text(
         ABLATION_RCA_PROMPT, encoding="utf-8"
     )
+    (root / "m123_all_llm_rerank_prompt_template.txt").write_text(
+        ALL_LLM_RERANK_PROMPT, encoding="utf-8"
+    )
+    (root / "m123_all_llm_evidence_prompt_template.txt").write_text(
+        ALL_LLM_EVIDENCE_PROMPT, encoding="utf-8"
+    )
+    prompt_versions = {
+        "selective": ABLATION_RCA_PROMPT_VERSION,
+        "rerank": ALL_LLM_RERANK_PROMPT_VERSION,
+        "evidence_judge": ALL_LLM_EVIDENCE_PROMPT_VERSION,
+    }
     model_config = {
         "model_path": args.model_path,
         "npu_groups": args.npu_groups,
@@ -973,7 +1537,7 @@ def main() -> None:
             "modes": args.modes,
             "top_k": args.top_k,
             "weight_file": args.weight_file,
-            "prompt_version": ABLATION_RCA_PROMPT_VERSION,
+            "prompt_versions": prompt_versions,
             "model_config": model_config,
             "plan_only": args.plan_only,
             "skip_score": args.skip_score,
@@ -999,7 +1563,7 @@ def main() -> None:
             "data_root": args.data_root,
             "evidence_root": args.evidence_root,
             "top_k": args.top_k,
-            "prompt_version": ABLATION_RCA_PROMPT_VERSION,
+            "prompt_versions": prompt_versions,
             "model_config": model_config,
             "modes": summaries,
         },

@@ -3,8 +3,15 @@
 #
 #   source scripts/common.sh
 #   export PINGMESH_LLM_NPU_GROUPS='0,1;2,3'  # 每组加载一个大模型副本
-#   export PINGMESH_ABLATION_MODES='m1 m13 m23 m123'
+#   export PINGMESH_ABLATION_MODES='m1 m13 m23 m123 m123_all_llm_rerank m123_all_llm_evidence'
 #   bash scripts/run_ablation_study.sh
+#
+# 只运行两个“全部 case 均调用大模型”的 Prompt 对照实验：
+#   export PINGMESH_ABLATION_MODES='m123_all_llm_rerank m123_all_llm_evidence'
+#   RUN_TAG=all_llm_prompt_compare bash scripts/run_ablation_study.sh
+#
+# token_usage.json 记录每个 Prompt 的输入、输出和总 token 数；
+# badcases/<case_id>/ 保存最终 Top-1 错误案例的完整诊断文件。
 #
 # 只检查 Gate、重推 case 和 prompt，不启动大模型：
 #   bash scripts/run_ablation_study.sh --plan-only
@@ -25,7 +32,7 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 EVIDENCE_ROOT="${PINGMESH_EVIDENCE_TABLE_DIR:-${PROJECT_ROOT}/data/evidence_Table}"
 OUTPUT_ROOT="${PINGMESH_ABLATION_OUTPUT_ROOT:-${PINGMESH_RESULTS}}"
 RUN_TAG="${RUN_TAG:-ablation_$(date +%Y%m%d_%H%M%S)}"
-read -r -a MODES <<< "${PINGMESH_ABLATION_MODES:-m1 m13 m23 m123}"
+read -r -a MODES <<< "${PINGMESH_ABLATION_MODES:-m1 m13 m23 m123 m123_all_llm_rerank m123_all_llm_evidence}"
 
 if [[ -n "${PINGMESH_LLM_NPU_GROUPS:-}" ]]; then
   LLM_NPU_GROUPS="${PINGMESH_LLM_NPU_GROUPS}"
