@@ -42,6 +42,9 @@ _REASONING_BLOCK = re.compile(
 _UNCLOSED_REASONING_BLOCK = re.compile(
     r"<(?:think|analysis)\b[^>]*>.*\Z", re.IGNORECASE | re.DOTALL
 )
+_CLOSING_REASONING_TAG = re.compile(
+    r"</(?:think|analysis)\s*>", re.IGNORECASE
+)
 
 
 def _save_json(data: Any, path: Path) -> None:
@@ -292,7 +295,15 @@ def prepare_summary_prompt(
 
 
 def strip_reasoning(text: str) -> str:
-    cleaned = _REASONING_BLOCK.sub("", text or "")
+    cleaned = text or ""
+    # Some reasoning models omit the opening <think> tag but still emit
+    # </think> before the final answer. In that case, everything before the
+    # last closing reasoning tag is hidden reasoning and must not enter the
+    # evidence-table summary.
+    closing_tags = list(_CLOSING_REASONING_TAG.finditer(cleaned))
+    if closing_tags:
+        cleaned = cleaned[closing_tags[-1].end() :]
+    cleaned = _REASONING_BLOCK.sub("", cleaned)
     return _UNCLOSED_REASONING_BLOCK.sub("", cleaned).strip()
 
 

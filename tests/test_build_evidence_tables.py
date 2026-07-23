@@ -95,3 +95,16 @@ def test_parse_summary_accepts_json_and_preserves_raw_fallback():
         "json",
     )
     assert parse_summary("普通摘要") == ("普通摘要", "raw_fallback")
+
+
+def test_parse_summary_uses_content_after_last_closing_think_tag():
+    raw = (
+        "这里是没有起始标签的思考过程。</think>\n"
+        "<think>第二段思考</think>\n"
+        '```json\n{"summary":"目标设备与上游邻居同时出现链路告警"}\n```'
+    )
+
+    assert parse_summary(raw) == (
+        "目标设备与上游邻居同时出现链路告警",
+        "json",
+    )
