@@ -504,8 +504,13 @@ def _build_llm_prompt(
     ranking_evidence: Dict[str, Any],
     evidence_rows: Sequence[Dict[str, Any]],
 ) -> str:
-    if mode == "m123_all_llm_evidence":
-        return ALL_LLM_EVIDENCE_PROMPT.format(
+    if mode in ALL_LLM_MODES:
+        template = (
+            ALL_LLM_RERANK_PROMPT
+            if mode == "m123_all_llm_rerank"
+            else ALL_LLM_EVIDENCE_PROMPT
+        )
+        return template.format(
             EVIDENCE_TABLE=json.dumps(
                 list(evidence_rows), ensure_ascii=False, indent=2
             )
@@ -666,7 +671,7 @@ def build_case_plan(
             row_by_ip.get(ip, {"candidate_ip": ip}),
             mode,
             candidate_ips=allowed_ips,
-            compact=mode == "m123_all_llm_evidence",
+            compact=mode in ALL_LLM_MODES,
         )
         for ip in allowed_ips
     ]

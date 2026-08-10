@@ -224,7 +224,7 @@ def test_llm_response_is_filtered_to_allowed_candidates():
     assert audit["output_was_filtered"] is True
 
 
-def test_all_llm_modes_force_every_gate_route_and_use_distinct_prompts(tmp_path):
+def test_all_llm_modes_force_every_gate_route_and_use_compact_prompts(tmp_path):
     case_dir = tmp_path / "case"
     case_dir.mkdir()
     nodes = [
@@ -280,20 +280,21 @@ def test_all_llm_modes_force_every_gate_route_and_use_distinct_prompts(tmp_path)
         assert plan["runtime"]["evidence_estimated_seconds"] == 5.0
 
     assert rerank["prompt_variant"] == "rerank"
-    assert '"initial_ranking"' in rerank["prompt"]
-    assert "Gate 上下文" in rerank["prompt"]
     assert evidence["prompt_variant"] == "evidence_judge"
-    assert '"initial_ranking"' not in evidence["prompt"]
-    assert '"combined_score"' not in evidence["prompt"]
-    assert "raw_temporal_score_i / max(raw_temporal_score)" not in evidence["prompt"]
-    assert "Gate 上下文" not in evidence["prompt"]
-    assert "故障概况" not in evidence["prompt"]
-    assert "实验模式" not in evidence["prompt"]
-    assert '"semantic_summary"' in evidence["prompt"]
-    assert '"summary_context"' not in evidence["prompt"]
-    assert '"log_count"' not in evidence["prompt"]
-    assert '"raw_temporal_score"' in evidence["prompt"]
-    assert '"burst_score"' not in evidence["prompt"]
+    for plan in (rerank, evidence):
+        prompt = plan["prompt"]
+        assert '"initial_ranking"' not in prompt
+        assert '"combined_score"' not in prompt
+        assert "PageRank" not in prompt
+        assert "raw_temporal_score_i / max(raw_temporal_score)" not in prompt
+        assert "Gate 上下文" not in prompt
+        assert "故障概况" not in prompt
+        assert "实验模式" not in prompt
+        assert '"semantic_summary"' in prompt
+        assert '"summary_context"' not in prompt
+        assert '"log_count"' not in prompt
+        assert '"raw_temporal_score"' in prompt
+        assert '"burst_score"' not in prompt
     assert _prompt_version(rerank["mode"]) != _prompt_version(evidence["mode"])
 
 
