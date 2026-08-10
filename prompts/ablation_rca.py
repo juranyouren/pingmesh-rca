@@ -49,64 +49,7 @@ ABLATION_RCA_PROMPT = """# 角色
 ```
 """
 
-ALL_LLM_RERANK_PROMPT_VERSION = "m123-all-llm-rerank-v1"
-
-ALL_LLM_RERANK_PROMPT = """# 角色
-你是数据中心网络故障根因候选复核器。每个案例都会经过 Gate，然后无论 Gate 置信度高、中、低，都会调用你复核并重排候选设备。
-
-# 实验模式
-M123_ALL_LLM_RERANK
-
-# 约束
-1. 合法候选严格限定为 `allowed_candidate_ips`，不得输出集合外的 IP。
-2. `initial_ranking` 是 PageRank 与证据分数等权融合得到的基线排序，不是正确答案。
-3. Gate 置信度只描述程序对基线的信任程度，不是正确性标签；不得因为置信度高就无条件接受基线。
-4. `semantic_summary` 由小模型根据目标设备及其直接邻居告警生成，只表示可观察关联，不代表因果关系。
-5. 设备告警多不一定代表它是根因，也可能是故障传播后的受影响节点。
-6. 请重点分析目标设备与邻居告警的关系、告警先后顺序与集中爆发情况、上下游位置，以及设备更像根因、传播节点还是受影响节点。
-7. 告警规则权重只用于程序选择上下文，不等价于严重度、概率或已确认因果关系。
-8. 不得使用输入外的设备、告警、链路、状态或隐藏标签。
-9. 证据不足以推翻基线时可以保持原顺序，不要为了重排而重排。
-10. 只输出 1 至 5 个候选 IP，按根因嫌疑从高到低排序，且不能为空。
-
-# 输出格式
-只输出一个 JSON 代码块，不要输出额外文字：
-```json
-{{
-  "decision": "keep_initial | adjust_ranking | insufficient_evidence",
-  "candidate_assessments": [
-    {{
-      "ip": "<候选 IP>",
-      "role_judgment": "root_cause | propagation_node | affected_node | uncertain",
-      "supporting_evidence": ["支持该判断的简短证据"],
-      "counter_evidence": ["不支持该判断的简短证据"]
-    }}
-  ],
-  "reasoning": "最终排序依据，不超过三句话",
-  "ip": ["<最可能根因 IP>", "<第二名候选 IP>"]
-}}
-```
-
-# Gate 上下文
-```json
-{GATE_CONTEXT}
-```
-
-# 故障概况
-```json
-{FAULT_INFO}
-```
-
-# 基线排序及两类排序证据
-```json
-{RANKING_EVIDENCE}
-```
-
-# 候选设备证据表
-```json
-{EVIDENCE_ROWS}
-```
-"""
+ALL_LLM_RERANK_PROMPT_VERSION = "m123-all-llm-rerank-v2"
 
 ALL_LLM_EVIDENCE_PROMPT_VERSION = "m123-all-llm-evidence-v2"
 
@@ -148,6 +91,10 @@ ALL_LLM_EVIDENCE_PROMPT = """# 角色
   "ip": ["<最可能根因 IP>", "<第二名候选 IP>"]
 }}
 """
+
+# 两种全量 LLM 模式都使用同一份精简证据复核提示；保留独立版本号和
+# prompt_variant，便于在实验结果中区分 rerank 与 evidence 两条流水线。
+ALL_LLM_RERANK_PROMPT = ALL_LLM_EVIDENCE_PROMPT
 
 
 __all__ = [
