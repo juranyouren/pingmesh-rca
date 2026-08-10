@@ -321,26 +321,80 @@ def assess_ablation_gate(
     }
 
 
-def _project_evidence_row(row: Dict[str, Any], mode: str) -> Dict[str, Any]:
+def _project_evidence_row(
+    row: Dict[str, Any],
+    mode: str,
+    candidate_ips: Sequence[str] | None = None,
+    compact: bool = False,
+) -> Dict[str, Any]:
     mode = _pipeline_mode(mode)
+    if not compact:
+        projected = {
+            "candidate_ip": row.get("candidate_ip"),
+            "role": row.get("role", "UNKNOWN"),
+            "alarm_count": row.get("alarm_count", 0),
+            "log_count": row.get("log_count", 0),
+            "high_weight_alarms": row.get("high_weight_alarms", []),
+            "neighbor_alarm_statistics": row.get(
+                "neighbor_alarm_statistics", {}
+            ),
+            "semantic_summary": row.get("semantic_summary", ""),
+            "summary_context": row.get("summary_context", {}),
+        }
+        if mode in ("m23", "m123"):
+            projected["temporal"] = row.get("temporal", {})
+        if mode == "m123":
+            projected["cross"] = row.get("cross", 0)
+            topology = row.get("topology") or {}
+            projected["topology"] = {
+                "upstream": list(topology.get("upstream", []) or [])[:10],
+                "downstream": list(topology.get("downstream", []) or [])[:10],
+            }
+        return projected
+
+    neighbor_stats = row.get("neighbor_alarm_statistics") or {}
     projected = {
         "candidate_ip": row.get("candidate_ip"),
         "role": row.get("role", "UNKNOWN"),
         "alarm_count": row.get("alarm_count", 0),
-        "log_count": row.get("log_count", 0),
         "high_weight_alarms": row.get("high_weight_alarms", []),
-        "neighbor_alarm_statistics": row.get("neighbor_alarm_statistics", {}),
         "semantic_summary": row.get("semantic_summary", ""),
-        "summary_context": row.get("summary_context", {}),
     }
+    compact_neighbor_stats = {
+        key: neighbor_stats.get(key, 0)
+        for key in ("neighbors_with_alarms", "total_neighbor_alarms")
+        if neighbor_stats.get(key) is not None
+    }
+    if compact_neighbor_stats:
+        projected["neighbor_alarm_statistics"] = compact_neighbor_stats
     if mode in ("m23", "m123"):
-        projected["temporal"] = row.get("temporal", {})
+        temporal = row.get("temporal") or {}
+        projected["temporal"] = {
+            key: temporal.get(key, 0)
+            for key in ("raw_temporal_score", "timestamp_count")
+            if temporal.get(key) is not None
+        }
     if mode == "m123":
         projected["cross"] = row.get("cross", 0)
         topology = row.get("topology") or {}
+
+        allowed = set(candidate_ips) if candidate_ips is not None else None
+
+        def compact_neighbors(values: Any) -> List[str]:
+            if not isinstance(values, list):
+                return []
+            result: List[str] = []
+            for value in values:
+                ip = str(value) if value is not None else ""
+                if not ip or (allowed is not None and ip not in allowed):
+                    continue
+                if ip not in result:
+                    result.append(ip)
+            return result
+
         projected["topology"] = {
-            "upstream": list(topology.get("upstream", []) or [])[:10],
-            "downstream": list(topology.get("downstream", []) or [])[:10],
+            "upstream_candidates": compact_neighbors(topology.get("upstream")),
+            "downstream_candidates": compact_neighbors(topology.get("downstream")),
         }
     return projected
 
@@ -450,6 +504,13 @@ def _build_llm_prompt(
     ranking_evidence: Dict[str, Any],
     evidence_rows: Sequence[Dict[str, Any]],
 ) -> str:
+    if mode == "m123_all_llm_rerank":
+        return ALL_LLM_RERANK_PROMPT.format(
+            EVIDENCE_TABLE=json.dumps(
+                list(evidence_rows), ensure_ascii=False, indent=2
+            )
+        )
+
     if mode == "m123_all_llm_evidence":
         pagerank_rows = (
             (ranking_evidence.get("pagerank") or {}).get("rankings", [])
@@ -639,7 +700,12 @@ def build_case_plan(
     }
     allowed_ips = initial_ips[:effective_k]
     projected_rows = [
-        _project_evidence_row(row_by_ip.get(ip, {"candidate_ip": ip}), pipeline_mode)
+        _project_evidence_row(
+            row_by_ip.get(ip, {"candidate_ip": ip}),
+            mode,
+            candidate_ips=allowed_ips,
+            compact=mode == "m123_all_llm_rerank",
+        )
         for ip in allowed_ips
     ]
     ranking = _ranking_evidence(
