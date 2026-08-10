@@ -112,6 +112,45 @@ def test_m23_view_excludes_explicit_topology_fields():
     assert "cross" not in projected
 
 
+def test_m123_evidence_view_keeps_semantic_summary_and_drops_prompt_noise():
+    row = _table()["rows"][0]
+    row["summary_context"] = {
+        "prompt_tokens": 100,
+        "parse_mode": "json",
+        "mode": "trimmed_neighbors",
+    }
+    row["neighbor_alarm_statistics"] = {
+        "neighbors_with_alarms": 0,
+        "neighbors_without_alarms": 1,
+        "total_neighbor_alarms": 0,
+    }
+    projected = _project_evidence_row(
+        row,
+        "m123_all_llm_evidence",
+        candidate_ips=["10.0.0.1", "10.0.0.2"],
+        compact=True,
+    )
+
+    assert projected["semantic_summary"] == "目标设备出现 A 告警。"
+    assert projected["neighbor_alarm_statistics"] == {
+        "neighbors_with_alarms": 0,
+        "total_neighbor_alarms": 0,
+    }
+    assert projected["temporal"] == {
+        "raw_temporal_score": 0.2,
+        "timestamp_count": 1,
+    }
+    assert projected["topology"] == {
+        "upstream_candidates": ["10.0.0.2"],
+        "downstream_candidates": [],
+    }
+    assert "log_count" not in projected
+    assert "summary_context" not in projected
+    assert "burst_score" not in projected["temporal"]
+    assert "early_bird_score" not in projected["temporal"]
+    assert "density_score" not in projected["temporal"]
+
+
 def test_m23_case_plan_uses_all_devices_and_cached_average(tmp_path):
     case_dir = tmp_path / "case"
     case_dir.mkdir()
@@ -246,8 +285,15 @@ def test_all_llm_modes_force_every_gate_route_and_use_distinct_prompts(tmp_path)
     assert evidence["prompt_variant"] == "evidence_judge"
     assert '"initial_ranking"' not in evidence["prompt"]
     assert '"combined_score"' not in evidence["prompt"]
-    assert "raw_temporal_score_i / max(raw_temporal_score)" in evidence["prompt"]
+    assert "raw_temporal_score_i / max(raw_temporal_score)" not in evidence["prompt"]
     assert "Gate 上下文" not in evidence["prompt"]
+    assert "故障概况" not in evidence["prompt"]
+    assert "实验模式" not in evidence["prompt"]
+    assert '"semantic_summary"' in evidence["prompt"]
+    assert '"summary_context"' not in evidence["prompt"]
+    assert '"log_count"' not in evidence["prompt"]
+    assert '"raw_temporal_score"' in evidence["prompt"]
+    assert '"burst_score"' not in evidence["prompt"]
     assert _prompt_version(rerank["mode"]) != _prompt_version(evidence["mode"])
 
 
