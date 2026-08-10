@@ -321,26 +321,80 @@ def assess_ablation_gate(
     }
 
 
-def _project_evidence_row(row: Dict[str, Any], mode: str) -> Dict[str, Any]:
+def _project_evidence_row(
+    row: Dict[str, Any],
+    mode: str,
+    candidate_ips: Sequence[str] | None = None,
+    compact: bool = False,
+) -> Dict[str, Any]:
     mode = _pipeline_mode(mode)
+    if not compact:
+        projected = {
+            "candidate_ip": row.get("candidate_ip"),
+            "role": row.get("role", "UNKNOWN"),
+            "alarm_count": row.get("alarm_count", 0),
+            "log_count": row.get("log_count", 0),
+            "high_weight_alarms": row.get("high_weight_alarms", []),
+            "neighbor_alarm_statistics": row.get(
+                "neighbor_alarm_statistics", {}
+            ),
+            "semantic_summary": row.get("semantic_summary", ""),
+            "summary_context": row.get("summary_context", {}),
+        }
+        if mode in ("m23", "m123"):
+            projected["temporal"] = row.get("temporal", {})
+        if mode == "m123":
+            projected["cross"] = row.get("cross", 0)
+            topology = row.get("topology") or {}
+            projected["topology"] = {
+                "upstream": list(topology.get("upstream", []) or [])[:10],
+                "downstream": list(topology.get("downstream", []) or [])[:10],
+            }
+        return projected
+
+    neighbor_stats = row.get("neighbor_alarm_statistics") or {}
     projected = {
         "candidate_ip": row.get("candidate_ip"),
         "role": row.get("role", "UNKNOWN"),
         "alarm_count": row.get("alarm_count", 0),
-        "log_count": row.get("log_count", 0),
         "high_weight_alarms": row.get("high_weight_alarms", []),
-        "neighbor_alarm_statistics": row.get("neighbor_alarm_statistics", {}),
         "semantic_summary": row.get("semantic_summary", ""),
-        "summary_context": row.get("summary_context", {}),
     }
+    compact_neighbor_stats = {
+        key: neighbor_stats.get(key, 0)
+        for key in ("neighbors_with_alarms", "total_neighbor_alarms")
+        if neighbor_stats.get(key) is not None
+    }
+    if compact_neighbor_stats:
+        projected["neighbor_alarm_statistics"] = compact_neighbor_stats
     if mode in ("m23", "m123"):
-        projected["temporal"] = row.get("temporal", {})
+        temporal = row.get("temporal") or {}
+        projected["temporal"] = {
+            key: temporal.get(key, 0)
+            for key in ("raw_temporal_score", "timestamp_count")
+            if temporal.get(key) is not None
+        }
     if mode == "m123":
         projected["cross"] = row.get("cross", 0)
         topology = row.get("topology") or {}
+
+        allowed = set(candidate_ips) if candidate_ips is not None else None
+
+        def compact_neighbors(values: Any) -> List[str]:
+            if not isinstance(values, list):
+                return []
+            result: List[str] = []
+            for value in values:
+                ip = str(value) if value is not None else ""
+                if not ip or (allowed is not None and ip not in allowed):
+                    continue
+                if ip not in result:
+                    result.append(ip)
+            return result
+
         projected["topology"] = {
-            "upstream": list(topology.get("upstream", []) or [])[:10],
-            "downstream": list(topology.get("downstream", []) or [])[:10],
+            "upstream_candidates": compact_neighbors(topology.get("upstream")),
+            "downstream_candidates": compact_neighbors(topology.get("downstream")),
         }
     return projected
 
@@ -451,41 +505,10 @@ def _build_llm_prompt(
     evidence_rows: Sequence[Dict[str, Any]],
 ) -> str:
     if mode == "m123_all_llm_evidence":
-        pagerank_rows = (
-            (ranking_evidence.get("pagerank") or {}).get("rankings", [])
-        )
-        pagerank_by_ip = {
-            row.get("ip"): {
-                key: value
-                for key, value in row.items()
-                if key not in {"rank", "combined_score", "evidence_score"}
-            }
-            for row in pagerank_rows
-            if isinstance(row, dict) and row.get("ip")
-        }
-        allowed = sorted(ranking_evidence.get("allowed_candidate_ips", []))
-        pagerank_evidence = {
-            "allowed_candidate_ips": allowed,
-            "pagerank_features": [
-                {"ip": ip, **pagerank_by_ip.get(ip, {})}
-                for ip in allowed
-            ],
-        }
-        rows_by_ip = {
-            row.get("candidate_ip"): row
-            for row in evidence_rows
-            if isinstance(row, dict) and row.get("candidate_ip")
-        }
-        ordered_rows = [
-            rows_by_ip.get(ip, {"candidate_ip": ip})
-            for ip in allowed
-        ]
         return ALL_LLM_EVIDENCE_PROMPT.format(
-            FAULT_INFO=json.dumps(_fault_info_view(info), ensure_ascii=False, indent=2),
-            PAGERANK_EVIDENCE=json.dumps(
-                pagerank_evidence, ensure_ascii=False, indent=2
-            ),
-            EVIDENCE_ROWS=json.dumps(ordered_rows, ensure_ascii=False, indent=2),
+            EVIDENCE_TABLE=json.dumps(
+                list(evidence_rows), ensure_ascii=False, indent=2
+            )
         )
 
     gate_context = {
@@ -639,7 +662,12 @@ def build_case_plan(
     }
     allowed_ips = initial_ips[:effective_k]
     projected_rows = [
-        _project_evidence_row(row_by_ip.get(ip, {"candidate_ip": ip}), pipeline_mode)
+        _project_evidence_row(
+            row_by_ip.get(ip, {"candidate_ip": ip}),
+            mode,
+            candidate_ips=allowed_ips,
+            compact=mode == "m123_all_llm_evidence",
+        )
         for ip in allowed_ips
     ]
     ranking = _ranking_evidence(
