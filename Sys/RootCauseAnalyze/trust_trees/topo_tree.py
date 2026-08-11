@@ -7,6 +7,7 @@ from .common import (
     ips_from_entries,
     normalize_entries,
     top1_largest_local_gap,
+    top1_margin_percent,
     top3_overlap,
     tree_result,
     truthy,
@@ -82,6 +83,7 @@ def assess_topo_tree(topo: Dict[str, Any]) -> Dict[str, Any]:
             "ranking_shape_ok": ranking_shape_ok,
             "algorithm_evidence_ok": algorithm_evidence_ok,
             "pagerank_available": pagerank_available,
+            "top1_margin_percent": top1_margin_percent(entries),
             "top_entry": top_entry,
         },
     )

@@ -163,7 +163,7 @@ def _build_gate_context(gate: dict, skill_ret: str) -> str:
 
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
-                 confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0,
+                 confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=15.0,
                  summarize_nodes=False, summary_model_path=None, summary_npu_cards=None,
                  summary_max_tokens=1024, summary_cache_dir=None):
         """
@@ -642,7 +642,7 @@ def _report_gt_check(root_path: str, reports: list):
         print(f"[GT 诊断] 保存失败: {e}")
 
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=15.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -701,7 +701,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=15.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -808,9 +808,9 @@ if __name__ == "__main__":
     p.add_argument("--confidence-gate", action="store_true",
                    help="启用置信度门控：高置信算法结果跳过 LLM 重排")
     p.add_argument("--confidence-high-margin", type=float, default=15.0,
-                   help="combined Top-1/Top-2 分差达到该阈值时跳过 LLM (default: 15.0)")
-    p.add_argument("--confidence-agreement-margin", type=float, default=8.0,
-                   help="多方法同意且 combined 分差达到该阈值时跳过 LLM (default: 8.0)")
+                   help="combined Top-1/Top-2 相对分差百分比阈值 (default: 15.0)")
+    p.add_argument("--confidence-agreement-margin", type=float, default=15.0,
+                   help="topo/temporal 各自 Top-1/Top-2 相对分差百分比阈值 (default: 15.0)")
     p.add_argument("--summarize-nodes", action="store_true",
                    help="Summarize candidate NODES with a small model before sending them to the RCA LLM")
     p.add_argument("--summary-model-path", default=os.environ.get("PINGMESH_SUMMARY_MODEL_PATH", ""),

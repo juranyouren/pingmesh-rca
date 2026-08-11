@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from Sys.RootCauseAnalyze.trust_trees.common import normalize_entries, score_key_for, unique_ips
+from Sys.RootCauseAnalyze.trust_trees.common import (
+    normalize_entries,
+    score_key_for,
+    top1_margin_percent,
+    unique_ips,
+)
 from Sys.RootCauseAnalyze.trust_trees.router import POLICY_VERSION, route_with_trust_trees
 from Sys.RootCauseAnalyze.trust_trees.temporal_tree import assess_temporal_tree
 from Sys.RootCauseAnalyze.trust_trees.topo_tree import assess_topo_tree
@@ -30,6 +35,11 @@ def _method_ips(data: Dict[str, Any], method: str, limit: int = 5) -> List[str]:
     return unique_ips(row.get("ip") for row in entries[:limit])
 
 
+def _method_margin_percent(data: Dict[str, Any], method: str) -> float | None:
+    entries = normalize_entries(_extract_rankings(data, method), score_key_for(method))
+    return top1_margin_percent(entries)
+
+
 def _invalid_gate(reason: str) -> Dict[str, Any]:
     empty_tree = {"state": "weak", "passed": [], "failed": [reason], "evidence": {}}
     return {
@@ -45,6 +55,14 @@ def _invalid_gate(reason: str) -> Dict[str, Any]:
             "top3_overlap_ips": [],
             "method_top_ips": {"topo": None, "temporal": None, "combined": None},
         },
+        "safety_certificate": {
+            "safe_to_bypass": False,
+            "checks": {"rankings_complete": False},
+            "passed": [],
+            "failed": ["rankings_complete"],
+            "margins_percent": {"combined": None, "topo": None, "temporal": None},
+            "thresholds_percent": {"combined": None, "ranker": None},
+        },
         "trust_trees": {"topo": empty_tree, "temporal": empty_tree},
     }
 
@@ -53,12 +71,13 @@ def assess_gate(
     skill_ret: str,
     *,
     high_margin: float = 15.0,
-    agreement_margin: float = 8.0,
+    agreement_margin: float = 15.0,
 ) -> Dict[str, Any]:
-    """Assess trust-tree route for one case.
+    """Assess the strict fail-closed route for one case.
 
-    The margin arguments are accepted for backward CLI compatibility. They are
-    intentionally not used by the trust-tree policy.
+    ``high_margin`` is the required combined Top-1/Top-2 relative gap and
+    ``agreement_margin`` is the required gap for each independent ranker. Both
+    are percentage-point values and now participate in the decision.
     """
     data = _safe_load_skill_ret(skill_ret)
     if not data:
@@ -76,8 +95,13 @@ def assess_gate(
         temporal_ips=temporal_ips,
         topo_tree=assess_topo_tree(data.get("topo", {})),
         temporal_tree=assess_temporal_tree(data.get("temporal", {})),
+        combined_margin_percent=_method_margin_percent(data, "combined"),
+        topo_margin_percent=_method_margin_percent(data, "topo"),
+        temporal_margin_percent=_method_margin_percent(data, "temporal"),
+        min_combined_margin_percent=high_margin,
+        min_ranker_margin_percent=agreement_margin,
     )
-    gate["legacy_thresholds_ignored"] = {
+    gate["thresholds"] = {
         "high_margin": high_margin,
         "agreement_margin": agreement_margin,
     }

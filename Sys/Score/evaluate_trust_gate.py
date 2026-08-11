@@ -13,6 +13,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from Sys.RootCauseAnalyze.trust_trees.common import top1_margin_percent
 from Sys.RootCauseAnalyze.trust_trees.router import route_with_trust_trees
 from Sys.Score.Score_N import ResponseParser, Scorer
 
@@ -120,6 +121,18 @@ def _detail_ips(details: Dict[str, Any], key: str) -> List[str]:
     return []
 
 
+def _detail_margin_percent(details: Dict[str, Any], key: str) -> float | None:
+    block = details.get(key, {})
+    if not isinstance(block, dict):
+        return None
+    for field in ("topk", "top5", "top3", "rankings"):
+        pairs = _normalize_entries(block.get(field, []))
+        if pairs:
+            entries = [{"score": score} for _ip, score in pairs]
+            return top1_margin_percent(entries)
+    return None
+
+
 def _tree_from_detail(details: Dict[str, Any], key: str) -> Dict[str, Any]:
     block = details.get(key, {})
     if isinstance(block, dict) and isinstance(block.get("trust_tree"), dict):
@@ -196,6 +209,9 @@ def _case_row(record: Dict[str, Any], index: int) -> Dict[str, Any]:
         temporal_ips=temporal_ips,
         topo_tree=_tree_from_detail(details, "1"),
         temporal_tree=_tree_from_detail(details, "2"),
+        combined_margin_percent=_detail_margin_percent(details, "combined"),
+        topo_margin_percent=_detail_margin_percent(details, "1"),
+        temporal_margin_percent=_detail_margin_percent(details, "2"),
     )
     gt_ips = _gt_ips(record)
 

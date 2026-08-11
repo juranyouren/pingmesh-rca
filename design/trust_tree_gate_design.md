@@ -9,35 +9,44 @@ trees instead of a continuous confidence score:
 - `topo_trust_tree`: topology/PageRank evidence.
 - `temporal_trust_tree`: temporal burst/early/density evidence.
 
-Each tree returns `strong`, `weak`, or `uncertain`.
+Each tree returns `strong`, `weak`, or `uncertain`.  The active router is
+`strict_fail_closed_v2`: tree strength is necessary but not sufficient for a
+bypass.
 
 ## Routing
 
-`rank_near` is true when topo and temporal Top-1 match, or their Top-3 overlap
-has at least two devices.
+`rank_near` remains a diagnostic field only.  It never authorizes a bypass.
 
 ```text
-if topo == weak and temporal == weak:
-    operator_review
-elif rank_near:
-    accept_combined
-elif topo == strong and temporal != strong:
-    invoke_llm
-elif temporal == strong and topo != strong:
-    accept_temporal
-elif topo == strong and temporal == strong:
-    invoke_llm
+if all strict safety-certificate checks pass:
+    accept combined Top-1 only
 else:
     invoke_llm
 ```
 
-In v1, topology evidence is useful for conflict detection and LLM arbitration,
-but `topo strong` alone is not trusted as an autonomous Top-1 decision. The
-current validation set showed that the former `accept_topo` route was too noisy,
-so those cases are routed to LLM instead.
+The safety certificate requires complete rankings; exact Top-1 unanimity across
+topo, temporal, and combined rankings; both trees strong; directed/undirected
+topology Top-1 unanimity; direct high-weight alarm evidence; burst/early Top-1
+unanimity; usable temporal data; and calibrated score margins.  Missing evidence
+fails closed and invokes the LLM.  A successful bypass emits one IP, not Top-3.
 
-`operator_review` returns an empty `response.ip` list so automatic scoring does
-not count it as an automated diagnosis.
+The former `trust_tree_v1` behavior is frozen in
+`Sys/RootCauseAnalyze/gate_policies/baseline.py` for ablation only.
+
+## Gate Safety Evaluation
+
+The gate's positive class is a deterministic combined-ranking miss.  Error
+recall measures how many such cases are routed away from bypass.  The hard
+safety target is 100% error recall and zero unsafe bypasses:
+
+```bash
+bash scripts/run_gate_recall_test.sh \
+  /path/to/skillpipe/res.json \
+  /path/to/output/gate_recall \
+  1
+```
+
+The command exits with status 2 when the safety target is not met.
 
 ## Server Evaluation
 

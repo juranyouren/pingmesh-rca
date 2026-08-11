@@ -82,19 +82,21 @@ unconstrained reranker.
 ### 5.1 Trust-Tree Gate
 
 The old continuous confidence direction was replaced by auditable logical trust
-trees. The active policy is `trust_tree_v1`:
+trees. The active policy is `strict_fail_closed_v2`:
 
-- accept combined ranking when topo and temporal rankers are near agreement;
-- accept temporal ranking when temporal evidence is strong and topo is not;
-- defer topo-strong conflicts to the LLM because topo confidence can be diluted
-  by topology shape and incomplete alarm semantics;
-- route both-weak cases to operator review.
+- bypass only when topo, temporal, and combined Top-1 are identical and every
+  safety-certificate check passes;
+- require both trust trees strong, direct alarm evidence, exact internal
+  topology/temporal agreement, and calibrated score margins;
+- emit only the unanimous Top-1 for bypass cases;
+- route every incomplete, weak, uncertain, or conflicting case to the LLM.
 
 Main files:
 
 - `Sys/RootCauseAnalyze/gate/decision.py`
 - `Sys/RootCauseAnalyze/trust_trees/router.py`
 - `Sys/Score/evaluate_trust_gate.py`
+- `Sys/Score/evaluate_gate_recall.py`
 - `Sys/Score/apply_trust_gate.py`
 
 ### 5.2 SECL Evidence Organization And Device-State Summarization

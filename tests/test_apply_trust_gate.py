@@ -15,9 +15,34 @@ class ApplyTrustGateTest(unittest.TestCase):
                 "gt_ips": ["10.0.0.1"],
                 "response": "unused",
                 "skill_details": {
-                    "combined": {"topk": [{"ip": "10.0.0.1", "combined_score": 0.9}]},
-                    "1": {"topk": [{"ip": "10.0.0.1", "pr_score": 0.9}], "trust_tree": {"state": "strong"}},
-                    "2": {"topk": [{"ip": "10.0.0.1", "score": 0.8}], "trust_tree": {"state": "strong"}},
+                    "combined": {"topk": [
+                        {"ip": "10.0.0.1", "combined_score": 0.9},
+                        {"ip": "10.0.0.2", "combined_score": 0.5},
+                    ]},
+                    "1": {
+                        "topk": [
+                            {"ip": "10.0.0.1", "pr_score": 0.9},
+                            {"ip": "10.0.0.2", "pr_score": 0.5},
+                        ],
+                        "trust_tree": {"state": "strong", "evidence": {
+                            "directed_top3": ["10.0.0.1", "10.0.0.2"],
+                            "undirected_top3": ["10.0.0.1", "10.0.0.2"],
+                            "top_entry": {"high_weight_alarm_hit": True},
+                        }},
+                    },
+                    "2": {
+                        "topk": [
+                            {"ip": "10.0.0.1", "score": 0.8},
+                            {"ip": "10.0.0.2", "score": 0.4},
+                        ],
+                        "trust_tree": {"state": "strong", "evidence": {
+                            "ref_time_ms": 123,
+                            "devices_with_timestamps": 3,
+                            "top_event_count": 2,
+                            "burst_top3": ["10.0.0.1", "10.0.0.2"],
+                            "early_top3": ["10.0.0.1", "10.0.0.2"],
+                        }},
+                    },
                 },
             },
             {

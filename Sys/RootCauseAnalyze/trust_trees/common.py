@@ -67,6 +67,21 @@ def top1_largest_local_gap(entries: Sequence[Dict[str, Any]]) -> bool:
     return gaps[0] > max(gaps[1:])
 
 
+def top1_margin_percent(entries: Sequence[Dict[str, Any]]) -> float | None:
+    """Return the relative Top-1/Top-2 score gap in percentage points.
+
+    A missing runner-up is treated as uncalibrated rather than perfectly
+    separated.  This is deliberately fail-closed for gate decisions.
+    """
+    if len(entries) < 2:
+        return None
+    top1 = as_float(entries[0].get("score"))
+    top2 = as_float(entries[1].get("score"))
+    if top1 <= 0 or top2 > top1:
+        return None
+    return 100.0 * (top1 - top2) / max(abs(top1), 1e-12)
+
+
 def top3_overlap(left_ips: Sequence[str], right_ips: Sequence[str]) -> Tuple[int, List[str]]:
     left = list(left_ips[:3])
     right = list(right_ips[:3])
