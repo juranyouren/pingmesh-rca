@@ -412,6 +412,33 @@ def _make_bypass_response(gate: Dict[str, Any], initial_ranking: Sequence[str]) 
     return "```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```"
 
 
+def _candidate_assessment_ips(parsed: Dict[str, Any]) -> List[str]:
+    assessments = parsed.get("candidate_assessments")
+    values: List[Any] = []
+    if isinstance(assessments, list):
+        for item in assessments:
+            if isinstance(item, dict):
+                values.append(item.get("ip"))
+            elif isinstance(item, str):
+                values.append(item)
+    elif isinstance(assessments, dict):
+        for key, item in assessments.items():
+            if isinstance(item, dict) and item.get("ip"):
+                values.append(item.get("ip"))
+            else:
+                values.append(key)
+    return [str(value) for value in values if value not in (None, "")]
+
+
+def _legacy_ip_ranking(parsed: Dict[str, Any]) -> List[str]:
+    values = parsed.get("ip", [])
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if value not in (None, "")]
+
+
 def constrain_llm_response(
     raw_response: str, allowed_candidates: Sequence[str]
 ) -> tuple[str, Dict[str, Any]]:
@@ -431,22 +458,56 @@ def constrain_llm_response(
             parsed = value
             parse_success = True
             break
-    raw_ips = parsed.get("ip", []) if parsed else []
-    if isinstance(raw_ips, str):
-        raw_ips = [raw_ips]
-    if not isinstance(raw_ips, list):
-        raw_ips = []
-    valid_ips: List[str] = []
+
+    assessment_ips = _candidate_assessment_ips(parsed)
+    legacy_ips = _legacy_ip_ranking(parsed)
+    model_ranking_source = (
+        "candidate_assessments"
+        if assessment_ips
+        else "legacy_ip"
+        if legacy_ips
+        else "none"
+    )
+    raw_ips = assessment_ips or legacy_ips
+    normalized_assessments = list(dict.fromkeys(assessment_ips))
+    normalized_legacy = list(dict.fromkeys(legacy_ips))
+    ranking_conflict = bool(
+        assessment_ips
+        and legacy_ips
+        and normalized_assessments != normalized_legacy
+    )
+
+    valid_model_ips: List[str] = []
     rejected_ips: List[str] = []
+    duplicate_ips: List[str] = []
     for value in raw_ips:
         ip = str(value) if value is not None else ""
-        if ip in allowed_set and ip not in valid_ips:
-            valid_ips.append(ip)
+        if ip in allowed_set and ip not in valid_model_ips:
+            valid_model_ips.append(ip)
+        elif ip in allowed_set and ip not in duplicate_ips:
+            duplicate_ips.append(ip)
         elif ip and ip not in rejected_ips:
             rejected_ips.append(ip)
-    used_fallback = not valid_ips
+
+    target_count = min(5, len(allowed))
+    truncated_ips = valid_model_ips[target_count:]
+    valid_ips = valid_model_ips[:target_count]
+    filled_ips: List[str] = []
+    for ip in allowed:
+        if len(valid_ips) >= target_count:
+            break
+        if ip not in valid_ips:
+            valid_ips.append(ip)
+            filled_ips.append(ip)
+
+    used_fallback = not valid_model_ips
     if used_fallback:
-        valid_ips = allowed[:5]
+        ranking_source = "fallback_initial_order"
+    elif filled_ips:
+        ranking_source = f"{model_ranking_source}_with_table_fill"
+    else:
+        ranking_source = model_ranking_source
+
     payload = {
         "decision": parsed.get("decision", "insufficient_evidence"),
         "reasoning": parsed.get(
@@ -459,9 +520,26 @@ def constrain_llm_response(
         "parse_success": parse_success,
         "parsed_payload": parsed,
         "raw_ips": raw_ips,
+        "assessment_ip_ranking": assessment_ips,
+        "legacy_ip_ranking": legacy_ips,
+        "ranking_source": ranking_source,
+        "ranking_conflict": ranking_conflict,
+        "model_candidate_count": len(raw_ips),
+        "valid_model_candidate_count": len(valid_model_ips),
         "rejected_ips": rejected_ips,
+        "duplicate_ips": duplicate_ips,
+        "truncated_ips": truncated_ips,
+        "filled_ips": filled_ips,
+        "final_candidate_count": len(valid_ips),
+        "candidate_shortfall": len(allowed) < 5,
         "used_initial_ranking_fallback": used_fallback,
-        "output_was_filtered": bool(rejected_ips) or used_fallback,
+        "output_was_filtered": bool(
+            rejected_ips
+            or duplicate_ips
+            or truncated_ips
+            or filled_ips
+            or used_fallback
+        ),
     }
     return (
         "```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```",
@@ -1088,6 +1166,7 @@ def _write_ablation_evaluation_artifacts(
             "llm_ranking": list(final_prediction.ips),
             "rank_diff": rank_diff,
             "evaluation": evaluation,
+            "llm_output_filter": result.get("llm_output_filter", {}),
             "token_usage": result.get("token_usage", {}),
             "runtime": result.get("runtime", {}),
         }
@@ -1160,6 +1239,10 @@ def _write_ablation_evaluation_artifacts(
             badcase_dir / "09_timing.json",
         )
         _save_json(source_refs, badcase_dir / "10_source_refs.json")
+        _save_json(
+            result.get("llm_output_filter", {}),
+            badcase_dir / "11_output_filter.json",
+        )
         badcase_index.append(
             {
                 "case_id": case_id,

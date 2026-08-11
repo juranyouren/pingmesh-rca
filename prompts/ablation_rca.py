@@ -1,6 +1,6 @@
 """Constrained large-model prompts used by the ablation experiments."""
 
-_EVIDENCE_TABLE_PROMPT_VERSION = "evidence-table-root-cause-v3"
+_EVIDENCE_TABLE_PROMPT_VERSION = "evidence-table-root-cause-v4"
 
 _EVIDENCE_TABLE_PROMPT = """# 角色
 
@@ -57,8 +57,10 @@ _EVIDENCE_TABLE_PROMPT = """# 角色
 4. 设备告警数量多不等于根因，也可能是故障传播后的传播节点或受影响节点。
 5. 重点分析设备自身告警、告警时间和集中程度、邻居告警关系、上下游位置，以及设备更像根因、传播节点还是受影响节点。
 6. 如果多个候选设备的证据基本等价，不要强行制造差异，应标记为 `uncertain`。
-7. 分析并输出 5 个候选；每个候选的支持证据和反对证据各使用一句短语。
-8. 不输出思维过程，只输出结论和简短依据。
+7. `candidate_assessments` 必须按照根因嫌疑从高到低排列，并且恰好包含 5 个候选。
+8. 5 个候选 IP 必须互不重复，且全部来自 `evidence_table`；每个候选的支持证据和反对证据各使用一句短语。
+9. `candidate_assessments` 的数组顺序是唯一的最终排名，不要再输出单独的 IP 排名列表。
+10. 不输出思维过程，只输出结论和简短依据。
 
 # 候选证据表
 
@@ -79,8 +81,7 @@ _EVIDENCE_TABLE_PROMPT = """# 角色
       "counter_evidence": "不支持该判断的一句短证据"
     }}
   ],
-  "reasoning": "最终排序依据，不超过两句话",
-  "ip": ["<最可能根因 IP>", "<第二名候选 IP>"]
+  "reasoning": "最终排序依据，不超过两句话"
 }}
 """
 

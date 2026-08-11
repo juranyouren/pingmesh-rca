@@ -223,7 +223,59 @@ def test_llm_response_is_filtered_to_allowed_candidates():
     assert '"10.0.0.2"' in response
     assert "9.9.9.9" not in response
     assert audit["rejected_ips"] == ["9.9.9.9"]
+    assert audit["ranking_source"] == "legacy_ip_with_table_fill"
+    assert audit["candidate_shortfall"] is True
     assert audit["output_was_filtered"] is True
+
+
+def test_candidate_assessment_order_wins_and_is_filled_to_five():
+    allowed = [f"10.0.0.{index}" for index in range(1, 7)]
+    raw = json.dumps(
+        {
+            "decision": "adjust_ranking",
+            "candidate_assessments": [
+                {"ip": "10.0.0.2"},
+                {"ip": "10.0.0.1"},
+                {"ip": "10.0.0.1"},
+                {"ip": "9.9.9.9"},
+            ],
+            "reasoning": "x",
+            "ip": ["10.0.0.5", "10.0.0.4", "10.0.0.3"],
+        }
+    )
+
+    response, audit = constrain_llm_response(raw, allowed)
+    payload = json.loads(response.removeprefix("```json\n").removesuffix("\n```"))
+
+    assert payload["ip"] == [
+        "10.0.0.2",
+        "10.0.0.1",
+        "10.0.0.3",
+        "10.0.0.4",
+        "10.0.0.5",
+    ]
+    assert audit["ranking_source"] == "candidate_assessments_with_table_fill"
+    assert audit["ranking_conflict"] is True
+    assert audit["model_candidate_count"] == 4
+    assert audit["duplicate_ips"] == ["10.0.0.1"]
+    assert audit["rejected_ips"] == ["9.9.9.9"]
+    assert audit["filled_ips"] == ["10.0.0.3", "10.0.0.4", "10.0.0.5"]
+    assert audit["final_candidate_count"] == 5
+    assert audit["candidate_shortfall"] is False
+
+
+def test_unparseable_output_falls_back_to_first_five_candidates():
+    allowed = [f"10.0.0.{index}" for index in range(1, 7)]
+
+    response, audit = constrain_llm_response("not json", allowed)
+    payload = json.loads(response.removeprefix("```json\n").removesuffix("\n```"))
+
+    assert payload["ip"] == allowed[:5]
+    assert audit["ranking_source"] == "fallback_initial_order"
+    assert audit["model_candidate_count"] == 0
+    assert audit["filled_ips"] == allowed[:5]
+    assert audit["final_candidate_count"] == 5
+    assert audit["used_initial_ranking_fallback"] is True
 
 
 def test_all_llm_modes_force_every_gate_route_and_use_compact_prompts(tmp_path):
@@ -299,7 +351,8 @@ def test_all_llm_modes_force_every_gate_route_and_use_compact_prompts(tmp_path):
         assert '"burst_score"' not in prompt
         assert "一级证据" in prompt
         assert "propagation_node" in prompt
-        assert "分析并输出 5 个候选" in prompt
+        assert "恰好包含 5 个候选" in prompt
+        assert '"ip": [' not in prompt
     assert _prompt_version(rerank["mode"]) == _prompt_version(evidence["mode"])
 
 
@@ -330,7 +383,7 @@ def test_all_ablation_modes_use_the_same_evidence_table_prompt():
     assert len(set(prompts.values())) == 1
     for prompt in prompts.values():
         assert "# 根因判定规则" in prompt
-        assert "分析并输出 5 个候选" in prompt
+        assert "恰好包含 5 个候选" in prompt
         assert '"candidate_ip": "10.0.0.1"' in prompt
         assert "Gate 上下文" not in prompt
         assert "故障概况" not in prompt
@@ -453,6 +506,7 @@ def test_ablation_badcase_writes_detailed_folder(tmp_path):
         "08_rank_diff.json",
         "09_timing.json",
         "10_source_refs.json",
+        "11_output_filter.json",
     ):
         assert (badcase_dir / name).exists()
 
