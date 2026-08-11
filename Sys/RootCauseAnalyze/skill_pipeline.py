@@ -3,11 +3,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from typing import Sequence
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from Sys.RootCauseAnalyze.skills.fusion import _combine_scores, rank_devices_by_skills
-from Sys.utils.case_utils import find_full_link_file, load_case_info, load_case_nodes, read_gt_ips
+from Sys.utils.case_utils import find_full_link_file, load_case_info, load_case_nodes
 from Sys.utils.io_utils import save_json
 
 __all__ = ["_combine_scores", "rank_devices_by_skills", "run_skill_pipeline"]
@@ -75,7 +80,7 @@ def run_skill_pipeline(
                     "draft_response": mock_str,
                     "response": mock_str,
                     "skill_ips": predicted_ips,
-                    "gt_ips": read_gt_ips(dirpath),
+                    "gt_ips": [],
                 }
             )
             case_count += 1

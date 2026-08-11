@@ -1,74 +1,55 @@
-# Experiment Scripts
+# RCA Experiment Scripts
 
-Use `scripts/common.sh` as the single source of server paths and model defaults.
-The `run_paper_*.sh` scripts are thin wrappers for thesis experiments; they avoid
-duplicating algorithm logic and keep each experiment tied to one research question.
+`scripts/common.sh` is the single source of paths, model settings, NPU cards,
+and default Top-K values. Override its values with environment variables rather
+than editing individual runners.
 
-## Current M1/M13/M23/M123 workflow
-
-Precompute all-device neighbour-aware summaries and evidence tables once:
-
-```bash
-export PINGMESH_SUMMARY_NPU_CARDS=0,1,2,3
-bash scripts/run_evidence_precompute.sh
-```
-
-Then run the isolated ablations. Each semicolon-separated NPU group loads one
-replica of the same large model:
-
-```bash
-export PINGMESH_LLM_NPU_GROUPS='0,1;2,3'
-bash scripts/run_ablation_study.sh
-```
-
-Use `bash scripts/run_ablation_study.sh --plan-only` to generate Gate decisions,
-the rerun-case list, and exact large-model prompts without starting vLLM.
+## Supported entrypoints
 
 | Script | Purpose |
 | --- | --- |
+| `run_rca_experiments.sh` | Canonical deterministic → gate search → gate verification → optional local-LLM pipeline. |
+| `run_rca_inference.sh` | One inference job using a previously selected gate policy. |
 | `run_paper_01_skill_ablation.sh` | Topology, temporal, and fused deterministic ablation. |
-| `run_paper_02_gate_routing.sh` | Trust-tree routing without LLM calls. |
-| `run_paper_03_llm_arbitration.sh` | Full LLM reranking vs gated LLM arbitration. |
-| `run_paper_04_gate_policy_analysis.sh` | Gate policy comparison and route selection analysis. |
-| `run_paper_05_precompute_summary_cache.sh` | Precompute small-model candidate summaries. |
-| `run_paper_06_cached_summary_llm.sh` | Cached-summary LLM arbitration experiment. |
-| `stat_focus_device_evidence.py` | Quantify anonymized alarm/log volume on the Top-K highest-volume devices. |
+| `run_paper_02_gate_routing.sh` | Offline safe-gate selection and routing evaluation. |
+| `run_paper_03_llm_arbitration.sh` | Full local LLM versus gated local LLM. |
+| `run_paper_04_summary_ablation.sh` | Precompute/reuse node summaries and compare cached-summary LLM variants. |
+| `run_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline1 baselines. |
+| `precompute_node_summaries.py` | Low-level summary-cache builder used by paper experiment 04. |
 
-Typical order:
+## Main RCA workflow
 
 ```bash
 source scripts/common.sh
+PINGMESH_EXPERIMENTS="pipe gate_auto pipe_llm gate_llm" \
+  ./scripts/run_rca_experiments.sh
+```
 
+`gate_auto` always runs after deterministic results exist. It searches policies,
+applies the selected configuration, asserts zero unsafe bypasses and the target
+error recall, and emits the gate evaluation reports. Gated LLM runs use the
+selected JSON through `PINGMESH_GATE_POLICY_CONFIG`.
+
+For a later inference run:
+
+```bash
+source scripts/common.sh
+export PINGMESH_GATE_POLICY_CONFIG="$PINGMESH_RESULTS/<run>/gate_search/selected_gate_policy.json"
+PINGMESH_ENABLE_GATE=1 ./scripts/run_rca_inference.sh
+```
+
+## Paper workflow
+
+```bash
 ./scripts/run_paper_01_skill_ablation.sh
 ./scripts/run_paper_02_gate_routing.sh
 ./scripts/run_paper_03_llm_arbitration.sh
-
-# After paper_03 produces <run>/gate_pipe_llm:
-./scripts/run_paper_04_gate_policy_analysis.sh "$PINGMESH_RESULTS/<run>/gate_pipe_llm"
-
-# Optional summary-cache experiments:
-export PINGMESH_SUMMARY_CACHE_DIR="$PINGMESH_RESULTS/summary_cache"
-./scripts/run_paper_05_precompute_summary_cache.sh
-./scripts/run_paper_06_cached_summary_llm.sh
+./scripts/run_paper_04_summary_ablation.sh
+./scripts/run_baselines.sh
 ```
 
-Focused-device evidence-volume report:
+Use `./scripts/run_paper_04_summary_ablation.sh --reuse-cache` after the cache
+has already been generated.
 
-```bash
-python scripts/stat_focus_device_evidence.py \
-  --large-event-threshold 10
-```
-
-The command ranks devices by `alarm_count + log_count` and writes
-`device_statistics.csv`, `case_statistics.csv`, `report.json`, and a
-paper-ready `summary.md`. The defaults are `data/node/nodes_max_labeled` and
-Top-5; the output directory is generated as
-`data/res/focus_device_evidence_YYYYMMDD_HHMMSS`. It does not read
-`label.json`, does not emit alarm text, and anonymizes case/device identifiers
-by default.
-
-The case-level log count comes from `full_link.log_list.total` (also compatible
-with `loglist.total`) under `data/raw/pingmesh_extend_dedup`. Per-device log
-counts are estimates allocated in proportion to `alarm_count + 1` with the
-largest-remainder method, so the integer estimates exactly conserve each raw
-case total.
+Historical M1/M2/M3 evidence-table experiments and the old policy wrappers live
+under `archive/experiments/`. They are not supported runtime entrypoints.

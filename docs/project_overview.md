@@ -18,8 +18,8 @@ The current system combines deterministic ranking and local LLM review:
      the fault reference time.
 3. Fuse ranker outputs into a compact candidate evidence table.
 4. Route the case through a trust-tree gate.
-5. Bypass the LLM for high-trust cases, send ambiguous cases to a local LLM, or
-   mark weak-signal cases for operator review.
+5. Bypass the LLM only when the selected policy produces a complete safety
+   certificate; otherwise fail closed to the local LLM.
 6. Evaluate with `Score_N` Top-1/Top-3/Top-5 metrics.
 
 ## 2. Current Constraints
@@ -51,9 +51,9 @@ The current system combines deterministic ranking and local LLM review:
 | `prompts/` | Active LLM prompt templates used by `SkilledAnalyzer`. |
 | `Baseline/` | Adapted TraceRCA, NetEventCause, and BiAn baselines. |
 | `scripts/` | Server-side experiment entrypoints; `run_paper_*.sh` are thesis experiment wrappers. |
-| `tests/` | Unit tests for modularization, ranker determinism, trust gate, summarizer, and failure analysis. |
+| `tests/` | Local-only ignored regression tests; they are retained in this workspace but not shipped by Git. |
 | `docs/papers/` | Paper text extractions and summaries. Original PDFs live outside the repo. |
-| `tmp/` | One-off diagnostics, labeling helpers, and data repair scripts. Keep these out of the runtime path. |
+| `tmp/` | Ignored generated outputs only; reusable diagnostics belong under `Sys/` and historical tools under `archive/`. |
 
 ## 4. Current Performance Snapshot
 
@@ -82,14 +82,15 @@ unconstrained reranker.
 ### 5.1 Trust-Tree Gate
 
 The old continuous confidence direction was replaced by auditable logical trust
-trees. The active policy is `strict_fail_closed_v2`:
+trees. The active router is `configurable_gate_v1`:
 
-- bypass only when topo, temporal, and combined Top-1 are identical and every
-  safety-certificate check passes;
-- require both trust trees strong, direct alarm evidence, exact internal
-  topology/temporal agreement, and calibrated score margins;
-- emit only the unanimous Top-1 for bypass cases;
-- route every incomplete, weak, uncertain, or conflicting case to the LLM.
+- search named and parameterized strict/balanced policies after deterministic
+  results have been generated;
+- reject any policy with an unsafe bypass, a known-badcase bypass, or error
+  recall below the configured target globally or in a deterministic fold;
+- choose the passing policy with the highest bypass coverage;
+- emit only the combined Top-1 on bypass and fall back to `always_llm` when no
+  useful policy is safe.
 
 Main files:
 
@@ -97,6 +98,7 @@ Main files:
 - `Sys/RootCauseAnalyze/trust_trees/router.py`
 - `Sys/Score/evaluate_trust_gate.py`
 - `Sys/Score/evaluate_gate_recall.py`
+- `Sys/Score/search_gate_policy.py`
 - `Sys/Score/apply_trust_gate.py`
 
 ### 5.2 SECL Evidence Organization And Device-State Summarization
@@ -118,7 +120,7 @@ Main files:
 
 - `Sys/RootCauseAnalyze/gate/node_summarizer.py`
 - `Sys/RootCauseAnalyze/SkilledAnalyzer.py`
-- `scripts/run_gate_pipe_experiments.sh`
+- `scripts/run_rca_experiments.sh`
 
 ### 5.3 Alarm Weight And Semantic Coverage
 
@@ -166,6 +168,24 @@ Main file:
 - `prompts/rca.py`
 - `prompts/skilled.py`
 
+### 5.7 Fault Propagation Path Reconstruction
+
+This is a confirmed research task, not yet an implemented capability. Its target
+is an evidence-grounded device-level propagation DAG with ranked chains and
+alarm-event provenance. Engineer annotation of a path-labeling subset is in
+scope because the current labels identify root-cause devices but do not contain
+ordered nodes or directed propagation edges. Evaluation metrics will remain
+configurable during the labeling pilot; both strict matching and a fully
+specified tolerant/rounded case-level path accuracy are candidates. Before path
+labels exist, topology validity, temporal consistency, and evidence grounding
+must be reported as validity checks rather than causal-path accuracy.
+
+Research memo:
+
+- `docs/故障传播路径还原调研.md`
+- `docs/故障传播路径标注规范_v0.md`
+- `docs/故障传播路径重构方案_v0.md`
+
 ## 6. Deprecated Or Removed Areas
 
 - `SkillBank` is no longer part of the runtime path. The active replacement is
@@ -192,20 +212,27 @@ python Sys/RootCauseAnalyze/skill_pipeline.py \
   --weight-file "$PINGMESH_WEIGHTS_MANUAL"
 
 python Sys/Score/evaluate_trust_gate.py \
-  --res "$PINGMESH_RESULTS/<run>/res.json" \
-  --out-dir "$PINGMESH_RESULTS/<run>/gate_eval"
+  --res "$PINGMESH_RESULTS/<run>/pipe/res.json" \
+  --out-dir "$PINGMESH_RESULTS/<run>/gate_eval" \
+  --policy-config "$PINGMESH_RESULTS/<run>/gate_search/selected_gate_policy.json"
 
 python Sys/Score/apply_trust_gate.py \
-  --res "$PINGMESH_RESULTS/<run>/res.json" \
-  --out "$PINGMESH_RESULTS/<run>/gate_pipe/res.json"
+  --res "$PINGMESH_RESULTS/<run>/pipe/res.json" \
+  --out "$PINGMESH_RESULTS/<run>/gate_selected/res.json" \
+  --policy-config "$PINGMESH_RESULTS/<run>/gate_search/selected_gate_policy.json"
 ```
 
 For the current combined experiment driver:
 
 ```bash
 source scripts/common.sh
-PINGMESH_EXPERIMENTS="pipe gate_eval gate_pipe" ./scripts/run_gate_pipe_experiments.sh
+PINGMESH_EXPERIMENTS="pipe gate_auto" ./scripts/run_rca_experiments.sh
 ```
+
+`gate_auto` always runs in this order: deterministic `pipe/res.json`, policy
+search, selected-policy application, and recall assertion. Its main outputs are
+`gate_search/selected_gate_policy.json`, `gate_selected/res.json`, and
+`gate_recall/gate_recall_summary.json`.
 
 For thesis experiments, use the split wrappers documented in
 `docs/实验脚本说明.md`:
@@ -215,11 +242,13 @@ source scripts/common.sh
 ./scripts/run_paper_01_skill_ablation.sh
 ./scripts/run_paper_02_gate_routing.sh
 ./scripts/run_paper_03_llm_arbitration.sh
+./scripts/run_paper_04_summary_ablation.sh
 ```
 
 ## 8. Testing
 
-Run the local unit suite with:
+The root `tests/` directory is intentionally ignored. In a workspace that keeps
+the local test bundle, run:
 
 ```bash
 python -m pytest -q

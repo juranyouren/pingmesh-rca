@@ -7,13 +7,14 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from Sys.RootCauseAnalyze.trust_trees.common import top1_margin_percent
+from Sys.RootCauseAnalyze.gate_policies.configurable import load_policy_config
 from Sys.RootCauseAnalyze.trust_trees.router import route_with_trust_trees
 from Sys.Score.Score_N import ResponseParser, Scorer
 
@@ -198,7 +199,11 @@ def _case_id(path: str, index: int) -> str:
     return name or f"case_{index:05d}"
 
 
-def _case_row(record: Dict[str, Any], index: int) -> Dict[str, Any]:
+def _case_row(
+    record: Dict[str, Any],
+    index: int,
+    policy_config: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
     details = _skill_details(record)
     combined_ips = _detail_ips(details, "combined") or _dedupe(record.get("skill_ips", []))
     topo_ips = _detail_ips(details, "1")
@@ -212,6 +217,7 @@ def _case_row(record: Dict[str, Any], index: int) -> Dict[str, Any]:
         combined_margin_percent=_detail_margin_percent(details, "combined"),
         topo_margin_percent=_detail_margin_percent(details, "1"),
         temporal_margin_percent=_detail_margin_percent(details, "2"),
+        policy_config=policy_config,
     )
     gt_ips = _gt_ips(record)
 
@@ -270,12 +276,21 @@ def _route_summary(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def evaluate_trust_gate(records: Sequence[Dict[str, Any]], *, out_dir: str) -> Dict[str, Any]:
-    rows = [_case_row(record, idx) for idx, record in enumerate(records)]
+def evaluate_trust_gate(
+    records: Sequence[Dict[str, Any]],
+    *,
+    out_dir: str,
+    policy_config: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    rows = [_case_row(record, idx, policy_config) for idx, record in enumerate(records)]
     route_rows = _route_summary(rows)
     route_counts = dict(Counter(row["route"] for row in rows))
 
     summary = {
+        "policy_name": next(
+            (row["gate"].get("policy_name") for row in rows if row["gate"].get("policy_name")),
+            None,
+        ),
         "total_cases": len(rows),
         "route_counts": route_counts,
         "route_metrics": route_rows,
@@ -302,12 +317,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate trust-tree gate routing on skillpipe res.json.")
     parser.add_argument("--res", required=True, help="Path to skillpipe res.json")
     parser.add_argument("--out-dir", required=True, help="Output directory")
+    parser.add_argument(
+        "--policy-config",
+        help="Selected gate policy JSON produced by search_gate_policy.py",
+    )
     args = parser.parse_args()
 
     records = _load_json(args.res)
     if not isinstance(records, list):
         raise ValueError(f"{args.res} must contain a JSON list")
-    summary = evaluate_trust_gate(records, out_dir=args.out_dir)
+    policy_config = load_policy_config(args.policy_config) if args.policy_config else None
+    summary = evaluate_trust_gate(
+        records,
+        out_dir=args.out_dir,
+        policy_config=policy_config,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

@@ -10,7 +10,9 @@
 # ============================================================
 
 # ── 项目根目录 ──
-export PINGMESH_PROJECT_ROOT="${PINGMESH_PROJECT_ROOT:-/home/sbp/lixinyang/pingmesh}"
+PINGMESH_COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PINGMESH_DEFAULT_PROJECT_ROOT="$(cd -- "${PINGMESH_COMMON_DIR}/.." && pwd)"
+export PINGMESH_PROJECT_ROOT="${PINGMESH_PROJECT_ROOT:-${PINGMESH_DEFAULT_PROJECT_ROOT}}"
 
 # ── 数据路径 ──
 export PINGMESH_DATA="${PINGMESH_DATA:-${PINGMESH_PROJECT_ROOT}/data/node/nodes_max_labeled}"

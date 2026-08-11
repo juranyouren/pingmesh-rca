@@ -24,7 +24,7 @@ Pingmesh-triggered incidents. The active pipeline is:
 - `Sys/Score/`: evaluation, trust-gate application, and failure analysis.
 - `prompts/`: active LLM prompt templates; do not recreate root-level `utils/`.
 - `scripts/common.sh`: single source of default server paths and model parameters.
-- `scripts/run_gate_pipe_experiments.sh`: current main experiment driver.
+- `scripts/run_rca_experiments.sh`: current main experiment driver.
 - `Baseline/`: TraceRCA, NetEventCause, and BiAn baseline adapters.
 - `docs/project_overview.md`: detailed project state and roadmap.
 

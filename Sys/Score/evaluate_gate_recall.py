@@ -12,12 +12,13 @@ import json
 import os
 import sys
 from collections import Counter, defaultdict
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from Sys.RootCauseAnalyze.gate_policies.configurable import load_policy_config
 from Sys.Score.evaluate_trust_gate import (
     _case_id,
     _case_row,
@@ -36,10 +37,14 @@ def _hit_at(pred_ips: Sequence[str], gt_ips: Sequence[str], k: int) -> bool:
     return bool(gt_ips) and any(ip in set(pred_ips[:k]) for ip in gt_ips)
 
 
-def _case_metrics(record: Dict[str, Any], index: int) -> Dict[str, Any]:
+def _case_metrics(
+    record: Dict[str, Any],
+    index: int,
+    policy_config: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
     details = _skill_details(record)
     combined_ips = _detail_ips(details, "combined") or _dedupe(record.get("skill_ips", []))
-    routed = _case_row(record, index)
+    routed = _case_row(record, index, policy_config)
     gate = routed["gate"]
     gt_ips = _gt_ips(record)
     bypassed = gate.get("decision") == "bypass_llm"
@@ -54,6 +59,7 @@ def _case_metrics(record: Dict[str, Any], index: int) -> Dict[str, Any]:
         "route": gate.get("route"),
         "reason": gate.get("reason"),
         "policy_version": gate.get("policy_version"),
+        "policy_name": gate.get("policy_name"),
         "bypass_ips": bypass_ips,
         "bypassed": bypassed,
         "safety_certificate": gate.get("safety_certificate", {}),
@@ -67,6 +73,20 @@ def _case_metrics(record: Dict[str, Any], index: int) -> Dict[str, Any]:
         row[f"unsafe_bypass_at_{k}"] = bypassed and not bool(bypass_hit)
         row[f"safe_bypass_at_{k}"] = bypassed and bool(bypass_hit)
     return row
+
+
+def build_gate_recall_rows(
+    records: Sequence[Dict[str, Any]],
+    *,
+    policy_config: Mapping[str, Any] | None = None,
+    labeled_only: bool = True,
+) -> List[Dict[str, Any]]:
+    """Build per-case safety rows without writing a report."""
+    rows = [
+        _case_metrics(record, index, policy_config)
+        for index, record in enumerate(records)
+    ]
+    return [row for row in rows if row["gt_ips"]] if labeled_only else rows
 
 
 def _metric_at(rows: Sequence[Dict[str, Any]], k: int) -> Dict[str, Any]:
@@ -96,11 +116,15 @@ def evaluate_gate_recall(
     *,
     out_dir: str,
     target_k: int = 1,
+    policy_config: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if target_k not in {1, 3, 5}:
         raise ValueError("target_k must be one of 1, 3, or 5")
 
-    all_rows = [_case_metrics(record, index) for index, record in enumerate(records)]
+    all_rows = [
+        _case_metrics(record, index, policy_config)
+        for index, record in enumerate(records)
+    ]
     rows = [row for row in all_rows if row["gt_ips"]]
     metrics = {str(k): _metric_at(rows, k) for k in (1, 3, 5)}
     target = metrics[str(target_k)]
@@ -123,7 +147,11 @@ def evaluate_gate_recall(
     summary = {
         "policy_version": next(
             (row.get("policy_version") for row in rows if row.get("policy_version")),
-            "strict_fail_closed_v2",
+            "configurable_gate_v1",
+        ),
+        "policy_name": next(
+            (row.get("policy_name") for row in all_rows if row.get("policy_name")),
+            None,
         ),
         "input_cases": len(records),
         "labeled_cases": len(rows),
@@ -157,6 +185,10 @@ def main() -> None:
     parser.add_argument("--out-dir", required=True, help="Directory for gate recall reports")
     parser.add_argument("--target-k", type=int, choices=[1, 3, 5], default=1)
     parser.add_argument(
+        "--policy-config",
+        help="Selected gate policy JSON produced by search_gate_policy.py",
+    )
+    parser.add_argument(
         "--assert-safe",
         action="store_true",
         help="Exit with status 2 unless error recall is 100%% and unsafe bypass count is zero.",
@@ -166,7 +198,13 @@ def main() -> None:
     records = _load_json(args.res)
     if not isinstance(records, list):
         raise ValueError(f"{args.res} must contain a JSON list")
-    summary = evaluate_gate_recall(records, out_dir=args.out_dir, target_k=args.target_k)
+    policy_config = load_policy_config(args.policy_config) if args.policy_config else None
+    summary = evaluate_gate_recall(
+        records,
+        out_dir=args.out_dir,
+        target_k=args.target_k,
+        policy_config=policy_config,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if args.assert_safe and not summary["safety_target_passed"]:
         raise SystemExit(2)

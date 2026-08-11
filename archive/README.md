@@ -9,6 +9,8 @@ call it from a `scripts/run_paper_*.sh` entrypoint.
 
 | Path | Contents |
 | --- | --- |
+| `design/` | Superseded designs and migration notes retained for traceability. |
 | `notebooks/` | Scratch notebooks kept for traceability. |
+| `ppt/` | Local presentation sources and rendered review images; binaries are ignored. |
 | `tmp_tools/` | Historical diagnostic, labeling, and data-repair scripts. |
 | `tests/` | Tests for archived tools, kept with the archived code. |

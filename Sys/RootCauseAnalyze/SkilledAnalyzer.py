@@ -13,32 +13,17 @@ import logging
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-sys.path.append("/home/sbp/lixinyang/pingmesh")
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 from prompts import PROMPT, SKILLED_PROMPT
 from Sys.config import config
 from Sys.RootCauseAnalyze.skills.provider import BuiltinSkillProvider
-from Sys.utils.case_utils import find_full_link_file, read_gt_ips
+from Sys.utils.case_utils import find_full_link_file
 from Sys.utils.io_utils import load_json, save_json
 from Sys.utils.npu_utils import wait_npu_memory, get_npu_memory_info, list_npu_processes
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_gt_ips(dirpath: str) -> list:
-    """Extract ground-truth IPs from label.json for diagnostics/evaluation."""
-    return read_gt_ips(dirpath)
-
-
-def check_gt_in_prompt(dirpath: str, prompt: str) -> dict:
-    """Check whether ground-truth IPs appear in the prompt text."""
-    gt_ips = _extract_gt_ips(dirpath)
-    missing = [ip for ip in gt_ips if ip not in prompt]
-    return {
-        "dir": dirpath,
-        "gt_ips": gt_ips,
-        "missing_ips": missing,
-        "all_missing": bool(gt_ips) and len(missing) == len(gt_ips),
-    }
 
 
 # ── NPU helpers (used by _ensure_llm) ─────────────────────────────────
@@ -163,7 +148,7 @@ def _build_gate_context(gate: dict, skill_ret: str) -> str:
 
 class SkilledAnalyzer:
     def __init__(self, model_path=None, ASCEND_RT_VISIBLE_DEVICES=None, skill_json_path=None, short=None, top_k=None,
-                 confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=15.0,
+                 confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0,
                  summarize_nodes=False, summary_model_path=None, summary_npu_cards=None,
                  summary_max_tokens=1024, summary_cache_dir=None):
         """
@@ -400,7 +385,7 @@ class SkilledAnalyzer:
         gate = {
             "enabled": False,
             "decision": "invoke_llm",
-            "reason": "confidence_gate_disabled",
+            "reason": "gate_disabled",
             "recommended_ips": skill_ips[:3],
         }
         if self.confidence_gate_enabled and selected_skill_ids:
@@ -411,7 +396,7 @@ class SkilledAnalyzer:
             )
             if gate.get("decision") in ("bypass_llm", "operator_review"):
                 # Summary is not needed for bypass — use raw detail
-                gate_tag = "CONFIDENCE_GATE_BYPASS" if gate.get("decision") == "bypass_llm" else "CONFIDENCE_GATE_OPERATOR_REVIEW"
+                gate_tag = "RCA_GATE_BYPASS" if gate.get("decision") == "bypass_llm" else "RCA_GATE_OPERATOR_REVIEW"
                 final_prompt = (
                     f"{gate_tag}\n"
                     "# 故障概况\n"
@@ -530,14 +515,14 @@ class SkilledAnalyzer:
                     print("========== FIRST FINAL PROMPT END ==========\n", flush=True)
                 skill_ips_list.append(skill_ips)
                 confidence_gates.append(gate)
-                # 读取 gt_ips
-                gt_ips_list.append(self._read_gt_ips(dirpath))
+                # Labels are evaluation-only; preserve the result schema without reading them.
+                gt_ips_list.append([])
                 if gate.get("decision") in ("bypass_llm", "operator_review"):
                     final_responses[len(final_prompts) - 1] = make_bypass_response(gate)
                     if gate.get("decision") == "operator_review":
-                        retrieval_responses[len(final_prompts) - 1] = "Confidence gate requested operator review"
+                        retrieval_responses[len(final_prompts) - 1] = "RCA gate requested operator review"
                     else:
-                        retrieval_responses[len(final_prompts) - 1] = "Confidence gate bypassed LLM"
+                        retrieval_responses[len(final_prompts) - 1] = "RCA gate bypassed LLM"
                 else:
                     llm_indices.append(len(final_prompts) - 1)
                     llm_prompts.append(final_p)
@@ -569,11 +554,6 @@ class SkilledAnalyzer:
                     [[]] * len(prompts),
                     [{"enabled": self.confidence_gate_enabled, "decision": "error", "reason": str(e)}] * len(prompts))
 
-    @staticmethod
-    def _read_gt_ips(dirpath: str) -> list:
-        return read_gt_ips(dirpath)
-
-
 def _find_full_link_file(dirpath: str, filenames: list) -> str:
     return find_full_link_file(dirpath, filenames)
 
@@ -581,7 +561,6 @@ def _find_full_link_file(dirpath: str, filenames: list) -> str:
 def generate_prompts(root_path: str) -> tuple:
     dirpath_list = []
     prompt_list = []
-    gt_check_reports = []   # gt_ip 是否在 prompt 中的诊断
     print(f"开始扫描目录 {root_path} 并构造 Prompt...")
 
     for dirpath, dirnames, filenames in os.walk(root_path):
@@ -596,53 +575,13 @@ def generate_prompts(root_path: str) -> tuple:
                 prompt = PROMPT.format(NODES=node, INFO=info)
                 dirpath_list.append(dirpath)
                 prompt_list.append(prompt)
-                # 数据诊断：检查 gt_ip 是否真的在 prompt 里
-                gt_check_reports.append(check_gt_in_prompt(dirpath, prompt))
             except Exception as e:
                 print(f"\n[错误] 读取/解析目录 {dirpath} 时发生异常: {e}")
 
-    # 汇总并落盘 gt_ip 缺失诊断
-    _report_gt_check(root_path, gt_check_reports)
-
     return dirpath_list, prompt_list
 
-
-def _report_gt_check(root_path: str, reports: list):
-    """Print and save prompt coverage diagnostics for ground-truth IPs."""
-    if not reports:
-        return
-    no_gt = [r for r in reports if not r["gt_ips"]]
-    all_missing = [r for r in reports if r["all_missing"]]
-    partial_missing = [r for r in reports if r["missing_ips"] and not r["all_missing"]]
-
-    print("=" * 60)
-    print(f"[GT 诊断] 共 {len(reports)} 个 case")
-    print(f"  - 无 gt_ip 标注:        {len(no_gt)}")
-    print(f"  - gt_ip 全部不在 prompt: {len(all_missing)}  -> 大模型不可能命中")
-    print(f"  - gt_ip 部分不在 prompt: {len(partial_missing)}")
-    if all_missing:
-        print("  [全缺失案例]:")
-        for r in all_missing:
-            print(f"    {r['dir']}  gt={r['gt_ips']}")
-    print("=" * 60)
-
-    out_path = os.path.join(root_path, "gt_in_prompt_check.json")
-    try:
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "total": len(reports),
-                "no_gt_label": len(no_gt),
-                "all_missing": len(all_missing),
-                "partial_missing": len(partial_missing),
-                "all_missing_cases": all_missing,
-                "partial_missing_cases": partial_missing,
-            }, f, ensure_ascii=False, indent=2)
-        print(f"[GT 诊断] 详情已保存至: {out_path}")
-    except Exception as e:
-        print(f"[GT 诊断] 保存失败: {e}")
-
 # [MODIFIED] 增加 target_skill_ids 参数并传递给 batch_infer
-def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=15.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
+def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chunk: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
     import os
     os.environ["ASCEND_RT_VISIBLE_DEVICES"] = npus
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -701,7 +640,7 @@ def worker_process(worker_id: int, npus: str, dirpaths_chunk: list, prompts_chun
     return resls
 
 # [MODIFIED] 增加 target_skill_ids 接收并传递给 worker
-def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=15.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
+def distribute_inference_tasks(dirpath_list: list, prompt_list: list, npu_list: list, target_skill_ids: list, batch_size: int = 8, short=0, top_k=10, confidence_gate=False, confidence_high_margin=15.0, confidence_agreement_margin=8.0, summarize_nodes=False, summary_model_path=None, summary_npu_cards=None, summary_max_tokens=1024, summary_cache_dir=None, print_first_prompt=False) -> dict:
     total_tasks = len(prompt_list)
     if total_tasks == 0:
         return {}
@@ -805,12 +744,8 @@ if __name__ == "__main__":
                    help="展示给 LLM 的候选设备数 (default: 10)")
     p.add_argument("--failures-from", default=None,
                    help="只跑指定 failures JSON 中的错案 (debug/回归用)")
-    p.add_argument("--confidence-gate", action="store_true",
-                   help="启用置信度门控：高置信算法结果跳过 LLM 重排")
-    p.add_argument("--confidence-high-margin", type=float, default=15.0,
-                   help="combined Top-1/Top-2 相对分差百分比阈值 (default: 15.0)")
-    p.add_argument("--confidence-agreement-margin", type=float, default=15.0,
-                   help="topo/temporal 各自 Top-1/Top-2 相对分差百分比阈值 (default: 15.0)")
+    p.add_argument("--gate", action="store_true",
+                   help="启用 configurable_gate_v1；策略由 PINGMESH_GATE_POLICY_CONFIG 提供")
     p.add_argument("--summarize-nodes", action="store_true",
                    help="Summarize candidate NODES with a small model before sending them to the RCA LLM")
     p.add_argument("--summary-model-path", default=os.environ.get("PINGMESH_SUMMARY_MODEL_PATH", ""),
@@ -849,9 +784,9 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             short=args.short,
             top_k=args.top_k,
-            confidence_gate=args.confidence_gate,
-            confidence_high_margin=args.confidence_high_margin,
-            confidence_agreement_margin=args.confidence_agreement_margin,
+            confidence_gate=args.gate,
+            confidence_high_margin=15.0,
+            confidence_agreement_margin=8.0,
             summarize_nodes=args.summarize_nodes,
             summary_model_path=args.summary_model_path,
             summary_npu_cards=args.summary_npu_cards or None,

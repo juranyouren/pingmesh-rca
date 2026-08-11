@@ -8,9 +8,11 @@
 #   PINGMESH_DATA=/path/to/data ./scripts/run_baselines.sh
 # ============================================================
 set -euo pipefail
-cd "$(dirname "$0")/.."
-
-source scripts/common.sh
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+export PINGMESH_PROJECT_ROOT="${PINGMESH_PROJECT_ROOT:-${PROJECT_ROOT}}"
+source "${SCRIPT_DIR}/common.sh"
+cd "${PROJECT_ROOT}"
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 WORKDIR="${PINGMESH_RESULTS}/baselines_${TIMESTAMP}"
@@ -62,31 +64,21 @@ else
     echo "  [WARN] NetEventCause res.json 未找到，请检查输出"
 fi
 
-# ── BiAn (纯 LLM 框架, 需要 NPU) ──
+# ── BiAn Pipeline1 (32B local LLM, requires NPU) ──
 echo ""
-echo "--- BiAn ---"
-bian_log="$(python Baseline/BiAn/BiAnalyzer.py "${PINGMESH_DATA}" "${PINGMESH_NPU_CARDS}")"
-printf '%s\n' "${bian_log}" | tail -5
-bian_dir="$(printf '%s\n' "${bian_log}" | awk '/^Saved to /{sub(/^Saved to /,""); print}' | tail -1)"
-bian_res="${bian_dir}/res.json"
-bian_out="${WORKDIR}/bian"
-if [ -f "${bian_res}" ]; then
-    cp -r "$(dirname "${bian_res}")" "${bian_out}" 2>/dev/null || true
-    python -c "
-from Sys.Score.Score_N import Scorer
-s = Scorer('${bian_res}')
-m = s.calculate_metrics()['skill_evaluation']['ranking_metrics']
-print(f'  BiAn: Top-1={m[\"Top-1 Acc (%)\"]}  Top-3={m[\"Top-3 Acc (%)\"]}  Top-5={m[\"Top-5 Acc (%)\"]}')
-" 2>&1
-else
-    echo "  [WARN] BiAn res.json 未找到，请检查输出"
-fi
+echo "--- BiAn Pipeline1 ---"
+bian_out="${WORKDIR}/bian_pipe1"
+python Baseline/BiAn/bian_pipe1.py "${PINGMESH_DATA}" \
+    --output-dir "${bian_out}" \
+    --model "${PINGMESH_MODEL_PATH}" \
+    --npu "${PINGMESH_NPU_CARDS}" \
+    --temperature "${PINGMESH_TEMPERATURE}" \
+    --max-tokens "${PINGMESH_MAX_TOKENS}" \
+    --max-model-len "${PINGMESH_MAX_MODEL_LEN}"
+python Sys/Score/Score_N.py "${bian_out}/res.json"
 
 echo ""
 echo "============================================"
 echo "  基线对比完成"
 echo "  结果: ${WORKDIR}/"
-echo ""
-echo "  消融基线 (当前方案):"
-echo "  topo+temporal = 76.10% Top-1 (159 例)"
 echo "============================================"
