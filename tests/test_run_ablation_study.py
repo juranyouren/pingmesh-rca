@@ -1,6 +1,7 @@
 import json
 
 from scripts.run_ablation_study import (
+    _build_llm_prompt,
     _prompt_version,
     _project_evidence_row,
     _summarize_token_usage,
@@ -192,7 +193,8 @@ def test_m23_case_plan_uses_all_devices_and_cached_average(tmp_path):
     assert plan["initial_ranking"][0] == "10.0.0.2"
     assert plan["evidence_device_count"] == 2
     assert plan["runtime"]["evidence_estimated_seconds"] == 5.0
-    assert "topology" not in plan["evidence_rows_for_llm"][0]
+    assert "topology" in plan["evidence_rows_for_llm"][0]
+    assert "temporal" in plan["evidence_rows_for_llm"][0]
 
     for mode, expected_devices, expected_seconds in (
         ("m1", 0, 0.0),
@@ -295,7 +297,44 @@ def test_all_llm_modes_force_every_gate_route_and_use_compact_prompts(tmp_path):
         assert '"log_count"' not in prompt
         assert '"raw_temporal_score"' in prompt
         assert '"burst_score"' not in prompt
-    assert _prompt_version(rerank["mode"]) != _prompt_version(evidence["mode"])
+        assert "一级证据" in prompt
+        assert "propagation_node" in prompt
+        assert "分析并输出 5 个候选" in prompt
+    assert _prompt_version(rerank["mode"]) == _prompt_version(evidence["mode"])
+
+
+def test_all_ablation_modes_use_the_same_evidence_table_prompt():
+    prompts = {
+        mode: _build_llm_prompt(
+            mode=mode,
+            info={},
+            gate={},
+            ranking_evidence={},
+            evidence_rows=[
+                {
+                    "candidate_ip": "10.0.0.1",
+                    "temporal": {"timestamp_count": 2},
+                }
+            ],
+        )
+        for mode in (
+            "m1",
+            "m13",
+            "m23",
+            "m123",
+            "m123_all_llm_rerank",
+            "m123_all_llm_evidence",
+        )
+    }
+
+    assert len(set(prompts.values())) == 1
+    for prompt in prompts.values():
+        assert "# 根因判定规则" in prompt
+        assert "分析并输出 5 个候选" in prompt
+        assert '"candidate_ip": "10.0.0.1"' in prompt
+        assert "Gate 上下文" not in prompt
+        assert "故障概况" not in prompt
+        assert "initial_ranking" not in prompt
 
 
 def test_token_usage_summary_keeps_each_prompt_count():
@@ -334,7 +373,7 @@ def test_token_usage_summary_keeps_each_prompt_count():
     assert summary["total_tokens"]["total"] == 65
 
 
-def test_all_llm_badcase_writes_detailed_folder(tmp_path):
+def test_ablation_badcase_writes_detailed_folder(tmp_path):
     case_dir = tmp_path / "source_case"
     case_dir.mkdir()
     (case_dir / "label_v2.json").write_text(
@@ -371,6 +410,7 @@ def test_all_llm_badcase_writes_detailed_folder(tmp_path):
             "prompt_version": "v1",
             "prompt": "actual prompt",
             "llm_raw_response": '{"ip":["10.0.0.1"]}',
+            "skill_ips": ["10.0.0.1"],
             "llm_output_filter": {
                 "parse_success": True,
                 "parsed_payload": {"ip": ["10.0.0.1"]},
@@ -415,3 +455,26 @@ def test_all_llm_badcase_writes_detailed_folder(tmp_path):
         "10_source_refs.json",
     ):
         assert (badcase_dir / name).exists()
+
+    m1_run_dir = tmp_path / "run_m1"
+    m1_run_dir.mkdir()
+    m1_summary = _write_all_llm_evaluation_artifacts(
+        mode="m1",
+        plans=plans,
+        results=[
+            {
+                **results[0],
+                "response": '```json\n{"ip":["10.0.0.2"]}\n```',
+            }
+        ],
+        run_dir=m1_run_dir,
+        evidence_root=evidence_root,
+    )
+    assert m1_summary["badcase_count"] == 1
+    assert (m1_run_dir / "badcases" / "case-a" / "01_evaluation.json").exists()
+    m1_evaluation = json.loads(
+        (m1_run_dir / "badcases" / "case-a" / "01_evaluation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert m1_evaluation["final"]["top1_hit"] == 0

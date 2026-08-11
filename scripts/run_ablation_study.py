@@ -367,35 +367,33 @@ def _project_evidence_row(
     }
     if compact_neighbor_stats:
         projected["neighbor_alarm_statistics"] = compact_neighbor_stats
-    if mode in ("m23", "m123"):
-        temporal = row.get("temporal") or {}
-        projected["temporal"] = {
-            key: temporal.get(key, 0)
-            for key in ("raw_temporal_score", "timestamp_count")
-            if temporal.get(key) is not None
-        }
-    if mode == "m123":
-        projected["cross"] = row.get("cross", 0)
-        topology = row.get("topology") or {}
+    temporal = row.get("temporal") or {}
+    projected["temporal"] = {
+        key: temporal.get(key, 0)
+        for key in ("raw_temporal_score", "timestamp_count")
+        if temporal.get(key) is not None
+    }
+    projected["cross"] = row.get("cross", 0)
+    topology = row.get("topology") or {}
 
-        allowed = set(candidate_ips) if candidate_ips is not None else None
+    allowed = set(candidate_ips) if candidate_ips is not None else None
 
-        def compact_neighbors(values: Any) -> List[str]:
-            if not isinstance(values, list):
-                return []
-            result: List[str] = []
-            for value in values:
-                ip = str(value) if value is not None else ""
-                if not ip or (allowed is not None and ip not in allowed):
-                    continue
-                if ip not in result:
-                    result.append(ip)
-            return result
+    def compact_neighbors(values: Any) -> List[str]:
+        if not isinstance(values, list):
+            return []
+        result: List[str] = []
+        for value in values:
+            ip = str(value) if value is not None else ""
+            if not ip or (allowed is not None and ip not in allowed):
+                continue
+            if ip not in result:
+                result.append(ip)
+        return result
 
-        projected["topology"] = {
-            "upstream_candidates": compact_neighbors(topology.get("upstream")),
-            "downstream_candidates": compact_neighbors(topology.get("downstream")),
-        }
+    projected["topology"] = {
+        "upstream_candidates": compact_neighbors(topology.get("upstream")),
+        "downstream_candidates": compact_neighbors(topology.get("downstream")),
+    }
     return projected
 
 
@@ -504,39 +502,10 @@ def _build_llm_prompt(
     ranking_evidence: Dict[str, Any],
     evidence_rows: Sequence[Dict[str, Any]],
 ) -> str:
-    if mode in ALL_LLM_MODES:
-        template = (
-            ALL_LLM_RERANK_PROMPT
-            if mode == "m123_all_llm_rerank"
-            else ALL_LLM_EVIDENCE_PROMPT
+    return _prompt_template(mode).format(
+        EVIDENCE_TABLE=json.dumps(
+            list(evidence_rows), ensure_ascii=False, indent=2
         )
-        return template.format(
-            EVIDENCE_TABLE=json.dumps(
-                list(evidence_rows), ensure_ascii=False, indent=2
-            )
-        )
-
-    gate_context = {
-        "confidence": gate.get("confidence"),
-        "reason": gate.get("reason"),
-        "trust_states": {
-            name: tree.get("state")
-            for name, tree in (gate.get("trust_trees") or {}).items()
-            if isinstance(tree, dict)
-        },
-        "allowed_candidate_ips": ranking_evidence.get("allowed_candidate_ips", []),
-    }
-    template = (
-        ALL_LLM_RERANK_PROMPT
-        if mode == "m123_all_llm_rerank"
-        else ABLATION_RCA_PROMPT
-    )
-    return template.format(
-        MODE=mode.upper(),
-        GATE_CONTEXT=json.dumps(gate_context, ensure_ascii=False, indent=2),
-        FAULT_INFO=json.dumps(_fault_info_view(info), ensure_ascii=False, indent=2),
-        RANKING_EVIDENCE=json.dumps(ranking_evidence, ensure_ascii=False, indent=2),
-        EVIDENCE_ROWS=json.dumps(list(evidence_rows), ensure_ascii=False, indent=2),
     )
 
 
@@ -671,7 +640,7 @@ def build_case_plan(
             row_by_ip.get(ip, {"candidate_ip": ip}),
             mode,
             candidate_ips=allowed_ips,
-            compact=mode in ALL_LLM_MODES,
+            compact=True,
         )
         for ip in allowed_ips
     ]
@@ -1015,7 +984,7 @@ def _write_badcase_index(rows: Sequence[Dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
-def _write_all_llm_evaluation_artifacts(
+def _write_ablation_evaluation_artifacts(
     *,
     mode: str,
     plans: Sequence[Dict[str, Any]],
@@ -1023,7 +992,7 @@ def _write_all_llm_evaluation_artifacts(
     run_dir: Path,
     evidence_root: Path,
 ) -> Dict[str, Any]:
-    """Write label-aware diagnostics only after inference has fully completed."""
+    """Write label-aware diagnostics for one ablation setting."""
     from Sys.Score.Score_N import Prediction, Scorer
 
     scorer = Scorer(str(run_dir / "res.json"))
@@ -1056,7 +1025,12 @@ def _write_all_llm_evaluation_artifacts(
 
         evaluated_cases += 1
         initial_prediction = Prediction(ips=list(plan["initial_ranking"]))
-        final_prediction = scorer.parser.parse(result.get("response", ""))
+        if mode == "m1":
+            final_prediction = Prediction(
+                ips=list(result.get("skill_ips") or plan["initial_ranking"])
+            )
+        else:
+            final_prediction = scorer.parser.parse(result.get("response", ""))
         initial_eval = scorer.evaluator.evaluate(ground_truth, initial_prediction)
         final_eval = scorer.evaluator.evaluate(ground_truth, final_prediction)
         initial_correct = bool(initial_eval.get("top1_hit"))
@@ -1110,6 +1084,7 @@ def _write_all_llm_evaluation_artifacts(
             ),
             "forced_llm": bool(plan["gate"].get("forced_llm")),
             "baseline_ranking": list(plan["initial_ranking"]),
+            "final_ranking": list(final_prediction.ips),
             "llm_ranking": list(final_prediction.ips),
             "rank_diff": rank_diff,
             "evaluation": evaluation,
@@ -1156,7 +1131,7 @@ def _write_all_llm_evaluation_artifacts(
                 f"- Gate natural decision: `{plan['gate'].get('natural_decision')}`",
                 f"- Ground truth: `{', '.join(ground_truth.ips)}`",
                 f"- Baseline Top-5: `{', '.join(plan['initial_ranking'][:5])}`",
-                f"- LLM Top-5: `{', '.join(final_prediction.ips[:5])}`",
+                f"- Final Top-5: `{', '.join(final_prediction.ips[:5])}`",
                 f"- Transition: `{transition}`",
                 f"- Prompt tokens: `{(result.get('token_usage') or {}).get('prompt_tokens', 0)}`",
                 f"- Completion tokens: `{(result.get('token_usage') or {}).get('completion_tokens', 0)}`",
@@ -1223,6 +1198,10 @@ def _write_all_llm_evaluation_artifacts(
     }
 
 
+# Backward-compatible name for existing offline analysis scripts.
+_write_all_llm_evaluation_artifacts = _write_ablation_evaluation_artifacts
+
+
 def run_mode(
     *,
     mode: str,
@@ -1241,14 +1220,12 @@ def run_mode(
     mode_started = time.perf_counter()
     plans: List[Dict[str, Any]] = []
     for index, dirpath in enumerate(dirpaths, 1):
-        evidence_table = None
-        if mode != "m1":
-            evidence_table = _load_case_evidence(
-                dirpath,
-                Path(args.evidence_root),
-                evidence_index,
-                args.data_root,
-            )
+        evidence_table = _load_case_evidence(
+            dirpath,
+            Path(args.evidence_root),
+            evidence_index,
+            args.data_root,
+        )
         plans.append(
             build_case_plan(
                 mode=mode,
@@ -1439,14 +1416,13 @@ def run_mode(
             {"mode": mode, "evaluation_source": "skill_ips" if mode == "m1" else "response", **final_metrics},
             run_dir / "final_metrics.json",
         )
-        if mode in ALL_LLM_MODES:
-            diagnostic_summary = _write_all_llm_evaluation_artifacts(
-                mode=mode,
-                plans=plans,
-                results=results,
-                run_dir=run_dir,
-                evidence_root=Path(args.evidence_root),
-            )
+        diagnostic_summary = _write_ablation_evaluation_artifacts(
+            mode=mode,
+            plans=plans,
+            results=results,
+            run_dir=run_dir,
+            evidence_root=Path(args.evidence_root),
+        )
     scoring_seconds = time.perf_counter() - scoring_started
     timing = {
         "mode": mode,
