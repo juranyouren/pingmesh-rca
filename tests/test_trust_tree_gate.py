@@ -130,7 +130,7 @@ class TrustTreeUnitTest(unittest.TestCase):
 
 
 class TrustTreeRouterTest(unittest.TestCase):
-    def test_rank_near_accepts_combined(self):
+    def test_rank_near_without_full_certificate_invokes_llm(self):
         gate = route_with_trust_trees(
             combined_ips=["10.0.0.9", "10.0.0.1", "10.0.0.2"],
             topo_ips=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
@@ -139,9 +139,9 @@ class TrustTreeRouterTest(unittest.TestCase):
             temporal_tree={"state": "uncertain", "passed": [], "failed": [], "evidence": {}},
         )
 
-        self.assertEqual(gate["decision"], "bypass_llm")
-        self.assertEqual(gate["route"], "combined")
-        self.assertEqual(gate["reason"], "rankers_near_accept_combined")
+        self.assertEqual(gate["decision"], "invoke_llm")
+        self.assertEqual(gate["route"], "llm")
+        self.assertFalse(gate["safety_certificate"]["safe_to_bypass"])
 
     def test_topo_strong_alone_defers_to_llm(self):
         gate = route_with_trust_trees(
@@ -154,9 +154,9 @@ class TrustTreeRouterTest(unittest.TestCase):
 
         self.assertEqual(gate["decision"], "invoke_llm")
         self.assertEqual(gate["route"], "llm")
-        self.assertEqual(gate["reason"], "topo_strong_defer_to_llm")
+        self.assertEqual(gate["reason"], "strict_top1_disagreement_invoke_llm")
 
-    def test_temporal_strong_alone_routes_to_temporal(self):
+    def test_temporal_strong_alone_invokes_llm(self):
         gate = route_with_trust_trees(
             combined_ips=["10.0.0.9"],
             topo_ips=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
@@ -165,9 +165,8 @@ class TrustTreeRouterTest(unittest.TestCase):
             temporal_tree={"state": "strong", "passed": [], "failed": [], "evidence": {}},
         )
 
-        self.assertEqual(gate["decision"], "bypass_llm")
-        self.assertEqual(gate["route"], "temporal")
-        self.assertEqual(gate["recommended_ips"][:3], ["10.0.0.4", "10.0.0.5", "10.0.0.6"])
+        self.assertEqual(gate["decision"], "invoke_llm")
+        self.assertEqual(gate["route"], "llm")
 
     def test_confident_disagreement_invokes_llm(self):
         gate = route_with_trust_trees(
@@ -181,7 +180,7 @@ class TrustTreeRouterTest(unittest.TestCase):
         self.assertEqual(gate["decision"], "invoke_llm")
         self.assertEqual(gate["route"], "llm")
 
-    def test_two_weak_rankers_routes_to_operator_review(self):
+    def test_two_weak_rankers_invoke_llm(self):
         gate = route_with_trust_trees(
             combined_ips=["10.0.0.9"],
             topo_ips=["10.0.0.1"],
@@ -190,12 +189,51 @@ class TrustTreeRouterTest(unittest.TestCase):
             temporal_tree={"state": "weak", "passed": [], "failed": [], "evidence": {}},
         )
 
-        self.assertEqual(gate["decision"], "operator_review")
-        self.assertEqual(gate["route"], "operator")
+        self.assertEqual(gate["decision"], "invoke_llm")
+        self.assertEqual(gate["route"], "llm")
+
+    def test_only_complete_safety_certificate_bypasses(self):
+        top_ip = "10.0.0.1"
+        topo_tree = {
+            "state": "strong",
+            "passed": [],
+            "failed": [],
+            "evidence": {
+                "directed_top3": [top_ip, "10.0.0.2"],
+                "undirected_top3": [top_ip, "10.0.0.3"],
+                "top_entry": {"ip": top_ip, "high_weight_alarm_hit": True},
+            },
+        }
+        temporal_tree = {
+            "state": "strong",
+            "passed": [],
+            "failed": [],
+            "evidence": {
+                "ref_time_ms": 123,
+                "devices_with_timestamps": 3,
+                "top_event_count": 2,
+                "burst_top3": [top_ip, "10.0.0.2"],
+                "early_top3": [top_ip, "10.0.0.3"],
+            },
+        }
+        gate = route_with_trust_trees(
+            combined_ips=[top_ip, "10.0.0.2"],
+            topo_ips=[top_ip, "10.0.0.2"],
+            temporal_ips=[top_ip, "10.0.0.3"],
+            topo_tree=topo_tree,
+            temporal_tree=temporal_tree,
+            combined_margin_percent=20.0,
+            topo_margin_percent=20.0,
+            temporal_margin_percent=20.0,
+        )
+
+        self.assertEqual(gate["decision"], "bypass_llm")
+        self.assertEqual(gate["route"], "combined")
+        self.assertTrue(gate["safety_certificate"]["safe_to_bypass"])
 
 
 class ConfidenceGateTrustTreeIntegrationTest(unittest.TestCase):
-    def test_assess_gate_returns_trust_tree_v1_schema(self):
+    def test_assess_gate_returns_strict_fail_closed_v2_schema(self):
         gate = assess_gate(
             _skill_ret(
                 combined=[
@@ -231,11 +269,51 @@ class ConfidenceGateTrustTreeIntegrationTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(gate["policy_version"], "trust_tree_v1")
+        self.assertEqual(gate["policy_version"], "strict_fail_closed_v2")
         self.assertEqual(gate["decision"], "bypass_llm")
         self.assertEqual(gate["route"], "combined")
         self.assertIn("trust_trees", gate)
+        self.assertTrue(gate["safety_certificate"]["safe_to_bypass"])
         self.assertEqual(gate["trust_trees"]["topo"]["state"], "strong")
+
+    def test_combined_margin_threshold_is_enforced(self):
+        gate = assess_gate(
+            _skill_ret(
+                combined=[
+                    ("10.0.0.1", 0.90, {}),
+                    ("10.0.0.2", 0.89, {}),
+                ],
+                topo=[
+                    ("10.0.0.1", 0.95, {"high_weight_alarm_hit": True}),
+                    ("10.0.0.2", 0.50, {}),
+                ],
+                temporal=[
+                    ("10.0.0.1", 0.90, {"total_alarms": 2}),
+                    ("10.0.0.2", 0.50, {"total_alarms": 1}),
+                ],
+                topo_meta={
+                    "diagnostics": {
+                        "directed_top3": ["10.0.0.1", "10.0.0.2"],
+                        "undirected_top3": ["10.0.0.1", "10.0.0.2"],
+                    }
+                },
+                temporal_meta={
+                    "diagnostics": {
+                        "ref_time_ms": 123,
+                        "devices_with_timestamps": 3,
+                        "burst_top3": ["10.0.0.1", "10.0.0.2"],
+                        "early_top3": ["10.0.0.1", "10.0.0.2"],
+                        "density_top3": ["10.0.0.1", "10.0.0.2"],
+                    }
+                },
+            ),
+            high_margin=15.0,
+            agreement_margin=8.0,
+        )
+
+        self.assertEqual(gate["decision"], "invoke_llm")
+        self.assertEqual(gate["reason"], "strict_combined_margin_too_small_invoke_llm")
+        self.assertIn("combined_margin_ok", gate["safety_certificate"]["failed"])
 
     def test_operator_review_response_has_empty_ip_list(self):
         response = make_bypass_response(
@@ -264,8 +342,30 @@ class TrustGateEvaluationTest(unittest.TestCase):
                 "response": "unused",
                 "skill_details": {
                     "combined": {"topk": [["10.0.0.1", 0.9], ["10.0.0.2", 0.6]]},
-                    "1": {"topk": [["10.0.0.1", 0.9], ["10.0.0.2", 0.6]], "trust_tree": {"state": "strong"}},
-                    "2": {"topk": [["10.0.0.1", 0.8], ["10.0.0.3", 0.5]], "trust_tree": {"state": "strong"}},
+                    "1": {
+                        "topk": [["10.0.0.1", 0.9], ["10.0.0.2", 0.6]],
+                        "trust_tree": {
+                            "state": "strong",
+                            "evidence": {
+                                "directed_top3": ["10.0.0.1", "10.0.0.2"],
+                                "undirected_top3": ["10.0.0.1", "10.0.0.2"],
+                                "top_entry": {"high_weight_alarm_hit": True},
+                            },
+                        },
+                    },
+                    "2": {
+                        "topk": [["10.0.0.1", 0.8], ["10.0.0.3", 0.5]],
+                        "trust_tree": {
+                            "state": "strong",
+                            "evidence": {
+                                "ref_time_ms": 123,
+                                "devices_with_timestamps": 3,
+                                "top_event_count": 2,
+                                "burst_top3": ["10.0.0.1", "10.0.0.3"],
+                                "early_top3": ["10.0.0.1", "10.0.0.3"],
+                            },
+                        },
+                    },
                 },
             },
             {
@@ -286,7 +386,7 @@ class TrustGateEvaluationTest(unittest.TestCase):
 
             self.assertEqual(summary["total_cases"], 2)
             self.assertEqual(summary["route_counts"]["combined"], 1)
-            self.assertEqual(summary["route_counts"]["operator"], 1)
+            self.assertEqual(summary["route_counts"]["llm"], 1)
             self.assertTrue(os.path.exists(os.path.join(tmp, "trust_gate_cases.jsonl")))
             self.assertTrue(os.path.exists(os.path.join(tmp, "trust_gate_summary.json")))
             self.assertTrue(os.path.exists(os.path.join(tmp, "trust_gate_by_route.csv")))

@@ -7,6 +7,7 @@
 # Available experiments:
 #   pipe                  deterministic fused ranking only
 #   gate_eval             evaluate trust-tree gate routing on pipe result
+#   gate_recall           assert 100% error recall and zero unsafe bypasses
 #   gate_pipe             apply gate without LLM; LLM/operator routes stay empty
 #   pipe_llm              pipe evidence -> main LLM reranking
 #   gate_pipe_llm         pipe evidence -> gate -> main LLM only for routed cases
@@ -77,7 +78,7 @@ has_experiment() {
 }
 
 needs_pipe_result() {
-    has_experiment pipe || has_experiment gate_eval || has_experiment gate_pipe
+    has_experiment pipe || has_experiment gate_eval || has_experiment gate_recall || has_experiment gate_pipe
 }
 
 needs_summary_cache() {
@@ -153,6 +154,16 @@ if has_experiment gate_eval; then
     python Sys/Score/evaluate_trust_gate.py \
         --res "${PIPE_RES}" \
         --out-dir "${WORKDIR}/gate_eval"
+fi
+
+if has_experiment gate_recall; then
+    echo ""
+    echo "=== [gate_recall] strict gate safety test ==="
+    python Sys/Score/evaluate_gate_recall.py \
+        --res "${PIPE_RES}" \
+        --out-dir "${WORKDIR}/gate_recall" \
+        --target-k "${PINGMESH_GATE_RECALL_K:-1}" \
+        --assert-safe
 fi
 
 if has_experiment gate_pipe; then

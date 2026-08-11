@@ -35,6 +35,7 @@ from prompts.ablation_rca import (
     ALL_LLM_RERANK_PROMPT_VERSION,
 )
 from Sys.RootCauseAnalyze.skills.topo_ranker import score_topo, topo_details
+from Sys.RootCauseAnalyze.trust_trees.common import normalize_entries, top1_margin_percent
 from Sys.RootCauseAnalyze.trust_trees.router import route_with_trust_trees
 from Sys.RootCauseAnalyze.trust_trees.temporal_tree import assess_temporal_tree
 from Sys.RootCauseAnalyze.trust_trees.topo_tree import assess_topo_tree
@@ -267,6 +268,7 @@ def assess_ablation_gate(
     initial_ranking: Sequence[str],
     topo_detail: Dict[str, Any] | None,
     temporal_detail: Dict[str, Any] | None,
+    combined_detail: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Map old trust-tree states to explicit high/medium/low confidence."""
     if mode == "m1":
@@ -302,6 +304,15 @@ def assess_ablation_gate(
         temporal_ips=temporal_ips,
         topo_tree=topo_tree,
         temporal_tree=temporal_tree,
+        combined_margin_percent=top1_margin_percent(
+            normalize_entries((combined_detail or {}).get("rankings", []), "combined_score")
+        ),
+        topo_margin_percent=top1_margin_percent(
+            normalize_entries((topo_detail or {}).get("rankings", []), "pr_score")
+        ),
+        temporal_margin_percent=top1_margin_percent(
+            normalize_entries((temporal_detail or {}).get("rankings", []), "score")
+        ),
     )
     if routed.get("decision") == "bypass_llm":
         confidence = "high"
@@ -694,6 +705,7 @@ def build_case_plan(
         initial_ranking=initial_ips,
         topo_detail=topo_detail,
         temporal_detail=temporal_detail,
+        combined_detail={"rankings": initial_rows},
     )
     if mode in ALL_LLM_MODES:
         gate = {

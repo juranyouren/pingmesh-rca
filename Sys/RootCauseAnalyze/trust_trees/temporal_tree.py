@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from .common import as_float, ips_from_entries, normalize_entries, top1_largest_local_gap, tree_result
+from .common import (
+    as_float,
+    ips_from_entries,
+    normalize_entries,
+    top1_largest_local_gap,
+    top1_margin_percent,
+    tree_result,
+)
 
 
 def _diagnostic_top3(temporal: Dict[str, Any], key: str) -> List[str]:
@@ -80,6 +87,7 @@ def assess_temporal_tree(temporal: Dict[str, Any]) -> Dict[str, Any]:
             "density_top3": density_top3[:3],
             "ranking_shape_ok": ranking_shape_ok,
             "algorithm_evidence_ok": algorithm_evidence_ok,
+            "top1_margin_percent": top1_margin_percent(entries),
             "top_entry": top_entry,
         },
     )
