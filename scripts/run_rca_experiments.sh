@@ -22,6 +22,7 @@ Usage: ./scripts/run_rca_experiments.sh [result-prefix]
 
 Experiments are selected with PINGMESH_EXPERIMENTS:
   pipe            deterministic topology + temporal ranking
+  propagation     Stage 1 ranking + Stage 2 propagation reconstruction/reranking
   gate_auto       search, apply, and assert a safe gate policy
   pipe_llm        run the local LLM for every case
   gate_llm        run the local LLM only when selected by the gate
@@ -40,7 +41,7 @@ fi
 RUN_EXPERIMENTS="${PINGMESH_EXPERIMENTS:-pipe gate_auto pipe_llm gate_llm}"
 for experiment in ${RUN_EXPERIMENTS}; do
     case "${experiment}" in
-        pipe|gate_auto|pipe_llm|gate_llm|cache_llm|gate_cache_llm) ;;
+        pipe|propagation|gate_auto|pipe_llm|gate_llm|cache_llm|gate_cache_llm) ;;
         *)
             echo "[ERROR] Unsupported experiment: ${experiment}" >&2
             usage >&2
@@ -107,16 +108,33 @@ echo "============================================"
 
 PIPE_DIR="${WORKDIR}/pipe"
 PIPE_RES="${PIPE_DIR}/res.json"
-if has_experiment pipe || has_experiment gate_auto; then
+if has_experiment pipe || has_experiment propagation || has_experiment gate_auto; then
     echo
     echo "=== [pipe] deterministic topology + temporal ranking ==="
-    python Sys/RootCauseAnalyze/skill_pipeline.py \
+    python Sys/RootCauseAnalyze/stage1/pipeline.py \
         --data-root "${PINGMESH_DATA}" \
         --skills ${SKILLS} \
         --top-k "${TOPK}" \
         --weight-file "${WEIGHT_FILE}" \
         --output-dir "${RUN_TAG}/pipe"
     score_result "${PIPE_RES}"
+fi
+
+if has_experiment propagation; then
+    echo
+    echo "=== [propagation] Stage 1 -> Stage 2 (M1 hypothesis graph -> M2 joint inference) ==="
+    python Sys/RootCauseAnalyze/propagation_pipeline.py \
+        --data-root "${PINGMESH_DATA}" \
+        --root-results "${PIPE_RES}" \
+        --output-dir "${WORKDIR}/propagation" \
+        --top-k "${TOPK}" \
+        --weight-file "${WEIGHT_FILE}" \
+        --max-candidate-nodes "${PINGMESH_PROPAGATION_MAX_CANDIDATE_NODES:-80}" \
+        --max-path-depth "${PINGMESH_PROPAGATION_MAX_PATH_DEPTH:-8}" \
+        --stage1-weight "${PINGMESH_STAGE1_WEIGHT:-0.5}"
+    python Sys/Score/evaluate_propagation.py \
+        --predictions "${WORKDIR}/propagation/res.json" \
+        --out "${WORKDIR}/propagation/validity.json"
 fi
 
 if has_experiment gate_auto; then
