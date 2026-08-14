@@ -1,5 +1,13 @@
 # Pingmesh RCA Project Overview
 
+## Active Paper Branch
+
+`2stage` is the primary working branch for the current paper proposal, method
+implementation, and experiment workflow. Unless a task explicitly specifies
+another target, paper-related development, experiment results, and documentation
+must use `2stage` as the source of truth and should be committed to this branch.
+Other branches are not the default basis for the current paper.
+
 ## 1. Project Positioning
 
 This project studies automated root-cause localization for large-scale data
