@@ -4,18 +4,16 @@
 
 This repository is a DCN root-cause analysis research prototype for Huawei Cloud
 Pingmesh-triggered incidents. The `2stage` branch is the primary branch for the
-current paper. Its active paper pipeline is:
+current paper. Its target paper pipeline is:
 
-`Pingmesh case data -> IC-STGR Device-Event-Incident graph ranking -> Stage 1 Top-K -> M1 root-independent hypothesis graph -> M2 root-conditioned graphs + explanation scores -> final ranking`
+`Pingmesh case data -> PC-STGR path-conditioned Device-Event graph ranking -> Stage 1 Top-K -> M1 root-independent hypothesis graph -> M2 root-conditioned graphs + explanation scores -> final ranking`
 
-IC-STGR (Incident-Conditioned Spatio-Temporal Graph Ranker) is the fixed Stage 1
-method. Continue Stage 1 optimization on IC-STGR; treat deterministic
-topology+temporal fusion as the strong white-box baseline and LambdaMART as a
-pending learning-to-rank baseline. Do not claim that the current IC-STGR result
-improves Top-1: its demonstrated advantage is Top-3/Top-5 candidate coverage.
-
-Trust-tree and optional local-LLM review remain historical/comparison experiment
-paths, not the selected Stage 1 method.
+PC-STGR (Path-Conditioned Spatio-Temporal Graph Ranker) is the target Stage 1
+design in `docs/PC-STGR设计方案.md`. The current `stage1/neural_*` implementation
+and the 159-case OOF results are still IC-STGR artifacts. Do not rename its
+checkpoints or 73.58/93.71/97.48 result as PC-STGR before the migration and a
+new grouped OOF evaluation are complete. The deterministic topology+temporal
+fusion is the strong white-box baseline.
 
 ## Non-Negotiables
 
@@ -26,18 +24,15 @@ paths, not the selected Stage 1 method.
 
 ## Key Paths
 
-- `Sys/RootCauseAnalyze/stage1/`: IC-STGR graph/model/OOF pipeline plus deterministic temporal, alarm-topology, and fusion baselines.
-- `Sys/RootCauseAnalyze/skills/`: compatibility adapters for legacy Gate/LLM experiments; Stage 1 implementations do not live here.
-- `Sys/RootCauseAnalyze/gate/`: evidence builder, trust-tree decision, summarizer, bypass response.
-- `Sys/RootCauseAnalyze/trust_trees/`: auditable topo/temporal trust tree rules.
-- `Sys/RootCauseAnalyze/SkilledAnalyzer.py`: LLM review path and gate integration.
+- `Sys/RootCauseAnalyze/stage1/`: current IC-STGR graph/model/OOF implementation plus deterministic temporal, alarm-topology, and fusion baselines; PC-STGR migration is pending.
 - `Sys/RootCauseAnalyze/propagation/`: Stage 2 root-independent hypothesis graph reconstruction (M1), root-conditioned propagation graphs and explanation-based reranking (M2), and path-validity logic.
 - `Sys/RootCauseAnalyze/propagation_pipeline.py`: label-free propagation reconstruction entrypoint.
 - `Sys/Score/evaluate_propagation.py`: propagation validity and optional label-aware evaluation.
-- `Sys/Score/`: evaluation, trust-gate application, and failure analysis.
-- `prompts/`: active LLM prompt templates; do not recreate root-level `utils/`.
+- `Sys/Score/`: Stage 1, Stage 2, propagation, and baseline evaluation tools.
+- `prompts/`: baseline and ablation prompt templates; do not recreate root-level `utils/`.
 - `scripts/common.sh`: single source of default server paths and model parameters.
-- `scripts/run_rca_experiments.sh`: current main experiment driver.
+- `scripts/run_paper_05_spatiotemporal_graph.sh`: current executable Stage 1 paper workflow (deterministic baseline + IC-STGR OOF + Stage 2).
+- `scripts/run_stage2_edge_probability_ablation.sh`: Stage 2 P0/P1/P4 edge-probability comparison.
 - `Baseline/`: TraceRCA, NetEventCause, and BiAn baseline adapters.
 - `docs/project_overview.md`: detailed project state and roadmap.
 
@@ -59,6 +54,7 @@ paths, not the selected Stage 1 method.
 ```bash
 python -m pytest -q
 source scripts/common.sh
+python Sys/RootCauseAnalyze/stage1/pipeline.py --help
 python Sys/RootCauseAnalyze/stage1/neural_pipeline.py --help
-python Sys/Score/evaluate_trust_gate.py --help
+python Sys/RootCauseAnalyze/propagation_pipeline.py --help
 ```

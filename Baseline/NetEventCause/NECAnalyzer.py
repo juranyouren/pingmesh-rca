@@ -281,6 +281,8 @@ class NetEventCauseAnalyzer:
                 "dir": dp,
                 "prompt": "NEC (MHP + attribution RCA)",
                 "draft_response": response,
+                "response": response,
+                "ranked_ips": top_ips,
             })
         return results
 

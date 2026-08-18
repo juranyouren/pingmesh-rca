@@ -8,12 +8,12 @@ def sorted_score_items(scores: Dict[str, float], top_k: int | None = None) -> Li
     return items[:top_k] if top_k is not None else items
 
 
-def combine_scores(skill_id_to_scores: Dict[int, Dict[str, float]], node_ips: Sequence[str]) -> Dict[str, float]:
-    if not skill_id_to_scores:
+def combine_scores(ranker_scores: Dict[int, Dict[str, float]], node_ips: Sequence[str]) -> Dict[str, float]:
+    if not ranker_scores:
         return {}
     combined: Dict[str, float] = {}
     for ip in node_ips:
-        vals = [scores.get(ip, 0.0) for scores in skill_id_to_scores.values()]
+        vals = [scores.get(ip, 0.0) for scores in ranker_scores.values()]
         combined[ip] = sum(vals) / len(vals)
     return combined
 

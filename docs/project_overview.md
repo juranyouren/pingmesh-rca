@@ -32,22 +32,23 @@ that Pingmesh reliably detects network-side symptoms, but cannot identify the
 physical root-cause device because ECMP and high fan-out DCN topologies obscure
 the actual forwarding path.
 
-The current paper system is a two-stage pipeline:
+The target paper system is a two-stage pipeline:
 
 1. Parse one incident case from full-link node data and `info.json`.
-2. Stage 1 uses **IC-STGR (Incident-Conditioned Spatio-Temporal Graph Ranker)**
-   to construct a Device-Event-Incident heterogeneous graph and learn a
-   high-recall root-cause candidate ranking.
+2. Stage 1 uses **PC-STGR (Path-Conditioned Spatio-Temporal Graph Ranker)** to
+   construct a path-conditioned Device-Event graph and learn a high-recall
+   root-cause candidate ranking.
 3. Stage 2/M1 builds one root-independent hypothesis propagation graph.
 4. Stage 2/M2 evaluates every Stage 1 candidate against that shared graph and
    emits the final ranking plus root-conditioned propagation graphs.
 5. Evaluate Stage 1 with grouped out-of-fold Top-1/Top-3/Top-5 and MRR; evaluate
    Stage 2 validity or path accuracy separately according to label availability.
 
-The deterministic topology + temporal fusion remains a strong white-box Stage 1
-baseline. Trust-tree and local-LLM review code is retained for historical and
-comparison experiments, but it is not the selected Stage 1 method in the current
-paper proposal.
+The current executable neural pipeline is still IC-STGR; it is retained as the
+implemented historical reference until PC-STGR migration and independent OOF
+evaluation are complete. The deterministic topology + temporal fusion remains
+a strong white-box Stage 1 baseline. Deprecated orchestration and review paths
+are not part of the executable pipeline.
 
 ## 2. Current Constraints
 
@@ -72,15 +73,11 @@ paper proposal.
 | `Sys/RootCauseAnalyze/stage1/neural_model.py` | Relation-aware graph encoder, root-ranking head, and training loss. |
 | `Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Grouped OOF training and label-free IC-STGR inference. |
 | `Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic temporal + alarm-topology Stage 1 baseline. |
-| `Sys/RootCauseAnalyze/skills/` | Built-in skill implementation replacing the old SkillBank runtime. |
-| `Sys/RootCauseAnalyze/gate/` | Evidence construction, node summarization, routing response, and trust gate integration. |
-| `Sys/RootCauseAnalyze/trust_trees/` | Auditable rule trees for topo and temporal ranker trust. |
-| `Sys/RootCauseAnalyze/SkilledAnalyzer.py` | LLM inference path, gate support, and optional candidate-node summarization. |
-| `Sys/Score/` | Scoring, gate evaluation, gate application, and failure analysis scripts. |
+| `Sys/Score/` | Stage 1, Stage 2, propagation, and baseline evaluation scripts. |
 | `Sys/utils/` | Shared case, alarm, ranking, and I/O utilities. |
-| `prompts/` | Active LLM prompt templates used by `SkilledAnalyzer`. |
+| `prompts/` | Prompt templates retained for baseline and ablation experiments. |
 | `Baseline/` | Adapted TraceRCA, NetEventCause, and BiAn baselines. |
-| `scripts/` | Server-side experiment entrypoints; `run_paper_*.sh` are thesis experiment wrappers. |
+| `scripts/` | Supported server-side experiment entrypoints and shared configuration; see `scripts/README.md`. |
 | `tests/` | Local-only ignored regression tests; they are retained in this workspace but not shipped by Git. |
 | `docs/PC-STGR设计方案.md` | Target PC-STGR decisions, feature schema, tensor dimensions, network structure, loss, and migration checklist. |
 | `docs/papers/` | Paper text extractions and summaries. Original PDFs live outside the repo. |
@@ -94,7 +91,7 @@ Learned Stage 1 results must use grouped 5-fold out-of-fold predictions.
 | Stage 1 method | Evaluation | Cases | Top-1 | Top-3 | Top-5 | Paper role |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | deterministic topology + temporal fusion | deterministic | 159 | **77.36%** | 89.94% | 94.34% | strong white-box baseline |
-| **IC-STGR** | grouped 5-fold OOF | 159 | 73.58% | **93.71%** | **97.48%** | **selected main method** |
+| **IC-STGR** | grouped 5-fold OOF | 159 | 73.58% | **93.71%** | **97.48%** | implemented historical neural reference |
 
 The supported claim is improved candidate coverage, not improved Top-1. IC-STGR
 changes Top-1 by -3.78 percentage points, Top-3 by +3.77 points, and Top-5 by
@@ -102,73 +99,30 @@ changes Top-1 by -3.78 percentage points, Top-3 by +3.77 points, and Top-5 by
 cases (55.6% fewer misses). Its full-data `final_model.pt` is for later unseen
 inference and must not be scored back on these 159 labeled cases as a paper result.
 
-### 4.1 Fixed Stage 1 Method Decision
+### 4.1 Stage 1 Target Decision
 
-IC-STGR is the fixed Stage 1 technology for the current paper. Future Stage 1
-work should optimize this model rather than reopen the main-method selection.
-The comparison plan is:
+PC-STGR is the fixed target design for the next Stage 1 implementation. IC-STGR
+remains the current executable neural reference and its existing metrics remain
+valid only under that name. The comparison plan is:
 
 | Method | Role | Status |
 | --- | --- | --- |
-| IC-STGR | main method; incident-conditioned heterogeneous spatio-temporal ranking | first OOF result complete |
+| PC-STGR | target main method; path-conditioned Device-Event spatio-temporal ranking | design fixed; implementation and OOF pending |
+| IC-STGR | implemented historical reference; Device-Event-Incident ranking | first OOF result complete |
 | deterministic topology + temporal fusion | strong interpretable baseline | complete |
 | LambdaMART | learned ranking baseline over researcher-defined, automatically computed device features | pending |
 | device-only GAT/GCN | graph-structure baseline | pending |
-| IC-STGR relation/node/loss removals | component ablations and optimization | pending |
+| PC-STGR path/type/event/time removals | required component ablations | pending |
 
-IC-STGR is a project method name, not the name of an existing paper. It adapts
-relation-aware heterogeneous graph attention and learning-to-rank ideas to the
-Pingmesh Device-Event-Incident formulation. The paper should claim novelty in
-the incident-conditioned graph construction, explicit spatio-temporal relations,
-and multi-positive root-ranking adaptation, not in inventing a new general
-attention operator.
+PC-STGR is a project method name, not the name of an existing paper. The paper
+claim is scoped to the Pingmesh path-conditioned Device-Event construction,
+explicit spatio-temporal relations, and case-wise single-root ranking, not to a
+new general attention operator. See `docs/PC-STGR设计方案.md` for the exact
+feature, tensor, loss, and evaluation contract.
 
-## 5. Active Exploration Directions
+## 5. Supporting Directions
 
-### 5.1 Trust-Tree Gate
-
-The old continuous confidence direction was replaced by auditable logical trust
-trees. The active router is `configurable_gate_v1`:
-
-- search named and parameterized strict/balanced policies after deterministic
-  results have been generated;
-- reject any policy with an unsafe bypass, a known-badcase bypass, or error
-  recall below the configured target globally or in a deterministic fold;
-- choose the passing policy with the highest bypass coverage;
-- emit only the combined Top-1 on bypass and fall back to `always_llm` when no
-  useful policy is safe.
-
-Main files:
-
-- `Sys/RootCauseAnalyze/gate/decision.py`
-- `Sys/RootCauseAnalyze/trust_trees/router.py`
-- `Sys/Score/evaluate_trust_gate.py`
-- `Sys/Score/evaluate_gate_recall.py`
-- `Sys/Score/search_gate_policy.py`
-- `Sys/Score/apply_trust_gate.py`
-
-### 5.2 SECL Evidence Organization And Device-State Summarization
-
-The evidence sent to the main LLM is organized from the union of the topology
-Top-K and temporal Top-K device rankings, rather than only the fused Top-K.
-This preserves candidates supported strongly by either independent view. The
-fused ranking remains the deterministic evaluation baseline and is not replaced
-by the union.
-
-The optional small model only compresses the observable state of each device.
-Its prompt explicitly forbids root-cause, symptom, causality, ranking,
-confidence, or remediation judgments. Root-cause comparison is reserved for
-the main LLM after it receives both rankings and all device-state summaries.
-Summary caches are versioned by the evidence-organization strategy and Top-K
-value so stale fused-only caches are not reused.
-
-Main files:
-
-- `Sys/RootCauseAnalyze/gate/node_summarizer.py`
-- `Sys/RootCauseAnalyze/SkilledAnalyzer.py`
-- `scripts/run_rca_experiments.sh`
-
-### 5.3 Alarm Weight And Semantic Coverage
+### 5.1 Alarm Weight And Semantic Coverage
 
 Alarm weights are maintained manually in `data/weights/classified_alarms/all_alarms.json`.
 Earlier experiments with LLM-based alarm scoring and classification showed that semantic
@@ -181,50 +135,40 @@ Main files:
 - `Sys/utils/alarm_utils.py`
 - `data/weights/classified_alarms/all_alarms.json`
 
-### 5.4 Failure Analysis And Gate Design
-
-Failure analysis now focuses on understanding when the skill pipeline fails:
-flat rankings, missing time data, weak alarm coverage, topology dilution, and
-ranker disagreement. These outputs should feed trust-tree rules and data repair
-work rather than prompt-only tuning.
-
-Main files:
-
-- `Sys/Score/analyze_skillpipe_failures.py`
-- `Sys/Score/evaluate_gate_selection.py`
-- `Sys/Score/evaluate_trust_gate.py`
-- `archive/tmp_tools/diagnose_pipeline.py` (archived diagnostic helper)
-
-### 5.5 Public Dataset / NIKA Direction
+### 5.2 Public Dataset / NIKA Direction
 
 The `main` branch is for internal company datasets. The `nika` branch is the
 intended public-dataset adaptation path. Work for public release should avoid
 Huawei-internal raw data and should replace private labels and alarm names with
 publishable equivalents.
 
-### 5.6 Prompt Stability
+### 5.3 Fault Propagation Path Reconstruction
 
-Prompt design is deliberately conservative. The current prompt tells the LLM to
-trust the algorithm ranking by default and only adjust when candidate alarms
-provide explicit contrary evidence. This guards against the model "doing work"
-by unnecessarily changing a strong deterministic ranking.
+The `2stage` branch is the primary working branch for the current paper. It
+currently contains the IC-STGR implementation, the PC-STGR target specification,
+and the Stage 2 joint-inference implementation. Stage 2 consumes the stable
+`initial_root_rankings` contract and must remain compatible with the future
+PC-STGR implementation.
 
-Main file:
+Supported result writers use one neutral ranking schema:
 
-- `prompts/rca.py`
-- `prompts/skilled.py`
+- `ranked_ips`: ordered device IPs for direct Top-K evaluation;
+- `ranking_details`: method-specific ranking evidence and diagnostics;
+- `stage1.root_rankings` and `initial_root_rankings`: canonical scored candidate
+  records passed from Stage 1 to Stage 2;
+- `final_root_rankings`: Stage 2 reranked candidates when Stage 2 is present.
 
-### 5.7 Fault Propagation Path Reconstruction
+`Sys/Score/Score_N.py` reports these as `ranking_evaluation`; parsed response
+payloads are reported separately as `response_evaluation`. The retired
+`skill_ips`, `skill_details`, and `skill_evaluation` names are not supported.
 
-The `2stage` branch is the primary working branch for the current paper and
-contains the IC-STGR Stage 1 plus the Stage 2 joint-inference implementation.
 Stage 2 first builds a root-independent weighted relation graph over
 the incident-conditioned undirected topology, retaining inactive, forward,
 reverse, ambiguous, and common-cause states. This single graph is the M1 output
 and does not depend on root candidates or their scores. M2 then evaluates each
 Stage 1 Top-K root against the same hypothesis graph, constructs its corresponding
 device-level propagation graph, and produces one explanation score. The final
-ranking is a weighted sum of only the normalized IC-STGR Stage 1 score and the
+ranking is a weighted sum of only the normalized Stage 1 score and the
 normalized Stage 2 explanation score; insufficient path evidence falls back to
 the Stage 1 order.
 Interface fields are optional and their absence is not a quality penalty.
@@ -246,17 +190,16 @@ Main files:
 - `Sys/Score/evaluate_propagation.py`
 - `Sys/Preprocess/Preprocessor.py` (`topology_context.json` sidecar)
 
-Research memo:
+Design source:
 
-- `docs/故障传播路径还原调研.md`
-- `docs/故障传播路径标注规范_v0.md`
-- `docs/故障传播路径重构方案_v0.md`
-- `docs/故障传播路径联合推断方案_v1.md`
+- `docs/论文方案.md`
 
 ## 6. Deprecated Or Removed Areas
 
-- `SkillBank` is no longer part of the runtime path. The active replacement is
-  `Sys/RootCauseAnalyze/skills/`.
+- The Gate, Trust-Tree, Skill Pipeline, `skills/` compatibility package,
+  `SkilledAnalyzer.py`, and candidate-summary path were removed. Active
+  deterministic Stage 1 implementations live only in
+  `Sys/RootCauseAnalyze/stage1/`.
 - `SkillNRefineAnalyzer.py`, `RootCauseAnalyzer.py`, and old confidence/
   credence calibration scripts are removed. Any remaining `.pyc` files from
   those modules are stale generated artifacts and must not be restored.
@@ -266,31 +209,31 @@ Research memo:
 
 ## 7. Experiment Commands
 
-Use these from the repository root on the server:
+Use these from the repository root on the server. The current executable neural
+workflow is IC-STGR and must keep that method name:
 
 ```bash
 source scripts/common.sh
+bash scripts/run_paper_05_spatiotemporal_graph.sh
+```
 
+It produces deterministic-baseline, IC-STGR OOF, and IC-STGR-plus-Stage-2
+rows. The historical IC-STGR Stage 1 score is the `neural_oof` row. A PC-STGR
+paper row can be added only after the migration and a new grouped OOF run.
+
+The deterministic baseline and Stage 2 can also be run directly:
+
+```bash
 python Sys/RootCauseAnalyze/stage1/pipeline.py \
   --data-root "$PINGMESH_DATA" \
-  --output-dir skillpipe_manual \
-  --skills 1 2 \
+  --output-dir deterministic_manual \
+  --rankers topology temporal \
   --top-k "$PINGMESH_TOP_K" \
   --weight-file "$PINGMESH_WEIGHTS_MANUAL"
 
-python Sys/Score/evaluate_trust_gate.py \
-  --res "$PINGMESH_RESULTS/<run>/pipe/res.json" \
-  --out-dir "$PINGMESH_RESULTS/<run>/gate_eval" \
-  --policy-config "$PINGMESH_RESULTS/<run>/gate_search/selected_gate_policy.json"
-
-python Sys/Score/apply_trust_gate.py \
-  --res "$PINGMESH_RESULTS/<run>/pipe/res.json" \
-  --out "$PINGMESH_RESULTS/<run>/gate_selected/res.json" \
-  --policy-config "$PINGMESH_RESULTS/<run>/gate_search/selected_gate_policy.json"
-
 python Sys/RootCauseAnalyze/propagation_pipeline.py \
   --data-root "$PINGMESH_DATA" \
-  --root-results "$PINGMESH_RESULTS/<run>/pipe/res.json" \
+  --root-results "$PINGMESH_RESULTS/<paper_05_run>/neural_oof/res.json" \
   --output-dir "$PINGMESH_RESULTS/<run>/propagation"
 
 python Sys/Score/evaluate_propagation.py \
@@ -298,33 +241,10 @@ python Sys/Score/evaluate_propagation.py \
   --out "$PINGMESH_RESULTS/<run>/propagation/validity.json"
 ```
 
-For the current combined experiment driver:
-
-```bash
-source scripts/common.sh
-PINGMESH_EXPERIMENTS="pipe gate_auto" ./scripts/run_rca_experiments.sh
-```
-
-`gate_auto` always runs in this order: deterministic `pipe/res.json`, policy
-search, selected-policy application, and recall assertion. Its main outputs are
-`gate_search/selected_gate_policy.json`, `gate_selected/res.json`, and
-`gate_recall/gate_recall_summary.json`.
-
-For thesis experiments, use the split wrappers documented in
-`docs/实验脚本说明.md`:
-
-```bash
-source scripts/common.sh
-./scripts/run_paper_01_skill_ablation.sh
-./scripts/run_paper_02_gate_routing.sh
-./scripts/run_paper_03_llm_arbitration.sh
-./scripts/run_paper_04_summary_ablation.sh
-./scripts/run_paper_05_spatiotemporal_graph.sh
-```
-
-`run_paper_05_spatiotemporal_graph.sh` is the primary Stage 1 paper experiment.
-It produces deterministic-baseline, IC-STGR OOF, and IC-STGR-plus-Stage-2 rows;
-the Stage 1 paper score is the `neural_oof` row.
+Use `scripts/run_stage2_edge_probability_ablation.sh` for the P0/P1/P4 Stage 2
+comparison and `scripts/run_baselines.sh` for TraceRCA, NetEventCause, and BiAn.
+The removed Gate/Trust-Tree/Skill/LLM orchestration paths have no supported
+runtime entrypoints.
 
 ## 8. Testing
 
@@ -335,16 +255,16 @@ the local test bundle, run:
 python -m pytest -q
 ```
 
-The current suite covers:
+Current module-level coverage includes:
 
-- no runtime dependency on old SkillBank inside `Sys`;
-- deterministic ranker tie behavior and trust-tree details;
-- trust-tree router decisions and Score_N-compatible bypass responses;
-- applying the trust gate to offline skillpipe records;
+- no active Stage 1 dependency on the removed Skill/Gate/Trust-Tree paths;
+- deterministic ranker tie behavior and ranking details;
 - topology-context preservation, alarm episode normalization, propagation DAG
   reconstruction, abstention, and propagation evaluation;
-- candidate-node summarization prompt replacement;
-- skill-pipeline failure analysis outputs.
+- neural Stage 1 graph/model contracts and Stage 2 joint inference.
+
+Obsolete tests for removed script wrappers, including the old propagation
+labeler, are not part of the maintained test bundle.
 
 ## 9. Maintenance Rules
 

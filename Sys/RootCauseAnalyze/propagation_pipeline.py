@@ -16,7 +16,7 @@ if __package__ in (None, ""):
 
 from Sys.RootCauseAnalyze.propagation import PropagationConfig, reconstruct_propagation
 from Sys.RootCauseAnalyze.propagation.topology_context import load_topology_context
-from Sys.RootCauseAnalyze.stage1.fusion import rank_devices_by_skills
+from Sys.RootCauseAnalyze.stage1.fusion import rank_root_causes
 from Sys.utils.case_utils import find_full_link_file, load_case_info, load_case_nodes
 from Sys.utils.io_utils import load_json, save_json
 
@@ -71,9 +71,6 @@ def _edge_model_for_case(manifest: Mapping[str, Any], dirpath: str) -> str | Non
 def _rankings_from_record(record: Mapping[str, Any] | None) -> List[Dict[str, Any]]:
     if not record:
         return []
-    confidence_gate = record.get("confidence_gate")
-    if isinstance(confidence_gate, Mapping) and confidence_gate.get("decision") == "operator_review":
-        return []
     initial = record.get("initial_root_rankings")
     if isinstance(initial, list):
         canonical = [dict(item) for item in initial if isinstance(item, Mapping)]
@@ -104,18 +101,6 @@ def _rankings_from_record(record: Mapping[str, Any] | None) -> List[Dict[str, An
                         {"rank": index, "ip": ip, "combined_score": 1.0 / index}
                         for index, ip in enumerate(dict.fromkeys(final_ips), 1)
                     ]
-    skill_details = record.get("skill_details")
-    if isinstance(skill_details, Mapping):
-        combined = skill_details.get("combined")
-        if isinstance(combined, Mapping) and isinstance(combined.get("topk"), list):
-            return [dict(item) for item in combined["topk"] if isinstance(item, Mapping)]
-    skill_ips = record.get("skill_ips")
-    if isinstance(skill_ips, list):
-        return [
-            {"rank": index, "ip": ip, "combined_score": 1.0 / index}
-            for index, ip in enumerate(skill_ips, 1)
-            if isinstance(ip, str) and ip
-        ]
     return []
 
 
@@ -147,11 +132,11 @@ def run_propagation_pipeline(
             previous_record = previous.get(os.path.normpath(dirpath))
             rankings = _rankings_from_record(previous_record)
             if not rankings and previous_record is None:
-                predicted_ips, details = rank_devices_by_skills(
+                predicted_ips, details = rank_root_causes(
                     nodes,
                     info,
                     dirpath=dirpath,
-                    skill_ids=(1, 2),
+                    ranker_ids=(1, 2),
                     directed=True,
                     weight_dirpath=weight_path,
                     top_k=top_k,
@@ -204,9 +189,7 @@ def run_propagation_pipeline(
                     "initial_root_rankings": propagation["initial_root_rankings"],
                     "final_root_rankings": propagation["final_root_rankings"],
                     "selected_root": propagation["selected_root"],
-                    # Score_N-compatible fields. They expose the Stage 2 final
-                    # root order without changing the propagation contract.
-                    "skill_ips": final_ips,
+                    "ranked_ips": final_ips,
                     "response": f"```json\n{score_response}\n```",
                     "selected_propagation_graph": propagation[
                         "selected_propagation_graph"

@@ -2,7 +2,7 @@
 Score_N — 根因定位评测模块
 =========================
 从 res.json 读取结果，计算 Top-1~5 命中率。
-输出 sum.json: {skill_evaluation, llm_evaluation}
+输出 sum.json: {ranking_evaluation, response_evaluation}
 
 用法:
     python Sys/Score/Score_N.py path/to/res.json
@@ -203,8 +203,36 @@ class Scorer:
 
     # ── core eval ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _ranked_ips(record: Dict[str, Any]) -> List[str]:
+        direct = record.get("ranked_ips")
+        if isinstance(direct, list):
+            return [str(ip) for ip in direct if ip]
+
+        for key in ("final_root_rankings", "initial_root_rankings"):
+            rankings = record.get(key)
+            if isinstance(rankings, list):
+                ips = [
+                    str(item.get("ip"))
+                    for item in rankings
+                    if isinstance(item, dict) and item.get("ip")
+                ]
+                if ips:
+                    return ips
+
+        stage1 = record.get("stage1")
+        if isinstance(stage1, dict) and isinstance(stage1.get("root_rankings"), list):
+            return [
+                str(item.get("ip"))
+                for item in stage1["root_rankings"]
+                if isinstance(item, dict) and item.get("ip")
+            ]
+
+        root_ips = record.get("root_ips")
+        return [str(ip) for ip in root_ips if ip] if isinstance(root_ips, list) else []
+
     def _eval_ips(self, res_data: List[Dict], ip_source: str) -> Dict[str, Any]:
-        """ip_source: "skill_ips" (纯算法) 或 "response" (LLM 解析)。"""
+        """Evaluate canonical rankings or IPs parsed from a response field."""
         sums = {f"sum_top{i}": 0 for i in range(1, 6)}
         n = 0
         # Top-1 失败案例 (按 gt 实际落点分桶)
@@ -218,9 +246,8 @@ class Scorer:
             if not gt.ips:
                 continue
 
-            if ip_source == "skill_ips":
-                ips = rd.get("skill_ips", [])
-                pred = Prediction(ips=ips if isinstance(ips, list) else [])
+            if ip_source == "ranking":
+                pred = Prediction(ips=self._ranked_ips(rd))
             else:
                 pred = self.parser.parse(rd.get(ip_source, ""))
 
@@ -267,19 +294,19 @@ class Scorer:
         if not res_data:
             raise ValueError(f"empty: {self.res_path}")
 
-        skill_eval = self._eval_ips(res_data, "skill_ips")
-        llm_eval = self._eval_ips(res_data, "response")
+        ranking_eval = self._eval_ips(res_data, "ranking")
+        response_eval = self._eval_ips(res_data, "response")
 
         # 分离失败案例详情, 单独存盘, sum.json 只留指标
         failures = {}
-        for name, ev in [("skill", skill_eval), ("llm", llm_eval)]:
+        for name, ev in [("ranking", ranking_eval), ("response", response_eval)]:
             if ev and "_top1_failures" in ev:
                 failures[name] = ev.pop("_top1_failures")
 
         summary = {
             "total_cases_in_file": len(res_data),
-            "skill_evaluation": skill_eval,
-            "llm_evaluation": llm_eval,
+            "ranking_evaluation": ranking_eval,
+            "response_evaluation": response_eval,
         }
 
         sum_path = os.path.join(self.out_dir, "sum.json")

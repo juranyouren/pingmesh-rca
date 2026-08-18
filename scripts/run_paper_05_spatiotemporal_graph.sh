@@ -40,7 +40,7 @@ echo
 echo "=== [deterministic] current topology + temporal fusion ==="
 python Sys/RootCauseAnalyze/stage1/pipeline.py \
     --data-root "${PINGMESH_DATA}" \
-    --skills 1 2 \
+    --rankers topology temporal \
     --top-k "${PINGMESH_TOP_K}" \
     --weight-file "${PINGMESH_WEIGHTS_MANUAL}" \
     --output-dir "${RUN_TAG}/deterministic"
@@ -96,7 +96,7 @@ for name in ("deterministic", "neural_oof", "neural_stage2"):
     if not path.exists():
         continue
     summary = json.loads(path.read_text(encoding="utf-8"))
-    metrics = (summary.get("skill_evaluation") or {}).get("ranking_metrics") or {}
+    metrics = (summary.get("ranking_evaluation") or {}).get("ranking_metrics") or {}
     rows.append(
         {
             "experiment": name,

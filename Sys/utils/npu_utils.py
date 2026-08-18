@@ -1,7 +1,7 @@
 """
 Ascend NPU memory inspection and wait utilities.
 
-Used by SkilledAnalyzer to avoid vLLM OOM when previous processes
+Used by local NPU jobs to avoid OOM when previous processes
 still hold NPU memory.
 """
 

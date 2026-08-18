@@ -324,6 +324,8 @@ class TraceRCAnalyzer:
                 "dir": dp,
                 "prompt": "TraceRCA (FP-Growth + Jaccard + propagation dir inference)",
                 "draft_response": response,
+                "response": response,
+                "ranked_ips": top_ips,
             })
         return results
 

@@ -85,7 +85,7 @@ for name in ("p0", "p1", "p4"):
     validity_path = workdir / name / "validity.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     validity = json.loads(validity_path.read_text(encoding="utf-8"))["validity"]
-    metrics = summary["skill_evaluation"]["ranking_metrics"]
+    metrics = summary["ranking_evaluation"]["ranking_metrics"]
     rows.append(
         {
             "experiment": name,

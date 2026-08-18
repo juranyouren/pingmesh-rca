@@ -113,8 +113,8 @@ def result_record(
         "prompt": "NEURAL_STAGE1_SPATIOTEMPORAL_GRAPH",
         "draft_response": response,
         "response": response,
-        "skill_ips": [str(item["ip"]) for item in canonical if item.get("ip")],
-        "skill_details": {
+        "ranked_ips": [str(item["ip"]) for item in canonical if item.get("ip")],
+        "ranking_details": {
             "neural": {"topk": canonical, "rankings": canonical, "diagnostics": dict(diagnostics)},
             "combined": {"top3": canonical[:3], "topk": canonical, "rankings": canonical},
         },

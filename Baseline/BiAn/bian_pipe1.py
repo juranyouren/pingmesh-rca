@@ -564,7 +564,7 @@ class BiAnPipe1Analyzer:
             "prompt": METHOD_NAME,
             "response": response,
             "draft_response": response,
-            "skill_ips": list(result.get("ip", [])),
+            "ranked_ips": list(result.get("ip", [])),
             "stage1_alert_summaries": summaries,
             "stage2_device_analyses": analyses,
             "stage3_joint_scoring": result,

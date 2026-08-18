@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Tuple
 
-from Sys.RootCauseAnalyze.trust_trees.topo_tree import assess_topo_tree
 from Sys.utils.alarm_utils import load_alarm_weights, node_alarm_weight, node_events, event_name
 from Sys.utils.case_utils import get_device_ip
 from Sys.utils.ranking_utils import sorted_score_items
@@ -19,14 +18,6 @@ try:
     _DEFAULT_PAGERANK_ALPHA = _cfg.pagerank.alpha
 except Exception:
     _DEFAULT_PAGERANK_ALPHA = 0.85
-
-
-SKILL_META = {
-    "skill_id": "1",
-    "skill_name": "topology_pagerank_rank",
-    "python_executor": "score_topo",
-    "target_error": "Topology/PageRank ranking with alarm weights, cross count, and endpoint proximity.",
-}
 
 
 def parse_endpoint_ips(info: Dict[str, Any]) -> Tuple[List[str], List[str]]:
@@ -206,5 +197,4 @@ def topo_details(
             "undirected_top3": undirected_top3,
         },
     }
-    block["trust_tree"] = assess_topo_tree(block)
     return block

@@ -37,7 +37,7 @@ if [ -f "${tracerca_res}" ]; then
     python -c "
 from Sys.Score.Score_N import Scorer
 s = Scorer('${tracerca_res}')
-m = s.calculate_metrics()['skill_evaluation']['ranking_metrics']
+m = s.calculate_metrics()['ranking_evaluation']['ranking_metrics']
 print(f'  TraceRCA: Top-1={m[\"Top-1 Acc (%)\"]}  Top-3={m[\"Top-3 Acc (%)\"]}  Top-5={m[\"Top-5 Acc (%)\"]}')
 " 2>&1
 else
@@ -57,7 +57,7 @@ if [ -f "${nec_res}" ]; then
     python -c "
 from Sys.Score.Score_N import Scorer
 s = Scorer('${nec_res}')
-m = s.calculate_metrics()['skill_evaluation']['ranking_metrics']
+m = s.calculate_metrics()['ranking_evaluation']['ranking_metrics']
 print(f'  NetEventCause: Top-1={m[\"Top-1 Acc (%)\"]}  Top-3={m[\"Top-3 Acc (%)\"]}  Top-5={m[\"Top-5 Acc (%)\"]}')
 " 2>&1
 else

@@ -4,18 +4,9 @@ import json
 import os
 from typing import Any, Dict, List, Tuple
 
-from Sys.RootCauseAnalyze.trust_trees.temporal_tree import assess_temporal_tree
 from Sys.utils.alarm_utils import event_ts, node_events
 from Sys.utils.case_utils import get_device_ip
 from Sys.utils.ranking_utils import sorted_score_items
-
-
-SKILL_META = {
-    "skill_id": "2",
-    "skill_name": "temporal_score_devices",
-    "python_executor": "score_temporal",
-    "target_error": "Temporal burst, early-bird, and density ranking.",
-}
 
 
 def temporal_reference_time(info: Dict[str, Any], dirpath: str) -> int | None:
@@ -140,5 +131,4 @@ def temporal_details(
         "rankings": rankings,
         "diagnostics": diagnostics,
     }
-    block["trust_tree"] = assess_temporal_tree(block)
     return block

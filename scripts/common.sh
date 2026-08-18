@@ -6,7 +6,6 @@
 # 切换数据集:    export PINGMESH_DATA=/new/path
 # 切换模型:      export PINGMESH_MODEL_PATH=/new/model
 # 切换 NPU:      export PINGMESH_NPU_CARDS=0,1,2,3,4,5,6,7
-# 切换 Skill:    export PINGMESH_SKILLS="1"
 # ============================================================
 
 # ── 项目根目录 ──
@@ -27,7 +26,6 @@ export PINGMESH_MODEL_PATH="${PINGMESH_MODEL_PATH:-/usr/share/large_language_mod
 
 # ── NPU / 推理参数 ──
 export PINGMESH_NPU_CARDS="${PINGMESH_NPU_CARDS:-4,5,6,7}"
-export PINGMESH_SKILLS="${PINGMESH_SKILLS:-1 2}"
 export PINGMESH_TOP_K="${PINGMESH_TOP_K:-10}"
 export PINGMESH_BATCH_SIZE="${PINGMESH_BATCH_SIZE:-8}"
 export PINGMESH_PROPAGATION_MAX_CANDIDATE_NODES="${PINGMESH_PROPAGATION_MAX_CANDIDATE_NODES:-80}"
@@ -60,20 +58,3 @@ export PINGMESH_EDGE_CLASSIFIER_EPOCHS="${PINGMESH_EDGE_CLASSIFIER_EPOCHS:-300}"
 export PINGMESH_EDGE_CLASSIFIER_PATIENCE="${PINGMESH_EDGE_CLASSIFIER_PATIENCE:-30}"
 export PINGMESH_EDGE_CLASSIFIER_LEARNING_RATE="${PINGMESH_EDGE_CLASSIFIER_LEARNING_RATE:-0.03}"
 export PINGMESH_EDGE_CLASSIFIER_L2="${PINGMESH_EDGE_CLASSIFIER_L2:-0.001}"
-
-# Small model used to summarize candidate NODES before the main RCA LLM.
-# Environment variables still take precedence over these shared defaults.
-export PINGMESH_SUMMARY_MODEL_PATH="${PINGMESH_SUMMARY_MODEL_PATH:-/home/sbp/huangzeshun/firstpaper/DeepSeek-R1-Distill-Qwen-1.5B-local}"
-export PINGMESH_SUMMARY_CACHE_DIR="${PINGMESH_SUMMARY_CACHE_DIR:-${PINGMESH_RESULTS}/node_summary_cache}"
-# One vLLM summary engine per process. Multi-card summary workers must use
-# separate processes; changing ASCEND_RT_VISIBLE_DEVICES inside one process is unsafe.
-export PINGMESH_SUMMARY_NPU_CARDS="${PINGMESH_SUMMARY_NPU_CARDS:-0}"
-export PINGMESH_SUMMARY_MAX_TOKENS="${PINGMESH_SUMMARY_MAX_TOKENS:-1024}"
-# Per-device prompts are submitted together and scheduled by vLLM continuous
-# batching on the summary NPU. Lower this if the installed Ascend stack runs OOM.
-export PINGMESH_SUMMARY_MAX_NUM_SEQS="${PINGMESH_SUMMARY_MAX_NUM_SEQS:-8}"
-# Cap the summary KV cache explicitly because some vLLM-Ascend versions
-# otherwise pre-allocate nearly all HBM.
-export PINGMESH_SUMMARY_KV_CACHE_GB="${PINGMESH_SUMMARY_KV_CACHE_GB:-4}"
-# Fallback for older vLLM-Ascend releases that do not accept a byte-level cap.
-export PINGMESH_SUMMARY_NUM_GPU_BLOCKS="${PINGMESH_SUMMARY_NUM_GPU_BLOCKS:-256}"
