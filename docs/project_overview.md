@@ -10,11 +10,11 @@ encoder, two relation-aware attention layers, and a single-root case-wise
 softmax loss. The complete decision record and target tensor specification are
 in [`docs/PC-STGR设计方案.md`](./PC-STGR设计方案.md).
 
-This is a target-design decision, not a relabeling of existing results. The
-current `stage1/neural_*` implementation and its documented 159-case OOF scores
-remain IC-STGR artifacts until the PC-STGR migration and independent grouped
-OOF evaluation are complete. Do not report the existing IC-STGR checkpoints or
-metrics as PC-STGR results.
+The `stage1/neural_*` implementation has now migrated to this PC-STGR design.
+This is still not a relabeling of existing results: the documented 159-case OOF
+scores and old checkpoints remain IC-STGR artifacts until PC-STGR completes an
+independent grouped OOF evaluation. Do not report the existing IC-STGR metrics
+as PC-STGR results.
 
 ## Active Paper Branch
 
@@ -44,11 +44,11 @@ The target paper system is a two-stage pipeline:
 5. Evaluate Stage 1 with grouped out-of-fold Top-1/Top-3/Top-5 and MRR; evaluate
    Stage 2 validity or path accuracy separately according to label availability.
 
-The current executable neural pipeline is still IC-STGR; it is retained as the
-implemented historical reference until PC-STGR migration and independent OOF
-evaluation are complete. The deterministic topology + temporal fusion remains
-a strong white-box Stage 1 baseline. Deprecated orchestration and review paths
-are not part of the executable pipeline.
+The executable neural pipeline now implements PC-STGR. Its independent grouped
+OOF evaluation is still pending, so the existing IC-STGR metrics remain only a
+historical neural reference. The deterministic topology + temporal fusion
+remains a strong white-box Stage 1 baseline. Deprecated orchestration and review
+paths are not part of the executable pipeline.
 
 ## 2. Current Constraints
 
@@ -69,9 +69,9 @@ are not part of the executable pipeline.
 | --- | --- |
 | `Sys/config.py` | Central Python config derived from environment variables. |
 | `Sys/Preprocess/Preprocessor.py` | RAW merge, validation, and NODE data extraction. |
-| `Sys/RootCauseAnalyze/stage1/neural_graph.py` | IC-STGR Device-Event-Incident graph construction. |
-| `Sys/RootCauseAnalyze/stage1/neural_model.py` | Relation-aware graph encoder, root-ranking head, and training loss. |
-| `Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Grouped OOF training and label-free IC-STGR inference. |
+| `Sys/RootCauseAnalyze/stage1/neural_graph.py` | PC-STGR path-conditioned Device-Event graph construction. |
+| `Sys/RootCauseAnalyze/stage1/neural_model.py` | PC-STGR 42-to-64 encoder, relation-aware graph layers, root head, and single-root loss. |
+| `Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Grouped OOF training and label-free PC-STGR inference. |
 | `Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic temporal + alarm-topology Stage 1 baseline. |
 | `Sys/Score/` | Stage 1, Stage 2, propagation, and baseline evaluation scripts. |
 | `Sys/utils/` | Shared case, alarm, ranking, and I/O utilities. |
@@ -101,14 +101,14 @@ inference and must not be scored back on these 159 labeled cases as a paper resu
 
 ### 4.1 Stage 1 Target Decision
 
-PC-STGR is the fixed target design for the next Stage 1 implementation. IC-STGR
-remains the current executable neural reference and its existing metrics remain
-valid only under that name. The comparison plan is:
+PC-STGR is the fixed Stage 1 implementation. IC-STGR remains a historical neural
+reference and its existing metrics remain valid only under that name. The
+comparison plan is:
 
 | Method | Role | Status |
 | --- | --- | --- |
-| PC-STGR | target main method; path-conditioned Device-Event spatio-temporal ranking | design fixed; implementation and OOF pending |
-| IC-STGR | implemented historical reference; Device-Event-Incident ranking | first OOF result complete |
+| PC-STGR | main method; path-conditioned Device-Event spatio-temporal ranking | implementation complete; grouped OOF pending |
+| IC-STGR | historical reference; Device-Event-Incident ranking | first OOF result complete |
 | deterministic topology + temporal fusion | strong interpretable baseline | complete |
 | LambdaMART | learned ranking baseline over researcher-defined, automatically computed device features | pending |
 | device-only GAT/GCN | graph-structure baseline | pending |
@@ -145,10 +145,9 @@ publishable equivalents.
 ### 5.3 Fault Propagation Path Reconstruction
 
 The `2stage` branch is the primary working branch for the current paper. It
-currently contains the IC-STGR implementation, the PC-STGR target specification,
-and the Stage 2 joint-inference implementation. Stage 2 consumes the stable
-`initial_root_rankings` contract and must remain compatible with the future
-PC-STGR implementation.
+contains the PC-STGR implementation and the Stage 2 joint-inference
+implementation. Stage 2 consumes the stable `initial_root_rankings` contract
+and remains compatible with PC-STGR output.
 
 Supported result writers use one neutral ranking schema:
 
@@ -158,8 +157,9 @@ Supported result writers use one neutral ranking schema:
   records passed from Stage 1 to Stage 2;
 - `final_root_rankings`: Stage 2 reranked candidates when Stage 2 is present.
 
-`Sys/Score/Score_N.py` reports these as `ranking_evaluation`; parsed response
-payloads are reported separately as `response_evaluation`. The retired
+`Sys/Score/Score_N.py` evaluates one canonical root device per case and reports
+the result as `ranking_evaluation`; parsed response payloads are reported
+separately as `response_evaluation`. The retired
 `skill_ips`, `skill_details`, and `skill_evaluation` names are not supported.
 
 Stage 2 first builds a root-independent weighted relation graph over
@@ -209,17 +209,18 @@ Design source:
 
 ## 7. Experiment Commands
 
-Use these from the repository root on the server. The current executable neural
-workflow is IC-STGR and must keep that method name:
+Use these from the repository root on the server. The executable neural
+workflow is PC-STGR:
 
 ```bash
 source scripts/common.sh
-bash scripts/run_paper_05_spatiotemporal_graph.sh
+bash scripts/run_paper_05_pc_stgr.sh
 ```
 
-It produces deterministic-baseline, IC-STGR OOF, and IC-STGR-plus-Stage-2
-rows. The historical IC-STGR Stage 1 score is the `neural_oof` row. A PC-STGR
-paper row can be added only after the migration and a new grouped OOF run.
+It produces deterministic-baseline, PC-STGR OOF, and PC-STGR-plus-Stage-2 rows
+under `pc_stgr_oof` and `pc_stgr_stage2`. These rows receive paper metrics only
+after a new grouped OOF run; historical IC-STGR rows and checkpoints remain
+separate.
 
 The deterministic baseline and Stage 2 can also be run directly:
 
@@ -233,7 +234,7 @@ python Sys/RootCauseAnalyze/stage1/pipeline.py \
 
 python Sys/RootCauseAnalyze/propagation_pipeline.py \
   --data-root "$PINGMESH_DATA" \
-  --root-results "$PINGMESH_RESULTS/<paper_05_run>/neural_oof/res.json" \
+  --root-results "$PINGMESH_RESULTS/<paper_05_run>/pc_stgr_oof/res.json" \
   --output-dir "$PINGMESH_RESULTS/<run>/propagation"
 
 python Sys/Score/evaluate_propagation.py \

@@ -17,8 +17,7 @@ from Sys.utils.io_utils import load_json
 
 NODE_DEVICE = 0
 NODE_EVENT = 1
-NODE_INCIDENT = 2
-NODE_TYPE_COUNT = 3
+NODE_TYPE_COUNT = 2
 
 REL_PHYSICAL_FORWARD = 0
 REL_PHYSICAL_REVERSE = 1
@@ -28,17 +27,16 @@ REL_TEMPORAL_NEXT = 4
 REL_TEMPORAL_PREVIOUS = 5
 REL_NEIGHBOR_EARLIER_TO_LATER = 6
 REL_NEIGHBOR_LATER_TO_EARLIER = 7
-REL_INCIDENT_TO_DEVICE = 8
-REL_DEVICE_TO_INCIDENT = 9
-RELATION_COUNT = 10
+RELATION_COUNT = 8
 
 NODE_FEATURE_DIM = 24
-EDGE_FEATURE_DIM = 6
+NODE_TYPE_FEATURE_DIM = 2
+EDGE_FEATURE_DIM = 2
 
 
 @dataclass(frozen=True)
 class GraphBuildConfig:
-    """Label-free settings for constructing one incident event graph."""
+    """Label-free settings for constructing one path-conditioned event graph."""
 
     event_window_ms: int = 1_800_000
     dedup_window_ms: int = 60_000
@@ -47,7 +45,7 @@ class GraphBuildConfig:
     max_neighbor_event_edges_per_link: int = 4
     max_neighbor_lag_ms: int = 600_000
     corridor_slack_hops: int = 2
-    max_event_vocab: int = 512
+    max_event_vocab: int = 256
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -58,11 +56,11 @@ class RawCase:
     dirpath: str
     nodes: List[Dict[str, Any]]
     info: Dict[str, Any]
-    gt_ips: List[str]
+    gt_ip: str | None = None
 
 
 @dataclass
-class IncidentGraph:
+class PathConditionedGraph:
     dirpath: str
     node_features: List[List[float]]
     node_types: List[int]
@@ -73,7 +71,7 @@ class IncidentGraph:
     edge_features: List[List[float]]
     device_indices: List[int]
     device_ips: List[str]
-    positive_device_positions: List[int]
+    root_device_position: int | None
     diagnostics: Dict[str, Any]
 
 
@@ -95,7 +93,7 @@ class EventVocabulary:
         return " ".join(str(value or "").strip().lower().split())
 
     @classmethod
-    def fit(cls, cases: Sequence[RawCase], *, max_size: int = 512) -> "EventVocabulary":
+    def fit(cls, cases: Sequence[RawCase], *, max_size: int = 256) -> "EventVocabulary":
         counts: Counter[str] = Counter()
         for case in cases:
             for node in case.nodes:
@@ -149,30 +147,26 @@ def _extract_ips(value: Any) -> List[str]:
     return []
 
 
-def load_training_labels(dirpath: str) -> List[str]:
-    """Read labels only in the explicit training/evaluation path."""
+def load_training_label(dirpath: str) -> str | None:
+    """Read the single root only in the explicit training/evaluation path."""
 
     strict_path = os.path.join(dirpath, "label_v2.json")
     strict = load_json(strict_path, default=None)
     if isinstance(strict, Mapping):
-        values: List[str] = []
         for key in ("primary_root_cause", "primary_root_causes", "secondary_root_causes", "root_causes"):
-            for ip in _extract_ips(strict.get(key)):
-                if ip not in values:
-                    values.append(ip)
-        if values:
-            return values
+            values = _extract_ips(strict.get(key))
+            if values:
+                return values[0]
 
     legacy = load_json(os.path.join(dirpath, "label.json"), default=[])
     if not isinstance(legacy, list):
-        return []
-    result: List[str] = []
-    for label in sorted(legacy, key=lambda item: item.get("ranking", 999))[:3]:
+        return None
+    for label in sorted(legacy, key=lambda item: item.get("ranking", 999)):
         for node in label.get("abnormal_node", []):
             ip = node.get("ip") if isinstance(node, Mapping) else None
-            if ip and ip not in result:
-                result.append(str(ip))
-    return result
+            if ip:
+                return str(ip)
+    return None
 
 
 def load_raw_cases(data_root: str, *, require_labels: bool) -> List[RawCase]:
@@ -180,9 +174,9 @@ def load_raw_cases(data_root: str, *, require_labels: bool) -> List[RawCase]:
     for dirpath in discover_case_dirs(data_root, require_labels=require_labels):
         nodes = load_case_nodes(dirpath)
         info = load_case_info(dirpath)
-        labels = load_training_labels(dirpath) if require_labels else []
-        if nodes and info and (labels or not require_labels):
-            result.append(RawCase(dirpath=dirpath, nodes=nodes, info=info, gt_ips=labels))
+        root = load_training_label(dirpath) if require_labels else None
+        if nodes and info and (root is not None or not require_labels):
+            result.append(RawCase(dirpath=dirpath, nodes=nodes, info=info, gt_ip=root))
     return result
 
 
@@ -402,7 +396,7 @@ def _distance_feature(distance: int | None) -> float:
     return 1.0 / (1.0 + distance) if distance is not None else 0.0
 
 
-class IncidentGraphBuilder:
+class PathConditionedGraphBuilder:
     def __init__(
         self,
         vocabulary: EventVocabulary,
@@ -414,7 +408,7 @@ class IncidentGraphBuilder:
         self.config = config or GraphBuildConfig()
         self.weights = load_alarm_weights(weight_path)
 
-    def build(self, case: RawCase, *, include_labels: bool = False) -> IncidentGraph:
+    def build(self, case: RawCase, *, include_labels: bool = False) -> PathConditionedGraph:
         device_ips, node_by_ip, physical_edges = _resolve_topology(case.nodes)
         if not device_ips:
             raise ValueError(f"case has no device nodes: {case.dirpath}")
@@ -519,15 +513,6 @@ class IncidentGraphBuilder:
                 token_ids.append(self.vocabulary.encode(row["name"]))
                 event_nodes_by_ip[ip].append((node_index, row))
 
-        incident_index = len(node_features)
-        incident_features = [0.0] * NODE_FEATURE_DIM
-        incident_features[0] = 1.0
-        incident_features[18] = min(len(source_ips) / 4.0, 1.0)
-        incident_features[19] = min(len(sink_ips) / 4.0, 1.0)
-        node_features.append(incident_features)
-        node_types.append(NODE_INCIDENT)
-        token_ids.append(0)
-
         edge_sources: List[int] = []
         edge_targets: List[int] = []
         edge_types: List[int] = []
@@ -556,20 +541,12 @@ class IncidentGraphBuilder:
                 previous_ts = previous_row.get("timestamp")
                 current_ts = current_row.get("timestamp")
                 lag = current_ts - previous_ts if previous_ts is not None and current_ts is not None else 0
-                edge_row = [math.tanh(lag / max(self.config.max_neighbor_lag_ms, 1)), min(abs(lag) / max(self.config.max_neighbor_lag_ms, 1), 1.0), 0.0, 0.0, 0.0, 0.0]
+                edge_row = [
+                    math.tanh(lag / max(self.config.max_neighbor_lag_ms, 1)),
+                    min(abs(lag) / max(self.config.max_neighbor_lag_ms, 1), 1.0),
+                ]
                 add_edge(previous, current, REL_TEMPORAL_NEXT, edge_row)
                 add_edge(current, previous, REL_TEMPORAL_PREVIOUS, [-edge_row[0], *edge_row[1:]])
-
-            incident_edge = [
-                0.0,
-                0.0,
-                _distance_feature(source_distance.get(ip)),
-                _distance_feature(sink_distance.get(ip)),
-                float(ip in corridor),
-                float(ip in source_anchors or ip in sink_anchors),
-            ]
-            add_edge(incident_index, device_index, REL_INCIDENT_TO_DEVICE, incident_edge)
-            add_edge(device_index, incident_index, REL_DEVICE_TO_INCIDENT, incident_edge)
 
         undirected_links = {tuple(sorted((source, target))) for source, target in physical_edges}
         for left_ip, right_ip in sorted(undirected_links):
@@ -590,16 +567,19 @@ class IncidentGraphBuilder:
                     earlier, later, positive_lag = left_index, right_index, lag
                 else:
                     earlier, later, positive_lag = right_index, left_index, -lag
-                edge_row = [math.tanh(positive_lag / max(self.config.max_neighbor_lag_ms, 1)), min(positive_lag / max(self.config.max_neighbor_lag_ms, 1), 1.0), 0.0, 0.0, 0.0, 0.0]
+                edge_row = [
+                    math.tanh(positive_lag / max(self.config.max_neighbor_lag_ms, 1)),
+                    min(positive_lag / max(self.config.max_neighbor_lag_ms, 1), 1.0),
+                ]
                 add_edge(earlier, later, REL_NEIGHBOR_EARLIER_TO_LATER, edge_row)
                 add_edge(later, earlier, REL_NEIGHBOR_LATER_TO_EARLIER, [-edge_row[0], *edge_row[1:]])
 
-        positive_positions = [
-            ip_to_position[ip]
-            for ip in case.gt_ips
-            if include_labels and ip in ip_to_position
-        ]
-        return IncidentGraph(
+        root_position = (
+            ip_to_position.get(case.gt_ip)
+            if include_labels and case.gt_ip
+            else None
+        )
+        return PathConditionedGraph(
             dirpath=case.dirpath,
             node_features=node_features,
             node_types=node_types,
@@ -610,7 +590,7 @@ class IncidentGraphBuilder:
             edge_features=edge_features,
             device_indices=list(range(len(device_ips))),
             device_ips=device_ips,
-            positive_device_positions=positive_positions,
+            root_device_position=root_position,
             diagnostics={
                 "device_count": len(device_ips),
                 "event_count": sum(len(values) for values in event_nodes_by_ip.values()),
@@ -618,7 +598,7 @@ class IncidentGraphBuilder:
                 "source_anchor_count": len(source_anchors),
                 "sink_anchor_count": len(sink_anchors),
                 "corridor_device_count": len(corridor),
-                "label_coverage": bool(positive_positions) if include_labels else None,
+                "label_coverage": root_position is not None if include_labels else None,
             },
         )
 

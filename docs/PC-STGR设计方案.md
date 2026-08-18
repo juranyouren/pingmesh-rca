@@ -1,6 +1,6 @@
 # PC-STGR 设计方案与决策记录
 
-> 状态：目标设计已确定，代码迁移与独立 OOF 实验待完成
+> 状态：代码迁移已完成，独立 grouped OOF 实验待完成
 > 决策日期：2026-08-18
 > 适用范围：Pingmesh 根因候选排序（Stage 1）
 
@@ -8,7 +8,7 @@
 
 本文档记录 PC-STGR 的方法定义、数据假设、特征工程、图结构、网络结构、向量维度、训练目标和实验约束。本文档是本轮模型设计讨论的统一结论，后续实现、实验和论文描述应以本文档为目标规格。
 
-当前仓库中已实现和已评估的神经 Stage 1 仍是 IC-STGR。PC-STGR 是新的目标结构，不能把 IC-STGR 的 checkpoint、OOF 预测或 73.58/93.71/97.48 等历史指标直接改名为 PC-STGR 结果。PC-STGR 必须在实现完成后重新进行分组 OOF 训练和评价。
+当前仓库的神经 Stage 1 代码已经迁移到 PC-STGR。现有 IC-STGR checkpoint、OOF 预测和 73.58/93.71/97.48 等历史指标仍属于旧结构，不能直接改名为 PC-STGR 结果。PC-STGR 必须重新进行分组 OOF 训练和评价。
 
 ## 2. 本轮已确定的设计决策
 
@@ -639,25 +639,31 @@ Stage 1 中 `combined_score` 与 `neural_score` 都是 PC-STGR 的 case 内概�
 
 所有消融必须使用相同 fold、随机种子、事件词表上限、隐藏维度和训练策略，不预设性能提升。
 
-## 17. 实现迁移清单
+## 17. 实现状态与实验清单
 
-目标实现至少需要完成：
+代码迁移已完成：
 
-1. 图节点类型改为 Device、Event 两类；
-2. 关系类型改为 8 类；
-3. 边数值特征规范为 2 维；
+1. 图节点类型为 Device、Event 两类；
+2. 关系类型为 8 类；
+3. 边数值特征为 2 维；
 4. 节点数值特征保持统一 24 维；
-5. 增加固定 2 维类型 one-hot；
-6. 事件名称 Embedding 改为默认 16 维；
+5. 节点类型使用固定 2 维 one-hot；
+6. 事件名称 Embedding 默认 16 维；
 7. 节点输入拼接为 42 维；
-8. 输入编码器改为 `Linear(42,64) → GELU → LayerNorm`；
-9. 标签结构改为单一 `root_position`；
-10. 损失改为单根因 case-wise cross entropy；
-11. checkpoint 中保存 PC-STGR 图配置、词表和模型配置；
+8. 输入编码器为 `Linear(42,64) → GELU → LayerNorm`；
+9. 标签结构为单一 `root_position`；
+10. 损失为单根因 case-wise cross entropy；
+11. PC-STGR checkpoint 使用独立格式版本并保存图、词表和模型配置；
 12. 输出元数据使用 PC-STGR 方法标识；
-13. 增加图结构、向量形状、无标签推理和 checkpoint 往返测试；
-14. 重新执行 grouped 5-fold OOF；
-15. PC-STGR 新结果与历史模型结果分开报告。
+13. 论文实验脚本已切换到独立的 `pc_stgr_oof` 和 `pc_stgr_stage2` 目录；
+14. 训练标签读取和 `Score_N` 评测统一为每个 case 一个根因设备。
+
+仍需在服务器 PyTorch/NPU 环境完成：
+
+1. 运行包含模型前向、损失和 checkpoint 往返的测试；
+2. 重新执行 grouped 5-fold OOF；
+3. 生成 PC-STGR 自身的 Top-1/Top-3/Top-5/MRR；
+4. 将 PC-STGR 新结果与历史 IC-STGR 结果分开报告。
 
 ## 18. 方法边界
 

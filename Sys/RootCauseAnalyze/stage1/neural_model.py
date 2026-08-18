@@ -19,9 +19,10 @@ except ImportError as exc:  # pragma: no cover - exercised on the training serve
 from Sys.RootCauseAnalyze.stage1.neural_graph import (
     EDGE_FEATURE_DIM,
     NODE_FEATURE_DIM,
+    NODE_TYPE_FEATURE_DIM,
     NODE_TYPE_COUNT,
     RELATION_COUNT,
-    IncidentGraph,
+    PathConditionedGraph,
 )
 
 
@@ -31,8 +32,7 @@ class NeuralModelConfig:
     heads: int = 4
     layers: int = 2
     dropout: float = 0.20
-    pairwise_weight: float = 0.20
-    hard_negative_k: int = 16
+    event_embedding_dim: int = 16
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -84,7 +84,8 @@ def set_seed(seed: int) -> None:
             pass
 
 
-def graph_to_tensors(graph: IncidentGraph, device: torch.device) -> Dict[str, torch.Tensor]:
+def graph_to_tensors(graph: PathConditionedGraph, device: torch.device) -> Dict[str, torch.Tensor]:
+    root_position = -1 if graph.root_device_position is None else graph.root_device_position
     return {
         "node_features": torch.tensor(graph.node_features, dtype=torch.float32, device=device),
         "node_types": torch.tensor(graph.node_types, dtype=torch.long, device=device),
@@ -92,9 +93,11 @@ def graph_to_tensors(graph: IncidentGraph, device: torch.device) -> Dict[str, to
         "edge_sources": torch.tensor(graph.edge_sources, dtype=torch.long, device=device),
         "edge_targets": torch.tensor(graph.edge_targets, dtype=torch.long, device=device),
         "edge_types": torch.tensor(graph.edge_types, dtype=torch.long, device=device),
-        "edge_features": torch.tensor(graph.edge_features, dtype=torch.float32, device=device),
+        "edge_features": torch.tensor(
+            graph.edge_features, dtype=torch.float32, device=device
+        ).reshape(-1, EDGE_FEATURE_DIM),
         "device_indices": torch.tensor(graph.device_indices, dtype=torch.long, device=device),
-        "positive_positions": torch.tensor(graph.positive_device_positions, dtype=torch.long, device=device),
+        "root_position": torch.tensor(root_position, dtype=torch.long, device=device),
     }
 
 
@@ -187,17 +190,27 @@ class RelationalTemporalAttention(nn.Module):
         return self.norm(hidden + update)
 
 
-class SpatioTemporalGraphRanker(nn.Module):
+class PathConditionedGraphRanker(nn.Module):
     def __init__(self, vocabulary_size: int, config: NeuralModelConfig):
         super().__init__()
+        if config.event_embedding_dim <= 0:
+            raise ValueError("event_embedding_dim must be positive")
         self.config = config
-        self.numeric_projection = nn.Sequential(
-            nn.Linear(NODE_FEATURE_DIM, config.hidden_dim),
+        self.event_embedding = nn.Embedding(
+            vocabulary_size,
+            config.event_embedding_dim,
+            padding_idx=0,
+        )
+        node_input_dim = (
+            NODE_FEATURE_DIM
+            + NODE_TYPE_FEATURE_DIM
+            + config.event_embedding_dim
+        )
+        self.input_projection = nn.Sequential(
+            nn.Linear(node_input_dim, config.hidden_dim),
             nn.GELU(),
             nn.LayerNorm(config.hidden_dim),
         )
-        self.node_type_embedding = nn.Embedding(NODE_TYPE_COUNT, config.hidden_dim)
-        self.event_embedding = nn.Embedding(vocabulary_size, config.hidden_dim, padding_idx=0)
         self.layers = nn.ModuleList(
             RelationalTemporalAttention(config) for _ in range(config.layers)
         )
@@ -220,11 +233,18 @@ class SpatioTemporalGraphRanker(nn.Module):
         )
 
     def forward(self, batch: Mapping[str, torch.Tensor]) -> torch.Tensor:
-        hidden = (
-            self.numeric_projection(batch["node_features"])
-            + self.node_type_embedding(batch["node_types"])
-            + self.event_embedding(batch["token_ids"])
+        node_type_one_hot = F.one_hot(
+            batch["node_types"], num_classes=NODE_TYPE_COUNT
+        ).to(dtype=batch["node_features"].dtype)
+        node_input = torch.cat(
+            [
+                batch["node_features"],
+                node_type_one_hot,
+                self.event_embedding(batch["token_ids"]),
+            ],
+            dim=-1,
         )
+        hidden = self.input_projection(node_input)
         for attention, feed_forward in zip(self.layers, self.feed_forward):
             hidden = attention(
                 hidden,
@@ -236,26 +256,20 @@ class SpatioTemporalGraphRanker(nn.Module):
             hidden = hidden + feed_forward(hidden)
         return self.root_head(hidden[batch["device_indices"]]).squeeze(-1)
 
-    def ranking_loss(self, logits: torch.Tensor, positives: torch.Tensor) -> torch.Tensor:
-        if positives.numel() == 0:
+    def ranking_loss(self, logits: torch.Tensor, root_position: torch.Tensor) -> torch.Tensor:
+        if root_position.numel() != 1 or int(root_position.item()) < 0:
             raise ValueError("training graph has no ground-truth device in the graph")
-        listwise = torch.logsumexp(logits, dim=0) - torch.logsumexp(logits[positives], dim=0)
-        positive_mask = torch.zeros_like(logits, dtype=torch.bool)
-        positive_mask[positives] = True
-        negatives = logits[~positive_mask]
-        if negatives.numel() == 0 or self.config.pairwise_weight <= 0:
-            return listwise
-        hard_count = min(self.config.hard_negative_k, negatives.numel())
-        hard_negatives = torch.topk(negatives, k=hard_count).values
-        positive_reference = torch.logsumexp(logits[positives], dim=0) - math.log(positives.numel())
-        pairwise = F.softplus(hard_negatives - positive_reference).mean()
-        return listwise + self.config.pairwise_weight * pairwise
+        root = root_position.reshape(1)
+        return F.cross_entropy(logits.unsqueeze(0), root)
 
 
-def _rank_metrics(logits: torch.Tensor, positives: torch.Tensor) -> Dict[str, float]:
+def _rank_metrics(logits: torch.Tensor, root_position: torch.Tensor) -> Dict[str, float]:
     order = torch.argsort(logits, descending=True).tolist()
-    positive_set = set(positives.tolist())
-    best_rank = min((rank for rank, position in enumerate(order, 1) if position in positive_set), default=len(order) + 1)
+    root = int(root_position.item())
+    best_rank = next(
+        (rank for rank, position in enumerate(order, 1) if position == root),
+        len(order) + 1,
+    )
     return {
         "top1": float(best_rank <= 1),
         "top3": float(best_rank <= 3),
@@ -266,20 +280,20 @@ def _rank_metrics(logits: torch.Tensor, positives: torch.Tensor) -> Dict[str, fl
 
 @torch.no_grad()
 def evaluate_model(
-    model: SpatioTemporalGraphRanker,
-    graphs: Sequence[IncidentGraph],
+    model: PathConditionedGraphRanker,
+    graphs: Sequence[PathConditionedGraph],
     device: torch.device,
 ) -> Dict[str, float]:
     model.eval()
     totals = {"loss": 0.0, "top1": 0.0, "top3": 0.0, "top5": 0.0, "mrr": 0.0}
     evaluated = 0
     for graph in graphs:
-        if not graph.positive_device_positions:
+        if graph.root_device_position is None:
             continue
         batch = graph_to_tensors(graph, device)
         logits = model(batch)
-        totals["loss"] += float(model.ranking_loss(logits, batch["positive_positions"]).item())
-        metrics = _rank_metrics(logits, batch["positive_positions"])
+        totals["loss"] += float(model.ranking_loss(logits, batch["root_position"]).item())
+        metrics = _rank_metrics(logits, batch["root_position"])
         for key, value in metrics.items():
             totals[key] += value
         evaluated += 1
@@ -289,21 +303,21 @@ def evaluate_model(
 
 
 def train_model(
-    train_graphs: Sequence[IncidentGraph],
-    validation_graphs: Sequence[IncidentGraph],
+    train_graphs: Sequence[PathConditionedGraph],
+    validation_graphs: Sequence[PathConditionedGraph],
     *,
     vocabulary_size: int,
     model_config: NeuralModelConfig,
     training_config: TrainingConfig,
     device: torch.device,
     fixed_epochs: int | None = None,
-) -> Tuple[SpatioTemporalGraphRanker, int, List[Dict[str, Any]]]:
+) -> Tuple[PathConditionedGraphRanker, int, List[Dict[str, Any]]]:
     if not train_graphs:
         raise ValueError("no training graphs")
-    if not any(graph.positive_device_positions for graph in train_graphs):
-        raise ValueError("none of the training labels map to a device in its incident graph")
+    if not any(graph.root_device_position is not None for graph in train_graphs):
+        raise ValueError("none of the training labels map to a device in its path-conditioned graph")
     set_seed(training_config.seed)
-    model = SpatioTemporalGraphRanker(vocabulary_size, model_config).to(device)
+    model = PathConditionedGraphRanker(vocabulary_size, model_config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=training_config.learning_rate,
@@ -328,11 +342,11 @@ def train_model(
         accumulation = max(1, training_config.gradient_accumulation)
         for graph_index in order:
             graph = train_graphs[graph_index]
-            if not graph.positive_device_positions:
+            if graph.root_device_position is None:
                 continue
             batch = graph_to_tensors(graph, device)
             logits = model(batch)
-            loss = model.ranking_loss(logits, batch["positive_positions"])
+            loss = model.ranking_loss(logits, batch["root_position"])
             (loss / accumulation).backward()
             running_loss += float(loss.detach().item())
             processed += 1
@@ -378,8 +392,8 @@ def train_model(
 
 @torch.no_grad()
 def predict_graph(
-    model: SpatioTemporalGraphRanker,
-    graph: IncidentGraph,
+    model: PathConditionedGraphRanker,
+    graph: PathConditionedGraph,
     device: torch.device,
     *,
     top_k: int,
@@ -414,7 +428,7 @@ def predict_graph(
 def save_checkpoint(
     path: str,
     *,
-    model: SpatioTemporalGraphRanker,
+    model: PathConditionedGraphRanker,
     vocabulary: Mapping[str, Any],
     graph_config: Mapping[str, Any],
     model_config: NeuralModelConfig,
@@ -426,7 +440,7 @@ def save_checkpoint(
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     torch.save(
         {
-            "format_version": "spatiotemporal-stage1-v1",
+            "format_version": "pc-stgr-stage1-v1",
             "model_state": model.state_dict(),
             "vocabulary": dict(vocabulary),
             "graph_config": dict(graph_config),
@@ -438,16 +452,16 @@ def save_checkpoint(
     )
 
 
-def load_checkpoint(path: str, device: torch.device) -> Tuple[SpatioTemporalGraphRanker, Dict[str, Any]]:
+def load_checkpoint(path: str, device: torch.device) -> Tuple[PathConditionedGraphRanker, Dict[str, Any]]:
     try:
         payload = torch.load(path, map_location=device, weights_only=False)
     except TypeError:  # pragma: no cover - torch < 2.6
         payload = torch.load(path, map_location=device)
-    if payload.get("format_version") != "spatiotemporal-stage1-v1":
-        raise ValueError("unsupported neural Stage 1 checkpoint")
+    if payload.get("format_version") != "pc-stgr-stage1-v1":
+        raise ValueError("unsupported checkpoint: expected a PC-STGR Stage 1 model")
     model_config = NeuralModelConfig(**payload["model_config"])
     vocabulary_size = len(payload.get("vocabulary", {}).get("itos", []))
-    model = SpatioTemporalGraphRanker(vocabulary_size, model_config).to(device)
+    model = PathConditionedGraphRanker(vocabulary_size, model_config).to(device)
     model.load_state_dict(payload["model_state"])
     model.eval()
     return model, payload

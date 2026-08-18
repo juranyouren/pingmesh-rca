@@ -7,9 +7,10 @@ Pingmesh-triggered incidents. The target paper pipeline is:
 
 `Pingmesh case data -> PC-STGR Stage 1 Top-K -> Stage 2/M1 root-independent hypothesis graph -> Stage 2/M2 root-conditioned graphs and reranking`
 
-PC-STGR is the target design recorded in `docs/PC-STGR设计方案.md`. The current
-`stage1/neural_*` implementation and its 159-case OOF scores remain IC-STGR
-artifacts until migration and a fresh grouped OOF evaluation are complete.
+PC-STGR is the Stage 1 design recorded in `docs/PC-STGR设计方案.md`. The current
+`stage1/neural_*` implementation has migrated to PC-STGR, but a fresh grouped
+OOF evaluation is still pending. The existing 159-case scores remain historical
+IC-STGR artifacts and must not be reported as PC-STGR results.
 
 ## Non-Negotiables
 
@@ -21,7 +22,7 @@ artifacts until migration and a fresh grouped OOF evaluation are complete.
 ## Key Paths
 
 ### Core pipeline
-- `Sys/RootCauseAnalyze/stage1/`: current IC-STGR implementation and deterministic Stage 1 baselines.
+- `Sys/RootCauseAnalyze/stage1/`: current PC-STGR implementation and deterministic Stage 1 baselines.
 - `Sys/RootCauseAnalyze/propagation/`: Stage 2 M1/M2 reconstruction and reranking.
 - `Sys/RootCauseAnalyze/propagation_pipeline.py`: label-free Stage 1 → Stage 2 entrypoint.
 
@@ -41,7 +42,7 @@ artifacts until migration and a fresh grouped OOF evaluation are complete.
 ### Prompts, scripts, data
 - `prompts/`: baseline and ablation prompt templates; do not recreate root-level `utils/`.
 - `scripts/common.sh`: single source of default server paths and model parameters.
-- `scripts/run_paper_05_spatiotemporal_graph.sh`: current executable Stage 1 paper workflow.
+- `scripts/run_paper_05_pc_stgr.sh`: current executable Stage 1 paper workflow.
 - `scripts/run_stage2_edge_probability_ablation.sh`: Stage 2 edge-probability ablation.
 - `Baseline/`: TraceRCA, NetEventCause, and BiAn baseline adapters.
 - `docs/project_overview.md`: detailed project state and roadmap.

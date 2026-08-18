@@ -135,7 +135,7 @@ class Scorer:
             labels_v2 = Scorer._load_json(label_v2_path)
             gt_ips = Scorer._get_groundtruth_v2(labels_v2)
             if gt_ips:
-                return GroundTruth(ips=gt_ips, source="label_v2.json")
+                return GroundTruth(ips=gt_ips, source="label_v2.json:single_root")
 
         label_path = os.path.join(dir_name, "label.json")
         if not os.path.exists(label_path):
@@ -144,13 +144,15 @@ class Scorer:
         if not isinstance(labels, list):
             return GroundTruth(ips=[])
         labels_sorted = sorted(labels, key=lambda x: x.get("ranking", 999))
-        gt_ips = []
-        for lb in labels_sorted[:3]:
+        for lb in labels_sorted:
             for an in lb.get("abnormal_node", []):
-                ip = an.get("ip")
-                if ip and ip not in gt_ips:
-                    gt_ips.append(ip)
-        return GroundTruth(ips=gt_ips, source="label.json:top3_ranking")
+                ip = an.get("ip") if isinstance(an, dict) else None
+                if ip:
+                    return GroundTruth(
+                        ips=[str(ip)],
+                        source="label.json:rank1_root",
+                    )
+        return GroundTruth(ips=[])
 
     @staticmethod
     def _extract_ips(value) -> List[str]:
@@ -176,30 +178,27 @@ class Scorer:
     @staticmethod
     def _get_groundtruth_v2(labels: Any) -> List[str]:
         """
-        Preferred strict label schema for paper-grade evaluation.
+        Return the canonical single root from the strict paper label schema.
 
-        Supported fields:
-          - primary_root_cause / primary_root_causes: counted first
-          - secondary_root_causes: counted after primary roots
-          - root_causes: fallback when primary/secondary split is absent
+        Fields are checked in priority order.  If a field contains multiple
+        devices, only its first device is the case-level root.  Secondary and
+        generic roots are compatibility fallbacks for older annotations.
 
         Fields such as victims/affected_nodes are intentionally ignored.
         """
         if not isinstance(labels, dict):
             return []
 
-        gt_ips = []
-        primary = []
-        for key in ("primary_root_cause", "primary_root_causes"):
-            primary.extend(Scorer._extract_ips(labels.get(key)))
-
-        secondary = Scorer._extract_ips(labels.get("secondary_root_causes"))
-        fallback = Scorer._extract_ips(labels.get("root_causes"))
-
-        for ip in primary + secondary + fallback:
-            if ip and ip not in gt_ips:
-                gt_ips.append(ip)
-        return gt_ips
+        for key in (
+            "primary_root_cause",
+            "primary_root_causes",
+            "secondary_root_causes",
+            "root_causes",
+        ):
+            ips = Scorer._extract_ips(labels.get(key))
+            if ips:
+                return [str(ips[0])]
+        return []
 
     # ── core eval ──────────────────────────────────────────────────
 

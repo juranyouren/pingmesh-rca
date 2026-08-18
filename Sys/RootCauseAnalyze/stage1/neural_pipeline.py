@@ -17,7 +17,7 @@ if PROJECT_ROOT not in sys.path:
 from Sys.RootCauseAnalyze.stage1.neural_graph import (
     EventVocabulary,
     GraphBuildConfig,
-    IncidentGraphBuilder,
+    PathConditionedGraphBuilder,
     RawCase,
     grouped_kfold_indices,
     load_raw_cases,
@@ -25,7 +25,8 @@ from Sys.RootCauseAnalyze.stage1.neural_graph import (
 from Sys.utils.io_utils import save_json
 
 
-MODEL_VERSION = "incident-conditioned-spatiotemporal-heterograph-v1"
+MODEL_NAME = "PC-STGR"
+MODEL_VERSION = "path-conditioned-spatiotemporal-graph-ranker-v1"
 
 
 def _backend():
@@ -63,8 +64,7 @@ def _model_config(args: argparse.Namespace):
         heads=args.heads,
         layers=args.layers,
         dropout=args.dropout,
-        pairwise_weight=args.pairwise_weight,
-        hard_negative_k=args.hard_negative_k,
+        event_embedding_dim=args.event_embedding_dim,
     )
 
 
@@ -98,10 +98,11 @@ def result_record(
     fold: int | None = None,
 ) -> Dict[str, Any]:
     canonical = [dict(item) for item in rankings]
-    reason = f"Neural Stage 1 ({MODEL_VERSION}); evaluation_mode={evaluation_mode}."
+    reason = f"{MODEL_NAME} Stage 1 ({MODEL_VERSION}); evaluation_mode={evaluation_mode}."
     response = _response(canonical, reason)
     metadata: Dict[str, Any] = {
         "method": MODEL_VERSION,
+        "model_name": MODEL_NAME,
         "evaluation_mode": evaluation_mode,
         "root_rankings": canonical,
         "diagnostics": dict(diagnostics),
@@ -110,7 +111,7 @@ def result_record(
         metadata["fold"] = int(fold)
     return {
         "dir": case.dirpath,
-        "prompt": "NEURAL_STAGE1_SPATIOTEMPORAL_GRAPH",
+        "prompt": "PC_STGR_STAGE1_DEVICE_EVENT_GRAPH",
         "draft_response": response,
         "response": response,
         "ranked_ips": [str(item["ip"]) for item in canonical if item.get("ip")],
@@ -143,7 +144,7 @@ def _build_graphs(
     *,
     include_labels: bool,
 ) -> List[Any]:
-    builder = IncidentGraphBuilder(vocabulary, config=graph_config, weight_path=weight_file)
+    builder = PathConditionedGraphBuilder(vocabulary, config=graph_config, weight_path=weight_file)
     return [builder.build(case, include_labels=include_labels) for case in cases]
 
 
@@ -161,7 +162,7 @@ def run_cross_validation(args: argparse.Namespace) -> str:
     os.makedirs(fold_dir, exist_ok=True)
 
     print(
-        f"Neural Stage 1 OOF: cases={len(cases)}, folds={len(folds)}, "
+        f"{MODEL_NAME} Stage 1 OOF: cases={len(cases)}, folds={len(folds)}, "
         f"device={device}, model={MODEL_VERSION}"
     )
     started = time.time()
@@ -184,8 +185,8 @@ def run_cross_validation(args: argparse.Namespace) -> str:
         validation_graphs = _build_graphs(
             validation_cases, vocabulary, graph_config, args.weight_file, include_labels=True
         )
-        missing_train_labels = sum(not graph.positive_device_positions for graph in training_graphs)
-        missing_validation_labels = sum(not graph.positive_device_positions for graph in validation_graphs)
+        missing_train_labels = sum(graph.root_device_position is None for graph in training_graphs)
+        missing_validation_labels = sum(graph.root_device_position is None for graph in validation_graphs)
         if missing_train_labels or missing_validation_labels:
             print(
                 f"[WARNING] fold={fold_number}: labels outside graph: "
@@ -210,6 +211,8 @@ def run_cross_validation(args: argparse.Namespace) -> str:
             model_config=model_config,
             training_config=training_config,
             metadata={
+                "model_name": MODEL_NAME,
+                "model_version": MODEL_VERSION,
                 "evaluation_mode": "out_of_fold",
                 "fold": fold_number,
                 "best_epoch": best_epoch,
@@ -275,6 +278,8 @@ def run_cross_validation(args: argparse.Namespace) -> str:
         model_config=model_config,
         training_config=final_training,
         metadata={
+            "model_name": MODEL_NAME,
+            "model_version": MODEL_VERSION,
             "evaluation_mode": "trained_on_all_labeled_cases",
             "train_case_count": len(cases),
             "epochs": selected_epochs,
@@ -282,6 +287,7 @@ def run_cross_validation(args: argparse.Namespace) -> str:
         },
     )
     summary = {
+        "model_name": MODEL_NAME,
         "model_version": MODEL_VERSION,
         "evaluation_mode": "out_of_fold",
         "case_count": len(cases),
@@ -335,6 +341,8 @@ def run_train(args: argparse.Namespace) -> str:
         model_config=model_config,
         training_config=training_config,
         metadata={
+            "model_name": MODEL_NAME,
+            "model_version": MODEL_VERSION,
             "evaluation_mode": "holdout_validation",
             "train_case_count": len(training_cases),
             "validation_case_count": len(validation_cases),
@@ -354,7 +362,7 @@ def run_inference(args: argparse.Namespace) -> str:
     vocabulary = EventVocabulary.from_dict(payload["vocabulary"])
     graph_config = GraphBuildConfig(**payload["graph_config"])
     cases = load_raw_cases(args.data_root, require_labels=False)
-    builder = IncidentGraphBuilder(vocabulary, config=graph_config, weight_path=args.weight_file)
+    builder = PathConditionedGraphBuilder(vocabulary, config=graph_config, weight_path=args.weight_file)
     records = []
     for index, case in enumerate(cases, 1):
         graph = builder.build(case, include_labels=False)
@@ -369,6 +377,7 @@ def run_inference(args: argparse.Namespace) -> str:
     save_json(records, result_path, indent=2)
     save_json(
         {
+            "model_name": MODEL_NAME,
             "model_version": MODEL_VERSION,
             "checkpoint": args.checkpoint,
             "case_count": len(records),
@@ -391,7 +400,7 @@ def _add_graph_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-neighbor-event-edges-per-link", type=int, default=4)
     parser.add_argument("--max-neighbor-lag-ms", type=int, default=600_000)
     parser.add_argument("--corridor-slack-hops", type=int, default=2)
-    parser.add_argument("--max-event-vocab", type=int, default=512)
+    parser.add_argument("--max-event-vocab", type=int, default=256)
 
 
 def _add_model_args(parser: argparse.ArgumentParser) -> None:
@@ -399,8 +408,7 @@ def _add_model_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.20)
-    parser.add_argument("--pairwise-weight", type=float, default=0.20)
-    parser.add_argument("--hard-negative-k", type=int, default=16)
+    parser.add_argument("--event-embedding-dim", type=int, default=16)
 
 
 def _add_training_args(parser: argparse.ArgumentParser) -> None:
@@ -416,13 +424,13 @@ def _add_training_args(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     default_data, default_results, default_weights = _default_paths()
     parser = argparse.ArgumentParser(
-        description="Train or run the incident-conditioned spatio-temporal neural Stage 1 ranker."
+        description="Train or run the path-conditioned PC-STGR Stage 1 ranker."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     crossval = subparsers.add_parser("crossval", help="Generate leakage-safe out-of-fold predictions and a final checkpoint.")
     crossval.add_argument("--data-root", default=default_data)
-    crossval.add_argument("--output-dir", default=os.path.join(default_results, "neural_stage1_cv"))
+    crossval.add_argument("--output-dir", default=os.path.join(default_results, "pc_stgr_cv"))
     crossval.add_argument("--folds", type=int, default=5)
     crossval.add_argument("--top-k", type=int, default=10)
     crossval.add_argument("--device", default="auto")

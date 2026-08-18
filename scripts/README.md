@@ -8,11 +8,11 @@ of editing individual runners.
 
 | Script | Purpose |
 | --- | --- |
-| `run_paper_05_spatiotemporal_graph.sh` | Current executable Stage 1 paper workflow: deterministic baseline, grouped 5-fold OOF IC-STGR, then Stage 2 reranking. |
+| `run_paper_05_pc_stgr.sh` | Current executable Stage 1 paper workflow: deterministic baseline, grouped 5-fold OOF PC-STGR, then Stage 2 reranking. |
 | `run_stage2_edge_probability_ablation.sh` | Compare P0, P1 Logit/Softmax, and leakage-safe P4 supervised edge probabilities with one Stage 1 result. |
 | `run_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
-| `../Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Current IC-STGR OOF training and label-free inference implementation. |
+| `../Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Current PC-STGR OOF training and label-free inference implementation. |
 | `../Sys/RootCauseAnalyze/propagation_pipeline.py` | Stage 1 → Stage 2 (M1 + M2) label-free pipeline. |
 | `../Sys/Score/evaluate_propagation.py` | Propagation validity and optional path-label evaluation. |
 
@@ -22,29 +22,28 @@ paper runtime or supported comparison workflow.
 
 ## Stage 1 status
 
-The design target is **PC-STGR (Path-Conditioned Spatio-Temporal Graph
+The Stage 1 method is **PC-STGR (Path-Conditioned Spatio-Temporal Graph
 Ranker)**, specified in `docs/PC-STGR设计方案.md`. The current
-`stage1/neural_*` code and `run_paper_05_spatiotemporal_graph.sh` still implement
-and evaluate **IC-STGR**. Until the PC-STGR migration and a new grouped OOF run
-are complete, do not rename IC-STGR checkpoints or the historical
+`stage1/neural_*` code and `run_paper_05_pc_stgr.sh` implement PC-STGR. A new
+grouped OOF run is still required; do not rename the historical IC-STGR
 73.58/93.71/97.48 Top-1/Top-3/Top-5 result as PC-STGR.
 
 Run the current reproducible workflow in the server PyTorch environment:
 
 ```bash
-bash scripts/run_paper_05_spatiotemporal_graph.sh
+bash scripts/run_paper_05_pc_stgr.sh
 ```
 
 It produces three comparable rows:
 
 - `deterministic`: topology + temporal white-box baseline;
-- `neural_oof`: grouped OOF IC-STGR predictions;
-- `neural_stage2`: the same OOF candidates after Stage 2 reranking.
+- `pc_stgr_oof`: grouped OOF PC-STGR predictions;
+- `pc_stgr_stage2`: the same OOF candidates after Stage 2 reranking.
 
 The run directory contains `summary.json`, `summary.csv`, fold checkpoints,
 training histories, OOF `res.json`, Stage 2 validity metrics, and
-`neural_oof/final_model.pt`. Scored paper results must use
-`neural_oof/res.json`; the final model is trained on all labeled cases only for
+`pc_stgr_oof/final_model.pt`. Scored paper results must use
+`pc_stgr_oof/res.json`; the final model is trained on all labeled cases only for
 later unseen-case inference.
 
 The deterministic baseline can also be run directly:
@@ -78,7 +77,7 @@ explanation scores.
 ```bash
 python Sys/RootCauseAnalyze/propagation_pipeline.py \
   --data-root "$PINGMESH_DATA" \
-  --root-results "$PINGMESH_RESULTS/<paper_05_run>/neural_oof/res.json" \
+  --root-results "$PINGMESH_RESULTS/<paper_05_run>/pc_stgr_oof/res.json" \
   --output-dir "$PINGMESH_RESULTS/<run>/propagation" \
   --stage1-weight 0.5
 
@@ -96,7 +95,7 @@ label-free inference:
 ```bash
 python Sys/RootCauseAnalyze/propagation_pipeline.py \
   --data-root "$PINGMESH_DATA" \
-  --root-results "$PINGMESH_RESULTS/<run>/neural_oof/res.json" \
+  --root-results "$PINGMESH_RESULTS/<run>/pc_stgr_oof/res.json" \
   --output-dir "$PINGMESH_RESULTS/<run>/p1" \
   --edge-probability-method logit_softmax_v1
 ```
@@ -108,7 +107,7 @@ label-free inference:
 ```bash
 export PINGMESH_PROPAGATION_LABELS_ROOT=/path/to/propagation_labels
 bash scripts/run_stage2_edge_probability_ablation.sh \
-  "$PINGMESH_RESULTS/<paper_05_run>/neural_oof/res.json"
+  "$PINGMESH_RESULTS/<paper_05_run>/pc_stgr_oof/res.json"
 ```
 
 ## Baselines
