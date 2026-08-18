@@ -1,5 +1,21 @@
 # Pingmesh RCA Project Overview
 
+## 2026-08-18 Stage 1 Design Update
+
+The next Stage 1 target design is **PC-STGR (Path-Conditioned
+Spatio-Temporal Graph Ranker)**. It uses a Device-Event graph, direct endpoint
+and path-corridor device features, fixed two-dimensional node-type one-hot
+encoding, a 16-dimensional event-name embedding, a 42-to-64-dimensional node
+encoder, two relation-aware attention layers, and a single-root case-wise
+softmax loss. The complete decision record and target tensor specification are
+in [`docs/PC-STGR设计方案.md`](./PC-STGR设计方案.md).
+
+This is a target-design decision, not a relabeling of existing results. The
+current `stage1/neural_*` implementation and its documented 159-case OOF scores
+remain IC-STGR artifacts until the PC-STGR migration and independent grouped
+OOF evaluation are complete. Do not report the existing IC-STGR checkpoints or
+metrics as PC-STGR results.
+
 ## Active Paper Branch
 
 `2stage` is the primary working branch for the current paper proposal, method
@@ -66,6 +82,7 @@ paper proposal.
 | `Baseline/` | Adapted TraceRCA, NetEventCause, and BiAn baselines. |
 | `scripts/` | Server-side experiment entrypoints; `run_paper_*.sh` are thesis experiment wrappers. |
 | `tests/` | Local-only ignored regression tests; they are retained in this workspace but not shipped by Git. |
+| `docs/PC-STGR设计方案.md` | Target PC-STGR decisions, feature schema, tensor dimensions, network structure, loss, and migration checklist. |
 | `docs/papers/` | Paper text extractions and summaries. Original PDFs live outside the repo. |
 | `tmp/` | Ignored generated outputs only; reusable diagnostics belong under `Sys/` and historical tools under `archive/`. |
 
