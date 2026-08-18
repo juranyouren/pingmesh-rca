@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import replace
 from typing import Any, Dict, List, Mapping, Sequence
 
 if __package__ in (None, ""):
@@ -39,6 +40,32 @@ def _existing_result_map(path: str | None) -> Dict[str, Dict[str, Any]]:
         for item in raw
         if isinstance(item, Mapping) and item.get("dir")
     }
+
+
+def _edge_model_manifest(path: str | None) -> Dict[str, Any]:
+    if not path:
+        return {}
+    payload = load_json(path, default=None)
+    if not isinstance(payload, Mapping):
+        raise ValueError("edge probability OOF manifest must contain a JSON object")
+    if payload.get("schema_version") != "stage2-edge-classifier-oof-manifest-v1":
+        raise ValueError("unsupported edge probability OOF manifest schema")
+    return dict(payload)
+
+
+def _edge_model_for_case(manifest: Mapping[str, Any], dirpath: str) -> str | None:
+    case_models = manifest.get("case_models", {})
+    if isinstance(case_models, Mapping):
+        normalized = os.path.normcase(os.path.normpath(os.path.abspath(dirpath)))
+        for raw_path, model_path in case_models.items():
+            candidate = os.path.normcase(os.path.normpath(os.path.abspath(str(raw_path))))
+            if candidate == normalized and model_path:
+                return str(model_path)
+    case_id_models = manifest.get("case_id_models", {})
+    case_id = os.path.basename(os.path.normpath(dirpath))
+    if isinstance(case_id_models, Mapping) and case_id_models.get(case_id):
+        return str(case_id_models[case_id])
+    return None
 
 
 def _rankings_from_record(record: Mapping[str, Any] | None) -> List[Dict[str, Any]]:
@@ -100,10 +127,12 @@ def run_propagation_pipeline(
     top_k: int = 3,
     weight_path: str | None = None,
     config: PropagationConfig | None = None,
+    edge_probability_oof_manifest_path: str | None = None,
 ) -> str:
     """Run Stage 1 followed by Stage 2/M1 and Stage 2/M2 without labels."""
 
     cfg = config or PropagationConfig(root_top_k=top_k)
+    edge_manifest = _edge_model_manifest(edge_probability_oof_manifest_path)
     previous = _existing_result_map(root_results_path)
     case_dirs = sorted(previous) if previous else _discover_case_dirs(data_root)
     records = []
@@ -134,12 +163,22 @@ def run_propagation_pipeline(
                         for index, ip in enumerate(predicted_ips, 1)
                     ]
             topology_context = load_topology_context(dirpath, node_list=nodes, info=info)
+            case_config = cfg
+            if edge_manifest:
+                model_path = _edge_model_for_case(edge_manifest, dirpath)
+                if not model_path:
+                    raise ValueError(f"OOF edge classifier model missing for case: {dirpath}")
+                case_config = replace(
+                    cfg,
+                    edge_probability_method="supervised_softmax_v1",
+                    edge_probability_model_path=model_path,
+                )
             propagation = reconstruct_propagation(
                 nodes=nodes,
                 info=info,
                 topology_context=topology_context,
                 root_rankings=rankings,
-                config=cfg,
+                config=case_config,
             )
             final_ips = [
                 str(item.get("ip"))
@@ -221,6 +260,29 @@ def main() -> None:
         default=0.5,
         help="Weight of normalized Stage 1 evidence in final reranking.",
     )
+    parser.add_argument(
+        "--edge-probability-method",
+        choices=(
+            "deterministic_evidence_v1",
+            "logit_softmax_v1",
+            "supervised_softmax_v1",
+        ),
+        default="deterministic_evidence_v1",
+    )
+    parser.add_argument("--edge-probability-model", default=None)
+    parser.add_argument("--edge-probability-oof-manifest", default=None)
+    parser.add_argument("--edge-probability-temperature", type=float, default=1.0)
+    parser.add_argument("--logit-direction-bias", type=float, default=-1.50)
+    parser.add_argument("--logit-temporal-weight", type=float, default=1.50)
+    parser.add_argument("--logit-semantic-weight", type=float, default=2.00)
+    parser.add_argument("--logit-direct-weight", type=float, default=1.50)
+    parser.add_argument("--logit-contradiction-weight", type=float, default=2.00)
+    parser.add_argument("--logit-no-direct-bias", type=float, default=-0.25)
+    parser.add_argument("--logit-inactive-weight", type=float, default=2.50)
+    parser.add_argument("--logit-missing-relation-weight", type=float, default=0.50)
+    parser.add_argument("--logit-routing-convergence-bias", type=float, default=0.25)
+    parser.add_argument("--logit-physical-link-bias", type=float, default=0.00)
+    parser.add_argument("--logit-inferred-impact-bias", type=float, default=-0.25)
     args = parser.parse_args()
 
     output_dir = args.output_dir or os.path.join(default_result_root, f"propagation_{int(time.time())}")
@@ -230,11 +292,26 @@ def main() -> None:
         root_results_path=args.root_results,
         top_k=args.top_k,
         weight_path=args.weight_file,
+        edge_probability_oof_manifest_path=args.edge_probability_oof_manifest,
         config=PropagationConfig(
             root_top_k=args.top_k,
             max_candidate_nodes=args.max_candidate_nodes,
             max_path_depth=args.max_path_depth,
             stage1_weight=args.stage1_weight,
+            edge_probability_method=args.edge_probability_method,
+            edge_probability_model_path=args.edge_probability_model,
+            edge_probability_temperature=args.edge_probability_temperature,
+            logit_direction_bias=args.logit_direction_bias,
+            logit_temporal_weight=args.logit_temporal_weight,
+            logit_semantic_weight=args.logit_semantic_weight,
+            logit_direct_weight=args.logit_direct_weight,
+            logit_contradiction_weight=args.logit_contradiction_weight,
+            logit_no_direct_bias=args.logit_no_direct_bias,
+            logit_inactive_weight=args.logit_inactive_weight,
+            logit_missing_relation_weight=args.logit_missing_relation_weight,
+            logit_routing_convergence_bias=args.logit_routing_convergence_bias,
+            logit_physical_link_bias=args.logit_physical_link_bias,
+            logit_inferred_impact_bias=args.logit_inferred_impact_bias,
         ),
     )
 

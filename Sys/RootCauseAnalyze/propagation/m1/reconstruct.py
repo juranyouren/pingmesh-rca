@@ -38,7 +38,7 @@ def reconstruct_hypothesis_graph(
     candidate_graph = build_candidate_graph(nodes, info, context, episodes, config=cfg)
     raw_relation_graph = build_edge_relation_graph(candidate_graph, episodes, config=cfg)
     edge_hypotheses = [
-        assign_edge_state_probabilities(item)
+        assign_edge_state_probabilities(item, config=cfg)
         for item in raw_relation_graph.get("edge_hypotheses", [])
         if isinstance(item, Mapping)
     ]
@@ -47,6 +47,28 @@ def reconstruct_hypothesis_graph(
         for item in episodes
         if isinstance(item, Mapping) and item.get("evidence_id")
     }
+    probability_config: Dict[str, Any] = {
+        "method": cfg.edge_probability_method,
+        "temperature": cfg.edge_probability_temperature,
+    }
+    if cfg.edge_probability_method == "logit_softmax_v1":
+        probability_config.update(
+            {
+                "direction_bias": cfg.logit_direction_bias,
+                "temporal_weight": cfg.logit_temporal_weight,
+                "semantic_weight": cfg.logit_semantic_weight,
+                "direct_weight": cfg.logit_direct_weight,
+                "contradiction_weight": cfg.logit_contradiction_weight,
+                "no_direct_bias": cfg.logit_no_direct_bias,
+                "inactive_weight": cfg.logit_inactive_weight,
+                "missing_relation_weight": cfg.logit_missing_relation_weight,
+                "routing_convergence_bias": cfg.logit_routing_convergence_bias,
+                "physical_link_bias": cfg.logit_physical_link_bias,
+                "inferred_impact_bias": cfg.logit_inferred_impact_bias,
+            }
+        )
+    elif cfg.edge_probability_method == "supervised_softmax_v1":
+        probability_config["model_path"] = cfg.edge_probability_model_path
     return {
         "schema_version": M1_SCHEMA_VERSION,
         "graph_type": "root_independent_hypothetical_propagation_graph",
@@ -67,6 +89,8 @@ def reconstruct_hypothesis_graph(
                 for item in edge_hypotheses
             ),
             "root_independent": True,
+            "probability_method": cfg.edge_probability_method,
+            "probability_config": probability_config,
             "probability_evidence_types": [
                 "temporal_order",
                 "alarm_semantics",

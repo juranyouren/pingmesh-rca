@@ -44,6 +44,20 @@ class PropagationConfig:
     min_target_coverage_for_full: float = 0.70
     stage1_weight: float = 0.50
     max_edge_hypotheses_output: int = 200
+    edge_probability_method: str = "deterministic_evidence_v1"
+    edge_probability_model_path: str | None = None
+    edge_probability_temperature: float = 1.0
+    logit_direction_bias: float = -1.50
+    logit_temporal_weight: float = 1.50
+    logit_semantic_weight: float = 2.00
+    logit_direct_weight: float = 1.50
+    logit_contradiction_weight: float = 2.00
+    logit_no_direct_bias: float = -0.25
+    logit_inactive_weight: float = 2.50
+    logit_missing_relation_weight: float = 0.50
+    logit_routing_convergence_bias: float = 0.25
+    logit_physical_link_bias: float = 0.00
+    logit_inferred_impact_bias: float = -0.25
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -64,6 +78,25 @@ def normalize_config(config: PropagationConfig | Mapping[str, Any] | None) -> Pr
         raise TypeError("config must be PropagationConfig, mapping, or None")
     if not 0.0 <= normalized.stage1_weight <= 1.0:
         raise ValueError("stage1_weight must be within [0, 1]")
+    allowed_probability_methods = {
+        "deterministic_evidence_v1",
+        "logit_softmax_v1",
+        "supervised_softmax_v1",
+    }
+    if normalized.edge_probability_method not in allowed_probability_methods:
+        raise ValueError(
+            "edge_probability_method must be one of "
+            f"{sorted(allowed_probability_methods)}"
+        )
+    if normalized.edge_probability_temperature <= 0.0:
+        raise ValueError("edge_probability_temperature must be positive")
+    if (
+        normalized.edge_probability_method == "supervised_softmax_v1"
+        and not normalized.edge_probability_model_path
+    ):
+        raise ValueError(
+            "edge_probability_model_path is required for supervised_softmax_v1"
+        )
     return normalized
 
 
