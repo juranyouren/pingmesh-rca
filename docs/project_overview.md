@@ -16,19 +16,22 @@ that Pingmesh reliably detects network-side symptoms, but cannot identify the
 physical root-cause device because ECMP and high fan-out DCN topologies obscure
 the actual forwarding path.
 
-The current system combines deterministic ranking and local LLM review:
+The current paper system is a two-stage pipeline:
 
 1. Parse one incident case from full-link node data and `info.json`.
-2. Run two deterministic rankers:
-   - topo ranker: directed PageRank over physical topology with alarm weights,
-     source/sink proximity, and cross-path evidence.
-   - temporal ranker: burst, early-bird, and temporal-density scoring around
-     the fault reference time.
-3. Fuse ranker outputs into a compact candidate evidence table.
-4. Route the case through a trust-tree gate.
-5. Bypass the LLM only when the selected policy produces a complete safety
-   certificate; otherwise fail closed to the local LLM.
-6. Evaluate with `Score_N` Top-1/Top-3/Top-5 metrics.
+2. Stage 1 uses **IC-STGR (Incident-Conditioned Spatio-Temporal Graph Ranker)**
+   to construct a Device-Event-Incident heterogeneous graph and learn a
+   high-recall root-cause candidate ranking.
+3. Stage 2/M1 builds one root-independent hypothesis propagation graph.
+4. Stage 2/M2 evaluates every Stage 1 candidate against that shared graph and
+   emits the final ranking plus root-conditioned propagation graphs.
+5. Evaluate Stage 1 with grouped out-of-fold Top-1/Top-3/Top-5 and MRR; evaluate
+   Stage 2 validity or path accuracy separately according to label availability.
+
+The deterministic topology + temporal fusion remains a strong white-box Stage 1
+baseline. Trust-tree and local-LLM review code is retained for historical and
+comparison experiments, but it is not the selected Stage 1 method in the current
+paper proposal.
 
 ## 2. Current Constraints
 
@@ -49,7 +52,10 @@ The current system combines deterministic ranking and local LLM review:
 | --- | --- |
 | `Sys/config.py` | Central Python config derived from environment variables. |
 | `Sys/Preprocess/Preprocessor.py` | RAW merge, validation, and NODE data extraction. |
-| `Sys/RootCauseAnalyze/skill_pipeline.py` | Deterministic topo+temporal evaluation path. |
+| `Sys/RootCauseAnalyze/stage1/neural_graph.py` | IC-STGR Device-Event-Incident graph construction. |
+| `Sys/RootCauseAnalyze/stage1/neural_model.py` | Relation-aware graph encoder, root-ranking head, and training loss. |
+| `Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Grouped OOF training and label-free IC-STGR inference. |
+| `Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic temporal + alarm-topology Stage 1 baseline. |
 | `Sys/RootCauseAnalyze/skills/` | Built-in skill implementation replacing the old SkillBank runtime. |
 | `Sys/RootCauseAnalyze/gate/` | Evidence construction, node summarization, routing response, and trust gate integration. |
 | `Sys/RootCauseAnalyze/trust_trees/` | Auditable rule trees for topo and temporal ranker trust. |
@@ -66,24 +72,39 @@ The current system combines deterministic ranking and local LLM review:
 ## 4. Current Performance Snapshot
 
 The latest documented production-data setting uses 159 manually labeled cases.
+Learned Stage 1 results must use grouped 5-fold out-of-fold predictions.
 
-| Method | Top-1 | Top-3 | Top-5 |
-| --- | ---: | ---: | ---: |
-| topo+temporal, manual alarm weights | 76.10% | 85.53% | 91.19% |
-| topo+temporal, LLM-learned weights | 66.67% | 88.05% | 93.71% |
-| temporal only, manual weights | 62.89% | 88.05% | 94.34% |
-| topo only, manual weights | 50.31% | 74.21% | 84.28% |
+| Stage 1 method | Evaluation | Cases | Top-1 | Top-3 | Top-5 | Paper role |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| deterministic topology + temporal fusion | deterministic | 159 | **77.36%** | 89.94% | 94.34% | strong white-box baseline |
+| **IC-STGR** | grouped 5-fold OOF | 159 | 73.58% | **93.71%** | **97.48%** | **selected main method** |
 
-For the LLM review path based on manual-weight fused evidence:
+The supported claim is improved candidate coverage, not improved Top-1. IC-STGR
+changes Top-1 by -3.78 percentage points, Top-3 by +3.77 points, and Top-5 by
++3.14 points versus the deterministic baseline. Top-5 misses fall from 9 to 4
+cases (55.6% fewer misses). Its full-data `final_model.pt` is for later unseen
+inference and must not be scored back on these 159 labeled cases as a paper result.
 
-| Layer | Top-1 | Top-3 | Top-5 |
-| --- | ---: | ---: | ---: |
-| pure skill evaluation | 76.10% | 84.91% | 91.19% |
-| LLM reranking evaluation | 75.47% | 86.79% | 86.79% |
+### 4.1 Fixed Stage 1 Method Decision
 
-Interpretation: the deterministic fused rankers are already strong. The LLM
-should act as a reviewer for close or semantically rich cases, not as an
-unconstrained reranker.
+IC-STGR is the fixed Stage 1 technology for the current paper. Future Stage 1
+work should optimize this model rather than reopen the main-method selection.
+The comparison plan is:
+
+| Method | Role | Status |
+| --- | --- | --- |
+| IC-STGR | main method; incident-conditioned heterogeneous spatio-temporal ranking | first OOF result complete |
+| deterministic topology + temporal fusion | strong interpretable baseline | complete |
+| LambdaMART | learned ranking baseline over researcher-defined, automatically computed device features | pending |
+| device-only GAT/GCN | graph-structure baseline | pending |
+| IC-STGR relation/node/loss removals | component ablations and optimization | pending |
+
+IC-STGR is a project method name, not the name of an existing paper. It adapts
+relation-aware heterogeneous graph attention and learning-to-rank ideas to the
+Pingmesh Device-Event-Incident formulation. The paper should claim novelty in
+the incident-conditioned graph construction, explicit spatio-temporal relations,
+and multi-positive root-ranking adaptation, not in inventing a new general
+attention operator.
 
 ## 5. Active Exploration Directions
 
@@ -178,21 +199,42 @@ Main file:
 
 ### 5.7 Fault Propagation Path Reconstruction
 
-This is a confirmed research task, not yet an implemented capability. Its target
-is an evidence-grounded device-level propagation DAG with ranked chains and
-alarm-event provenance. Engineer annotation of a path-labeling subset is in
-scope because the current labels identify root-cause devices but do not contain
-ordered nodes or directed propagation edges. Evaluation metrics will remain
-configurable during the labeling pilot; both strict matching and a fully
-specified tolerant/rounded case-level path accuracy are candidates. Before path
-labels exist, topology validity, temporal consistency, and evidence grounding
-must be reported as validity checks rather than causal-path accuracy.
+The `2stage` branch is the primary working branch for the current paper and
+contains the IC-STGR Stage 1 plus the Stage 2 joint-inference implementation.
+Stage 2 first builds a root-independent weighted relation graph over
+the incident-conditioned undirected topology, retaining inactive, forward,
+reverse, ambiguous, and common-cause states. This single graph is the M1 output
+and does not depend on root candidates or their scores. M2 then evaluates each
+Stage 1 Top-K root against the same hypothesis graph, constructs its corresponding
+device-level propagation graph, and produces one explanation score. The final
+ranking is a weighted sum of only the normalized IC-STGR Stage 1 score and the
+normalized Stage 2 explanation score; insufficient path evidence falls back to
+the Stage 1 order.
+Interface fields are optional and their absence is not a quality penalty.
+Cases supported only by topology are marked `unidentifiable`; M2 then falls
+back to the Stage 1 order and emits an empty selected propagation graph.
+
+Engineer annotation of a path-labeling subset remains the next stage because
+the current labels identify root-cause devices but do not contain ordered nodes
+or directed propagation edges. Evaluation metrics remain configurable; strict
+matching, component scores, and a fully specified tolerant/rounded case-level
+accuracy are supported. Before path labels exist, topology validity, temporal
+consistency, and evidence grounding are validity checks rather than causal-path
+accuracy.
+
+Main files:
+
+- `Sys/RootCauseAnalyze/propagation/`
+- `Sys/RootCauseAnalyze/propagation_pipeline.py`
+- `Sys/Score/evaluate_propagation.py`
+- `Sys/Preprocess/Preprocessor.py` (`topology_context.json` sidecar)
 
 Research memo:
 
 - `docs/故障传播路径还原调研.md`
 - `docs/故障传播路径标注规范_v0.md`
 - `docs/故障传播路径重构方案_v0.md`
+- `docs/故障传播路径联合推断方案_v1.md`
 
 ## 6. Deprecated Or Removed Areas
 
@@ -212,7 +254,7 @@ Use these from the repository root on the server:
 ```bash
 source scripts/common.sh
 
-python Sys/RootCauseAnalyze/skill_pipeline.py \
+python Sys/RootCauseAnalyze/stage1/pipeline.py \
   --data-root "$PINGMESH_DATA" \
   --output-dir skillpipe_manual \
   --skills 1 2 \
@@ -228,6 +270,15 @@ python Sys/Score/apply_trust_gate.py \
   --res "$PINGMESH_RESULTS/<run>/pipe/res.json" \
   --out "$PINGMESH_RESULTS/<run>/gate_selected/res.json" \
   --policy-config "$PINGMESH_RESULTS/<run>/gate_search/selected_gate_policy.json"
+
+python Sys/RootCauseAnalyze/propagation_pipeline.py \
+  --data-root "$PINGMESH_DATA" \
+  --root-results "$PINGMESH_RESULTS/<run>/pipe/res.json" \
+  --output-dir "$PINGMESH_RESULTS/<run>/propagation"
+
+python Sys/Score/evaluate_propagation.py \
+  --predictions "$PINGMESH_RESULTS/<run>/propagation/res.json" \
+  --out "$PINGMESH_RESULTS/<run>/propagation/validity.json"
 ```
 
 For the current combined experiment driver:
@@ -251,7 +302,12 @@ source scripts/common.sh
 ./scripts/run_paper_02_gate_routing.sh
 ./scripts/run_paper_03_llm_arbitration.sh
 ./scripts/run_paper_04_summary_ablation.sh
+./scripts/run_paper_05_spatiotemporal_graph.sh
 ```
+
+`run_paper_05_spatiotemporal_graph.sh` is the primary Stage 1 paper experiment.
+It produces deterministic-baseline, IC-STGR OOF, and IC-STGR-plus-Stage-2 rows;
+the Stage 1 paper score is the `neural_oof` row.
 
 ## 8. Testing
 
@@ -268,6 +324,8 @@ The current suite covers:
 - deterministic ranker tie behavior and trust-tree details;
 - trust-tree router decisions and Score_N-compatible bypass responses;
 - applying the trust gate to offline skillpipe records;
+- topology-context preservation, alarm episode normalization, propagation DAG
+  reconstruction, abstention, and propagation evaluation;
 - candidate-node summarization prompt replacement;
 - skill-pipeline failure analysis outputs.
 
