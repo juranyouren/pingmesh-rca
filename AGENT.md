@@ -15,6 +15,11 @@ has migrated to PC-STGR, but a new grouped OOF evaluation is still pending. The
 not be reported as PC-STGR. The deterministic topology+temporal fusion is the
 strong white-box baseline.
 
+`stage1/neural_ssl_*` provides PC-STGR-SSL as an optional, separate
+self-supervised-pretrained variant. It does not replace or modify the original
+PC-STGR network, uses a distinct checkpoint format, and must be reported as a
+separate experiment.
+
 ## Non-Negotiables
 
 - Internal fault data is not publishable. Do not move `data/` into tracked code.
@@ -24,14 +29,14 @@ strong white-box baseline.
 
 ## Key Paths
 
-- `Sys/RootCauseAnalyze/stage1/`: PC-STGR graph/model/OOF implementation plus deterministic temporal, alarm-topology, and fusion baselines.
+- `Sys/RootCauseAnalyze/stage1/`: PC-STGR graph/model/OOF implementation, optional PC-STGR-SSL pretraining path, plus deterministic temporal, alarm-topology, and fusion baselines.
 - `Sys/RootCauseAnalyze/propagation/`: Stage 2 root-independent hypothesis graph reconstruction (M1), root-conditioned propagation graphs and explanation-based reranking (M2), and path-validity logic.
 - `Sys/RootCauseAnalyze/propagation_pipeline.py`: label-free propagation reconstruction entrypoint.
 - `Sys/Score/evaluate_propagation.py`: propagation validity and optional label-aware evaluation.
 - `Sys/Score/`: Stage 1, Stage 2, propagation, and baseline evaluation tools.
 - `prompts/`: baseline and ablation prompt templates; do not recreate root-level `utils/`.
 - `scripts/common.sh`: single source of default server paths and model parameters.
-- `scripts/run_paper_05_pc_stgr.sh`: current executable Stage 1 paper workflow (deterministic baseline + PC-STGR OOF + Stage 2).
+- `scripts/run_paper_05_pc_stgr.sh`: current executable Stage 1 paper workflow (deterministic baseline + selectable supervised/SSL PC-STGR OOF + Stage 2).
 - `scripts/run_stage2_edge_probability_ablation.sh`: Stage 2 P0/P1/P4 edge-probability comparison.
 - `Baseline/`: TraceRCA, NetEventCause, and BiAn baseline adapters.
 - `docs/project_overview.md`: detailed project state and roadmap.

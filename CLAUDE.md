@@ -12,6 +12,10 @@ PC-STGR is the Stage 1 design recorded in `docs/PC-STGR设计方案.md`. The cur
 OOF evaluation is still pending. The existing 159-case scores remain historical
 IC-STGR artifacts and must not be reported as PC-STGR results.
 
+`stage1/neural_ssl_*` adds PC-STGR-SSL as an optional, separate
+self-supervised-pretrained variant. It leaves the original PC-STGR network
+unchanged, uses a separate checkpoint format, and requires its own OOF result.
+
 ## Non-Negotiables
 
 - Internal fault data is not publishable. Do not move `data/` into tracked code.
@@ -22,7 +26,7 @@ IC-STGR artifacts and must not be reported as PC-STGR results.
 ## Key Paths
 
 ### Core pipeline
-- `Sys/RootCauseAnalyze/stage1/`: current PC-STGR implementation and deterministic Stage 1 baselines.
+- `Sys/RootCauseAnalyze/stage1/`: current PC-STGR implementation, optional PC-STGR-SSL path, and deterministic Stage 1 baselines.
 - `Sys/RootCauseAnalyze/propagation/`: Stage 2 M1/M2 reconstruction and reranking.
 - `Sys/RootCauseAnalyze/propagation_pipeline.py`: label-free Stage 1 → Stage 2 entrypoint.
 
@@ -42,7 +46,7 @@ IC-STGR artifacts and must not be reported as PC-STGR results.
 ### Prompts, scripts, data
 - `prompts/`: baseline and ablation prompt templates; do not recreate root-level `utils/`.
 - `scripts/common.sh`: single source of default server paths and model parameters.
-- `scripts/run_paper_05_pc_stgr.sh`: current executable Stage 1 paper workflow.
+- `scripts/run_paper_05_pc_stgr.sh`: current executable Stage 1 paper workflow with supervised/SSL selection.
 - `scripts/run_stage2_edge_probability_ablation.sh`: Stage 2 edge-probability ablation.
 - `Baseline/`: TraceRCA, NetEventCause, and BiAn baseline adapters.
 - `docs/project_overview.md`: detailed project state and roadmap.

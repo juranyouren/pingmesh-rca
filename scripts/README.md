@@ -11,11 +11,12 @@ files whose `full_link.task_topo.value` corresponds to `PINGMESH_DATA` cases.
 
 | Script | Purpose |
 | --- | --- |
-| `run_paper_05_pc_stgr.sh` | Current executable Stage 1 paper workflow: deterministic baseline, grouped 5-fold OOF PC-STGR, then Stage 2 reranking. |
+| `run_paper_05_pc_stgr.sh` | Current executable Stage 1 paper workflow: deterministic baseline, selectable supervised or self-supervised PC-STGR, then Stage 2 reranking. |
 | `run_stage2_edge_probability_ablation.sh` | Compare P0, P1 Logit/Softmax, and leakage-safe P4 supervised edge probabilities with one Stage 1 result. |
 | `run_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
 | `../Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Current PC-STGR OOF training and label-free inference implementation. |
+| `../Sys/RootCauseAnalyze/stage1/neural_ssl_pipeline.py` | Optional fold-local self-supervised pretraining, supervised fine-tuning, OOF evaluation, and label-free inference. |
 | `../Sys/Preprocess/backfill_topology_context.py` | Backfill and verify per-case topology contexts from raw `task_topo`. |
 | `../Sys/RootCauseAnalyze/propagation_pipeline.py` | Stage 1 → Stage 2 (M1 + M2) label-free pipeline. |
 | `../Sys/Score/evaluate_propagation.py` | Propagation validity and optional path-label evaluation. |
@@ -38,6 +39,21 @@ Run the current reproducible workflow in the server PyTorch environment:
 bash scripts/run_paper_05_pc_stgr.sh
 ```
 
+The default remains the original supervised PC-STGR. Select the optional
+self-supervised-pretrained variant with either form:
+
+```bash
+bash scripts/run_paper_05_pc_stgr.sh paper_05_pc_stgr_ssl self_supervised
+
+# Equivalent environment-variable form
+PINGMESH_NEURAL_VARIANT=self_supervised \
+  bash scripts/run_paper_05_pc_stgr.sh paper_05_pc_stgr_ssl
+```
+
+PC-STGR-SSL pretrains only on the current fold's training cases reloaded without
+labels, then fine-tunes on their root labels. Validation-fold cases are excluded
+from the vocabulary and pretraining data.
+
 It produces three comparable rows:
 
 - `deterministic`: topology + temporal white-box baseline;
@@ -49,6 +65,11 @@ training histories, OOF `res.json`, Stage 2 validity metrics, and
 `pc_stgr_oof/final_model.pt`. Scored paper results must use
 `pc_stgr_oof/res.json`; the final model is trained on all labeled cases only for
 later unseen-case inference.
+
+When `self_supervised` is selected, the corresponding directories are
+`pc_stgr_ssl_oof` and `pc_stgr_ssl_stage2`, and the checkpoint is stored as
+`pc_stgr_ssl_oof/final_model.pt`. Self-supervised hyperparameters are configured
+through the `PINGMESH_NEURAL_PRETRAIN_*` variables in `scripts/common.sh`.
 
 The deterministic baseline can also be run directly:
 

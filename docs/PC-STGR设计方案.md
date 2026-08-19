@@ -639,6 +639,40 @@ Stage 1 中 `combined_score` 与 `neural_score` 都是 PC-STGR 的 case 内概�
 
 所有消融必须使用相同 fold、随机种子、事件词表上限、隐藏维度和训练策略，不预设性能提升。
 
+## 16.1 可选的自监督预训练变体
+
+仓库额外提供 **PC-STGR-SSL**，作为不替换原 PC-STGR 的可选初始化方案。原
+`PathConditionedGraphRanker`、监督训练入口和 `pc-stgr-stage1-v1` checkpoint
+均保持不变；自监督变体使用独立模型、流水线和
+`pc-stgr-ssl-stage1-v1` checkpoint。
+
+预训练仍使用相同的路径条件化 Device–Event 图，但编码器看到的是扰动后的图，
+通过以下无标签目标恢复原始上下文：
+
+1. 掩码事件名称重建：将部分已知事件 token 替换为 `<unk>`，预测原事件 token；
+2. 掩码数值特征重建：遮蔽部分非零节点特征，以 MSE 恢复原值；
+3. 隐藏边重建：移除部分原始边，联合真实隐藏边和节点类型兼容的非边负样本，
+   预测 8 类关系或“无边”。
+
+预训练完成后保留图编码器，使用与原 PC-STGR 相同的 case 内根因排序目标进行
+全参数监督微调。三个辅助头不参与推理，输出仍为 Device logits、case 内
+Softmax 和 Stage 2 兼容的 Top-K。
+
+为避免 OOF 泄漏，每个 fold 的事件词表和自监督预训练图只能来自该 fold 的训练
+case。训练 case 会通过 `require_labels=False` 重新加载，并以
+`include_labels=False` 构图；验证 case 不参与预训练。全量 `final_model.pt`
+则在 OOF 预测全部生成之后，使用全部 case 的无标签视图预训练并监督微调，不能
+回用于这些 case 的论文评分。
+
+推荐方法标识：
+
+```text
+self-supervised-pretrained-path-conditioned-spatiotemporal-graph-ranker-v1
+```
+
+PC-STGR-SSL 必须作为独立实验行报告，不能把它的 checkpoint 或结果标为原始
+PC-STGR。
+
 ## 17. 实现状态与实验清单
 
 代码迁移已完成：
@@ -656,14 +690,16 @@ Stage 1 中 `combined_score` 与 `neural_score` 都是 PC-STGR 的 case 内概�
 11. PC-STGR checkpoint 使用独立格式版本并保存图、词表和模型配置；
 12. 输出元数据使用 PC-STGR 方法标识；
 13. 论文实验脚本已切换到独立的 `pc_stgr_oof` 和 `pc_stgr_stage2` 目录；
-14. 训练标签读取和 `Score_N` 评测统一为每个 case 一个根因设备。
+14. 训练标签读取和 `Score_N` 评测统一为每个 case 一个根因设备；
+15. 新增独立的 PC-STGR-SSL 模型与无泄漏 OOF 流水线，原网络及其默认入口保持不变；
+16. 论文脚本可通过 `supervised` / `self_supervised` 选择 Stage 1 变体。
 
 仍需在服务器 PyTorch/NPU 环境完成：
 
-1. 运行包含模型前向、损失和 checkpoint 往返的测试；
-2. 重新执行 grouped 5-fold OOF；
-3. 生成 PC-STGR 自身的 Top-1/Top-3/Top-5/MRR；
-4. 将 PC-STGR 新结果与历史 IC-STGR 结果分开报告。
+1. 在目标 NPU 环境复验模型前向、损失和 checkpoint 往返；
+2. 分别重新执行 PC-STGR 与 PC-STGR-SSL grouped 5-fold OOF；
+3. 生成两种方案各自的 Top-1/Top-3/Top-5/MRR；
+4. 将两种 PC-STGR 新结果与历史 IC-STGR 结果分开报告。
 
 ## 18. 方法边界
 

@@ -47,7 +47,8 @@ paper/
 /.superpowers/
 /docs/superpowers/
 /docs/ppt/
-/tests/
+/tests/*
+!/tests/test_neural_stage1_ssl.py
 /archive/
 /archive/tests/legacy_scripts/
 /tmp/*

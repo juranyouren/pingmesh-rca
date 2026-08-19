@@ -73,13 +73,15 @@ paths are not part of the executable pipeline.
 | `Sys/RootCauseAnalyze/stage1/neural_graph.py` | PC-STGR path-conditioned Device-Event graph construction. |
 | `Sys/RootCauseAnalyze/stage1/neural_model.py` | PC-STGR 42-to-64 encoder, relation-aware graph layers, root head, and single-root loss. |
 | `Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Grouped OOF training and label-free PC-STGR inference. |
+| `Sys/RootCauseAnalyze/stage1/neural_ssl_model.py` | Optional PC-STGR-SSL encoder plus masked token, feature, and edge-reconstruction pretraining heads. |
+| `Sys/RootCauseAnalyze/stage1/neural_ssl_pipeline.py` | Fold-local label-free pretraining, supervised fine-tuning, grouped OOF evaluation, and inference for PC-STGR-SSL. |
 | `Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic temporal + alarm-topology Stage 1 baseline. |
 | `Sys/Score/` | Stage 1, Stage 2, propagation, and baseline evaluation scripts. |
 | `Sys/utils/` | Shared case, alarm, ranking, and I/O utilities. |
 | `prompts/` | Prompt templates retained for baseline and ablation experiments. |
 | `Baseline/` | Adapted TraceRCA, NetEventCause, and BiAn baselines. |
 | `scripts/` | Supported server-side experiment entrypoints and shared configuration; see `scripts/README.md`. |
-| `tests/` | Local-only ignored regression tests; they are retained in this workspace but not shipped by Git. |
+| `tests/` | Regression tests; the PC-STGR-SSL contract test is tracked, while older workspace-only tests remain ignored. |
 | `docs/PC-STGR设计方案.md` | Target PC-STGR decisions, feature schema, tensor dimensions, network structure, loss, and migration checklist. |
 | `docs/papers/` | Paper text extractions and summaries. Original PDFs live outside the repo. |
 | `tmp/` | Ignored generated outputs only; reusable diagnostics belong under `Sys/` and historical tools under `archive/`. |
@@ -109,6 +111,7 @@ comparison plan is:
 | Method | Role | Status |
 | --- | --- | --- |
 | PC-STGR | main method; path-conditioned Device-Event spatio-temporal ranking | implementation complete; grouped OOF pending |
+| PC-STGR-SSL | optional self-supervised initialization of a separate PC-STGR network; reported as its own experiment | implementation complete; grouped OOF pending |
 | IC-STGR | historical reference; Device-Event-Incident ranking | first OOF result complete |
 | deterministic topology + temporal fusion | strong interpretable baseline | complete |
 | LambdaMART | learned ranking baseline over researcher-defined, automatically computed device features | pending |
@@ -219,10 +222,22 @@ export PINGMESH_RAW_DATA=/path/to/raw/full-link/json
 bash scripts/run_paper_05_pc_stgr.sh
 ```
 
+The original supervised model remains the default. Run the optional
+self-supervised-pretrained network as a separate experiment with:
+
+```bash
+bash scripts/run_paper_05_pc_stgr.sh paper_05_pc_stgr_ssl self_supervised
+```
+
 It produces deterministic-baseline, PC-STGR OOF, and PC-STGR-plus-Stage-2 rows
 under `pc_stgr_oof` and `pc_stgr_stage2`. These rows receive paper metrics only
 after a new grouped OOF run; historical IC-STGR rows and checkpoints remain
 separate.
+
+For the optional self-supervised run, the corresponding directories are
+`pc_stgr_ssl_oof` and `pc_stgr_ssl_stage2`. Each OOF fold pretrains only on its
+training cases loaded without labels; the validation fold is excluded from the
+event vocabulary and pretraining corpus.
 
 The deterministic baseline and Stage 2 can also be run directly:
 
