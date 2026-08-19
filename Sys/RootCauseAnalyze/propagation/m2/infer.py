@@ -74,9 +74,37 @@ def _condition_edges(
 ) -> List[Dict[str, Any]]:
     candidate_graph = _candidate_graph(hypothesis_graph)
     distance = _distances(_adjacency(candidate_graph), root_devices(root_hypothesis))
+    topology_edge_ids_by_pair = {
+        tuple(sorted((str(item.get("endpoint_a", "")), str(item.get("endpoint_b", ""))))): {
+            str(edge_id)
+            for edge_id in item.get("topology_edge_ids", [])
+            if edge_id
+        }
+        for item in candidate_graph.get("edges", [])
+        if isinstance(item, Mapping)
+        and item.get("endpoint_a")
+        and item.get("endpoint_b")
+    }
     rows: List[Dict[str, Any]] = []
     for pair in hypothesis_graph.get("edge_hypotheses", []):
         if not isinstance(pair, Mapping):
+            continue
+        endpoint_pair = tuple(
+            sorted(
+                (
+                    str(pair.get("endpoint_a", "")),
+                    str(pair.get("endpoint_b", "")),
+                )
+            )
+        )
+        candidate_topology_ids = topology_edge_ids_by_pair.get(endpoint_pair, set())
+        hypothesis_topology_ids = {
+            str(edge_id) for edge_id in pair.get("topology_edge_ids", []) if edge_id
+        }
+        validated_topology_ids = sorted(
+            candidate_topology_ids & hypothesis_topology_ids
+        )
+        if not validated_topology_ids:
             continue
         no_direct = float(
             pair.get("state_probabilities", {}).get("no_direct_propagation", 0.0) or 0.0
@@ -119,10 +147,12 @@ def _condition_edges(
                     "support_score": round(probability if eligible else 0.0, 6),
                     "features": {
                         **dict(direction.get("features", {})),
+                        "topology_valid": 1.0,
                         "root_distance_consistency": 1.0 if outward else 0.0,
                         "contradiction": 0.0 if outward else 1.0,
                     },
-                    "topology_edge_ids": list(pair.get("topology_edge_ids", [])),
+                    "topology_edge_ids": validated_topology_ids,
+                    "topology_validation": "raw_edge_match",
                     "evidence_ids": list(direction.get("evidence_ids", [])),
                     "counter_evidence_ids": list(direction.get("counter_evidence_ids", [])),
                     "alternative_group": None,

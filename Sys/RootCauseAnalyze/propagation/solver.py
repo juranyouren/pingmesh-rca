@@ -108,6 +108,53 @@ def _search_target_paths(
     )[: config.top_k_paths_per_target]
 
 
+def _validated_topology_edges(
+    candidate_graph: Mapping[str, Any],
+    scored_edges: Sequence[Mapping[str, Any]],
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Allow only scored edges backed by the case's candidate topology IDs."""
+
+    topology_ids_by_pair: Dict[Tuple[str, str], Set[str]] = {}
+    for raw in candidate_graph.get("edges", []):
+        if not isinstance(raw, Mapping):
+            continue
+        a = str(raw.get("endpoint_a", "") or "")
+        b = str(raw.get("endpoint_b", "") or "")
+        edge_ids = {
+            str(edge_id) for edge_id in raw.get("topology_edge_ids", []) if edge_id
+        }
+        if a and b and a != b and edge_ids:
+            topology_ids_by_pair.setdefault(tuple(sorted((a, b))), set()).update(
+                edge_ids
+            )
+
+    accepted: List[Dict[str, Any]] = []
+    rejected = 0
+    for raw in scored_edges:
+        if not isinstance(raw, Mapping):
+            rejected += 1
+            continue
+        edge = dict(raw)
+        source = str(edge.get("from", "") or "")
+        target = str(edge.get("to", "") or "")
+        expected_ids = topology_ids_by_pair.get(tuple(sorted((source, target))), set())
+        claimed_ids = {
+            str(edge_id) for edge_id in edge.get("topology_edge_ids", []) if edge_id
+        }
+        validated_ids = sorted(expected_ids & claimed_ids)
+        if not source or not target or source == target or not validated_ids:
+            rejected += 1
+            continue
+        edge["topology_edge_ids"] = validated_ids
+        edge["topology_validation"] = "raw_edge_match"
+        edge["features"] = {
+            **dict(edge.get("features", {})),
+            "topology_valid": 1.0,
+        }
+        accepted.append(edge)
+    return accepted, rejected
+
+
 def _would_create_cycle(adjacency: Mapping[str, Set[str]], source: str, target: str) -> bool:
     queue = deque([target])
     seen = {target}
@@ -292,6 +339,9 @@ def solve_propagation_dags(
     cfg = normalize_config(config)
     roots = root_devices(root_hypothesis)
     targets = [dict(item) for item in candidate_graph.get("targets", []) if isinstance(item, Mapping)]
+    validated_edges, rejected_topology_edge_count = _validated_topology_edges(
+        candidate_graph, scored_edges
+    )
     episode_by_device: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for item in episodes:
         if item.get("device_id"):
@@ -300,7 +350,9 @@ def solve_propagation_dags(
     paths_by_target: Dict[str, List[Dict[str, Any]]] = {}
     for target in targets:
         target_id = str(target.get("device_id", "") or "")
-        paths_by_target[target_id] = _search_target_paths(roots, target, scored_edges, cfg)
+        paths_by_target[target_id] = _search_target_paths(
+            roots, target, validated_edges, cfg
+        )
 
     base_paths = [paths[0] for _target, paths in sorted(paths_by_target.items()) if paths]
     main = _build_dag(base_paths, root_hypothesis, targets, episode_by_device, cfg)
@@ -352,6 +404,9 @@ def solve_propagation_dags(
         "target_count": len(targets),
         "reachable_target_count": sum(1 for paths in paths_by_target.values() if paths),
         "path_candidate_count": len(all_paths),
+        "topology_validated_edge_count": len(validated_edges),
+        "topology_rejected_edge_count": rejected_topology_edge_count,
+        "raw_topology_edge_constraint": "enforced",
     }
     return main
 

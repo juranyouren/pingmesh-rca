@@ -146,7 +146,16 @@ def build_candidate_graph(
     config: PropagationConfig | Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     cfg = normalize_config(config)
+    topology_source = str(
+        topology_context.get("diagnostics", {}).get("source", "unknown") or "unknown"
+    )
+    raw_topology_available = topology_source == "raw_task_topo"
     adjacency = physical_adjacency(topology_context)
+    if not raw_topology_available:
+        # Processed linked_from/linked_to values are useful for legacy ranking,
+        # but they cannot prove that an edge exists in this case's raw task_topo.
+        # Keep the devices visible while withholding every unverified edge.
+        adjacency = {device_id: set() for device_id in adjacency}
     node_by_id = {
         get_device_ip(dict(node)): dict(node)
         for node in node_list
@@ -304,7 +313,9 @@ def build_candidate_graph(
         "sink_anchors": sink_anchors,
         "corridor_nodes": sorted(corridor & selected),
         "diagnostics": {
-            "topology_context_source": topology_context.get("diagnostics", {}).get("source", "unknown"),
+            "topology_context_source": topology_source,
+            "raw_topology_available": raw_topology_available,
+            "raw_topology_edge_constraint": "required",
             "full_device_count": len(adjacency),
             "proposed_device_count": len(proposed),
             "candidate_device_count": len(selected),

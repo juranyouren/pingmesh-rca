@@ -107,6 +107,13 @@ def reconstruct_propagation(
         **dict(selected_graph.get("diagnostics", {})),
         "m1_node_count": len(hypothesis_graph.get("nodes", [])),
         "m1_edge_hypothesis_count": len(hypothesis_graph.get("edge_hypotheses", [])),
+        "topology_context_source": hypothesis_graph.get("diagnostics", {}).get(
+            "topology_context_source", "unknown"
+        ),
+        "raw_topology_available": bool(
+            hypothesis_graph.get("summary", {}).get("raw_topology_available", False)
+        ),
+        "raw_topology_edge_constraint": "enforced",
     }
     trust = assess_path_trust(selected_graph, config=cfg)
 

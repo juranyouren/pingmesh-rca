@@ -69,6 +69,7 @@ def reconstruct_hypothesis_graph(
         )
     elif cfg.edge_probability_method == "supervised_softmax_v1":
         probability_config["model_path"] = cfg.edge_probability_model_path
+    candidate_diagnostics = dict(candidate_graph.get("diagnostics", {}))
     return {
         "schema_version": M1_SCHEMA_VERSION,
         "graph_type": "root_independent_hypothetical_propagation_graph",
@@ -96,8 +97,12 @@ def reconstruct_hypothesis_graph(
                 "alarm_semantics",
                 "direct_device_relation",
             ],
-            "topology_role": "adjacent_pair_constraint_only",
+            "topology_role": "raw_adjacent_pair_hard_constraint",
+            "raw_topology_required": True,
+            "raw_topology_available": bool(
+                candidate_diagnostics.get("raw_topology_available", False)
+            ),
         },
-        "diagnostics": dict(candidate_graph.get("diagnostics", {})),
+        "diagnostics": candidate_diagnostics,
         "config_version": cfg.config_version,
     }

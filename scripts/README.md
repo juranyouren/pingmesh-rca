@@ -94,6 +94,11 @@ graph for every successful case is stored separately in
 its graph through `selected_path_ref`; the evaluator resolves this reference
 automatically, while `--selected-paths` makes the artifact dependency explicit.
 
+Propagation edges require a `topology_context.json` generated from the case's
+raw `task_topo`. Legacy `linked_from`/`linked_to` fallback data may still expose
+devices, but it cannot produce propagation edges or change the Stage 1 order.
+This makes every emitted edge traceable to at least one raw topology edge ID.
+
 The sidecar can be opened as an overlay without conversion:
 
 ```bash

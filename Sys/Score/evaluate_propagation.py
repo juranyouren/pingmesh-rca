@@ -51,7 +51,14 @@ def prediction_validity(record: Mapping[str, Any]) -> Dict[str, Any]:
         edge for edge in edges if edge.get("features", {}).get("temporal_available")
     ]
     topology_validity = _safe_ratio(
-        sum(float(edge.get("features", {}).get("topology_valid", 0.0) or 0.0) for edge in edges),
+        sum(
+            1
+            for edge in edges
+            if edge.get("topology_validation") == "raw_edge_match"
+            and bool(edge.get("topology_edge_ids"))
+            and float(edge.get("features", {}).get("topology_valid", 0.0) or 0.0)
+            >= 1.0
+        ),
         len(edges),
         empty=1.0,
     )

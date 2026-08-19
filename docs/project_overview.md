@@ -247,6 +247,9 @@ Stage 2 keeps `res.json` compact and writes each selected graph to the sibling
 `selected_propagation_paths.json`. That file follows the JSON-array prediction
 contract of `pingmesh-propagation-labeler`; `res.json` links records to it with
 `selected_path_ref`. The evaluator also resolves these references automatically.
+Every emitted propagation edge must match an edge ID in the case's raw
+`task_topo` context. If that raw topology sidecar is unavailable, Stage 2 emits
+no propagation edges and preserves the Stage 1 ranking.
 
 Use `scripts/run_stage2_edge_probability_ablation.sh` for the P0/P1/P4 Stage 2
 comparison and `scripts/run_baselines.sh` for TraceRCA, NetEventCause, and BiAn.
