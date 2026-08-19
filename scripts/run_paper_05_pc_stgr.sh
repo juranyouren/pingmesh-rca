@@ -81,6 +81,7 @@ python Sys/RootCauseAnalyze/propagation_pipeline.py \
 python Sys/Score/Score_N.py "${WORKDIR}/pc_stgr_stage2/res.json"
 python Sys/Score/evaluate_propagation.py \
     --predictions "${WORKDIR}/pc_stgr_stage2/res.json" \
+    --selected-paths "${WORKDIR}/pc_stgr_stage2/selected_propagation_paths.json" \
     --out "${WORKDIR}/pc_stgr_stage2/validity.json"
 
 export PINGMESH_NEURAL_EXPERIMENT_WORKDIR="${WORKDIR}"

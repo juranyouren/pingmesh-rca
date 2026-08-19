@@ -15,6 +15,12 @@ if __package__ in (None, ""):
         sys.path.insert(0, _REPO_ROOT)
 
 from Sys.RootCauseAnalyze.propagation import PropagationConfig, reconstruct_propagation
+from Sys.RootCauseAnalyze.propagation.artifacts import (
+    SELECTED_PATHS_FILENAME,
+    build_selected_path_record,
+    build_selected_path_ref,
+    compact_propagation,
+)
 from Sys.RootCauseAnalyze.propagation.topology_context import load_topology_context
 from Sys.RootCauseAnalyze.stage1.fusion import rank_root_causes
 from Sys.utils.case_utils import find_full_link_file, load_case_info, load_case_nodes
@@ -120,7 +126,17 @@ def run_propagation_pipeline(
     edge_manifest = _edge_model_manifest(edge_probability_oof_manifest_path)
     previous = _existing_result_map(root_results_path)
     case_dirs = sorted(previous) if previous else _discover_case_dirs(data_root)
+    case_ids = [os.path.basename(os.path.normpath(path)) for path in case_dirs]
+    duplicate_case_ids = sorted(
+        {case_id for case_id in case_ids if case_ids.count(case_id) > 1}
+    )
+    if duplicate_case_ids:
+        raise ValueError(
+            "duplicate case directory names are incompatible with propagation-labeler: "
+            + ", ".join(duplicate_case_ids)
+        )
     records = []
+    selected_path_records = []
     started = time.time()
 
     for dirpath in case_dirs:
@@ -178,6 +194,9 @@ def run_propagation_pipeline(
                 ensure_ascii=False,
                 indent=2,
             )
+            selected_path_records.append(
+                build_selected_path_record(dirpath, propagation)
+            )
             records.append(
                 {
                     "dir": dirpath,
@@ -191,10 +210,8 @@ def run_propagation_pipeline(
                     "selected_root": propagation["selected_root"],
                     "ranked_ips": final_ips,
                     "response": f"```json\n{score_response}\n```",
-                    "selected_propagation_graph": propagation[
-                        "selected_propagation_graph"
-                    ],
-                    "propagation": propagation,
+                    "selected_path_ref": build_selected_path_ref(dirpath),
+                    "propagation": compact_propagation(propagation),
                 }
             )
         except Exception as exc:
@@ -203,16 +220,19 @@ def run_propagation_pipeline(
                     "dir": dirpath,
                     "root_ips": [],
                     "propagation": None,
+                    "selected_path_ref": None,
                     "error": str(exc),
                 }
             )
 
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "res.json")
+    selected_paths_path = os.path.join(output_dir, SELECTED_PATHS_FILENAME)
+    save_json(selected_path_records, selected_paths_path, indent=2)
     save_json(records, output_path, indent=2)
     print(
         f"Propagation pipeline: {len(records)} cases in {time.time() - started:.2f}s; "
-        f"result={output_path}"
+        f"result={output_path}; selected_paths={selected_paths_path}"
     )
     return output_path
 

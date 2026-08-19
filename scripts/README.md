@@ -83,7 +83,25 @@ python Sys/RootCauseAnalyze/propagation_pipeline.py \
 
 python Sys/Score/evaluate_propagation.py \
   --predictions "$PINGMESH_RESULTS/<run>/propagation/res.json" \
+  --selected-paths "$PINGMESH_RESULTS/<run>/propagation/selected_propagation_paths.json" \
   --out "$PINGMESH_RESULTS/<run>/propagation/validity.json"
+```
+
+Stage 2 writes compact ranking and trust summaries to `res.json`. The selected
+graph for every successful case is stored separately in
+`selected_propagation_paths.json`, a JSON array that can be passed directly to
+`pingmesh-propagation-labeler --predictions`. Each `res.json` record links to
+its graph through `selected_path_ref`; the evaluator resolves this reference
+automatically, while `--selected-paths` makes the artifact dependency explicit.
+
+The sidecar can be opened as an overlay without conversion:
+
+```bash
+propagation-labeler \
+  --data-root "$PINGMESH_DATA" \
+  --labels-root "$PINGMESH_PROPAGATION_LABELS_ROOT" \
+  --predictions "$PINGMESH_RESULTS/<run>/propagation/selected_propagation_paths.json" \
+  --prediction-overlay
 ```
 
 The runtime path does not read root or propagation labels. Add `--labels-root`

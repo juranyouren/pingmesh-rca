@@ -239,8 +239,14 @@ python Sys/RootCauseAnalyze/propagation_pipeline.py \
 
 python Sys/Score/evaluate_propagation.py \
   --predictions "$PINGMESH_RESULTS/<run>/propagation/res.json" \
+  --selected-paths "$PINGMESH_RESULTS/<run>/propagation/selected_propagation_paths.json" \
   --out "$PINGMESH_RESULTS/<run>/propagation/validity.json"
 ```
+
+Stage 2 keeps `res.json` compact and writes each selected graph to the sibling
+`selected_propagation_paths.json`. That file follows the JSON-array prediction
+contract of `pingmesh-propagation-labeler`; `res.json` links records to it with
+`selected_path_ref`. The evaluator also resolves these references automatically.
 
 Use `scripts/run_stage2_edge_probability_ablation.sh` for the P0/P1/P4 Stage 2
 comparison and `scripts/run_baselines.sh` for TraceRCA, NetEventCause, and BiAn.

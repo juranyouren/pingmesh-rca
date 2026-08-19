@@ -42,6 +42,7 @@ run_stage2() {
     python Sys/Score/Score_N.py "${WORKDIR}/${name}/res.json"
     python Sys/Score/evaluate_propagation.py \
         --predictions "${WORKDIR}/${name}/res.json" \
+        --selected-paths "${WORKDIR}/${name}/selected_propagation_paths.json" \
         --out "${WORKDIR}/${name}/validity.json"
 }
 

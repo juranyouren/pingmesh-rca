@@ -48,6 +48,7 @@ paper/
 /docs/superpowers/
 /docs/ppt/
 /tests/
+/archive/
 /archive/tests/legacy_scripts/
 /tmp/*
 !/tmp/README.md

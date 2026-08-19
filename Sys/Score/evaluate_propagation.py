@@ -13,6 +13,7 @@ if __package__ in (None, ""):
 
 from Sys.RootCauseAnalyze.propagation.schema import root_devices
 from Sys.RootCauseAnalyze.propagation.solver import is_dag
+from Sys.RootCauseAnalyze.propagation.artifacts import load_prediction_records
 from Sys.utils.io_utils import load_json, save_json
 
 
@@ -26,6 +27,19 @@ def _f1(precision: float, recall: float) -> float:
 
 def _prediction(record: Mapping[str, Any]) -> Mapping[str, Any]:
     value = record.get("propagation")
+    selected = record.get("selected_propagation_graph")
+    if isinstance(selected, Mapping):
+        prediction = dict(record)
+        if isinstance(value, Mapping):
+            prediction.update(value)
+        prediction.update(selected)
+        hypothesis_summary = prediction.get("hypothesis_summary")
+        if (
+            isinstance(hypothesis_summary, Mapping)
+            and not isinstance(prediction.get("hypothesis_graph"), Mapping)
+        ):
+            prediction["hypothesis_graph"] = {"summary": dict(hypothesis_summary)}
+        return prediction
     return value if isinstance(value, Mapping) else record
 
 
@@ -292,6 +306,14 @@ def _parse_weights(raw: str | None) -> Dict[str, float] | None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate propagation validity and optional path labels.")
     parser.add_argument("--predictions", required=True)
+    parser.add_argument(
+        "--selected-paths",
+        default=None,
+        help=(
+            "Optional selected_propagation_paths.json. If omitted, the evaluator "
+            "resolves selected_path_ref entries in res.json."
+        ),
+    )
     parser.add_argument("--out", required=True)
     parser.add_argument("--labels-root", default=None)
     parser.add_argument("--weights", default=None, help="root=1,node=1,directed_edge=2,evidence=0")
@@ -299,9 +321,9 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.8)
     args = parser.parse_args()
 
-    records = load_json(args.predictions, default=[])
-    if not isinstance(records, list):
-        raise ValueError("predictions must contain a JSON list")
+    records = load_prediction_records(
+        args.predictions, selected_paths_path=args.selected_paths
+    )
     output: Dict[str, Any] = {"validity": aggregate_validity(records), "cases": []}
     weights = _parse_weights(args.weights)
     correct = 0
