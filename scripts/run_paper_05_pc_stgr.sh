@@ -31,10 +31,20 @@ mkdir -p "${WORKDIR}"
 echo "============================================"
 echo "  Paper Exp 05: PC-STGR"
 echo "  data:       ${PINGMESH_DATA}"
+echo "  raw data:   ${PINGMESH_RAW_DATA}"
 echo "  results:    ${WORKDIR}"
 echo "  folds:      ${PINGMESH_NEURAL_FOLDS}"
 echo "  device:     ${PINGMESH_NEURAL_DEVICE}"
 echo "============================================"
+
+echo
+echo "=== [topology] backfill and verify raw task_topo contexts ==="
+python Sys/Preprocess/backfill_topology_context.py \
+    --cases-root "${PINGMESH_DATA}" \
+    --raw-root "${PINGMESH_RAW_DATA}" \
+    --report "${WORKDIR}/topology_context_backfill_report.json" \
+    --write \
+    --require-complete
 
 echo
 echo "=== [deterministic] current topology + temporal fusion ==="

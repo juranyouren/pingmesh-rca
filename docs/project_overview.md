@@ -69,6 +69,7 @@ paths are not part of the executable pipeline.
 | --- | --- |
 | `Sys/config.py` | Central Python config derived from environment variables. |
 | `Sys/Preprocess/Preprocessor.py` | RAW merge, validation, and NODE data extraction. |
+| `Sys/Preprocess/backfill_topology_context.py` | Idempotent raw `task_topo` sidecar backfill and validation. |
 | `Sys/RootCauseAnalyze/stage1/neural_graph.py` | PC-STGR path-conditioned Device-Event graph construction. |
 | `Sys/RootCauseAnalyze/stage1/neural_model.py` | PC-STGR 42-to-64 encoder, relation-aware graph layers, root head, and single-root loss. |
 | `Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Grouped OOF training and label-free PC-STGR inference. |
@@ -214,6 +215,7 @@ workflow is PC-STGR:
 
 ```bash
 source scripts/common.sh
+export PINGMESH_RAW_DATA=/path/to/raw/full-link/json
 bash scripts/run_paper_05_pc_stgr.sh
 ```
 
@@ -250,6 +252,8 @@ contract of `pingmesh-propagation-labeler`; `res.json` links records to it with
 Every emitted propagation edge must match an edge ID in the case's raw
 `task_topo` context. If that raw topology sidecar is unavailable, Stage 2 emits
 no propagation edges and preserves the Stage 1 ranking.
+The supported experiment scripts run `backfill_topology_context.py` with
+`--write --require-complete` before Stage 2 and store a per-run backfill report.
 
 Use `scripts/run_stage2_edge_probability_ablation.sh` for the P0/P1/P4 Stage 2
 comparison and `scripts/run_baselines.sh` for TraceRCA, NetEventCause, and BiAn.

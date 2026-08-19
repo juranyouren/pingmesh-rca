@@ -20,7 +20,10 @@ _ROOT = os.environ.get("PINGMESH_PROJECT_ROOT", "/home/sbp/lixinyang/pingmesh")
 
 class DataPaths:
     def __init__(self, root=_ROOT):
-        self.pingmesh_raw = os.path.join(root, "data", "raw", "pingmesh_v1")
+        self.pingmesh_raw = os.environ.get(
+            "PINGMESH_RAW_DATA",
+            os.path.join(root, "data", "raw", "pingmesh_labeled"),
+        )
         self.nodes_labeled = os.environ.get("PINGMESH_DATA", os.path.join(root, "data", "node", "nodes_max_labeled"))
         self.results       = os.environ.get("PINGMESH_RESULTS", os.path.join(root, "data", "res"))
         self.alarm_weights = os.environ.get("PINGMESH_WEIGHTS_MANUAL", os.path.join(root, "data", "weights", "classified_alarms", "all_alarms.json"))

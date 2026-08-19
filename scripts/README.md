@@ -4,6 +4,9 @@
 cards, and default Top-K values. Override it with environment variables instead
 of editing individual runners.
 
+Set `PINGMESH_RAW_DATA` to the directory containing the original full-link JSON
+files whose `full_link.task_topo.value` corresponds to `PINGMESH_DATA` cases.
+
 ## Supported entrypoints
 
 | Script | Purpose |
@@ -13,6 +16,7 @@ of editing individual runners.
 | `run_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
 | `../Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Current PC-STGR OOF training and label-free inference implementation. |
+| `../Sys/Preprocess/backfill_topology_context.py` | Backfill and verify per-case topology contexts from raw `task_topo`. |
 | `../Sys/RootCauseAnalyze/propagation_pipeline.py` | Stage 1 → Stage 2 (M1 + M2) label-free pipeline. |
 | `../Sys/Score/evaluate_propagation.py` | Propagation validity and optional path-label evaluation. |
 
@@ -73,6 +77,22 @@ Stage 2/M1 builds one root-independent probabilistic hypothesis graph. Stage
 2/M2 explains that shared graph with every Stage 1 root candidate, constructs
 the corresponding root-conditioned DAG, and reranks roots using the Stage 1 and
 explanation scores.
+
+Backfill or verify the raw topology sidecars before running Stage 2:
+
+```bash
+python Sys/Preprocess/backfill_topology_context.py \
+  --cases-root "$PINGMESH_DATA" \
+  --raw-root "$PINGMESH_RAW_DATA" \
+  --report topology_context_backfill_report.json \
+  --write \
+  --require-complete
+```
+
+The command is dry-run unless `--write` is present. Existing equivalent files
+are left unchanged; differing files are reported as conflicts unless
+`--overwrite` is explicitly supplied. It never reads or rewrites case labels,
+nodes, or info files.
 
 ```bash
 python Sys/RootCauseAnalyze/propagation_pipeline.py \

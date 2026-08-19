@@ -26,6 +26,14 @@ RUN_TAG="${2:-stage2_edge_probability}_${TIMESTAMP}"
 WORKDIR="${PINGMESH_RESULTS}/${RUN_TAG}"
 mkdir -p "${WORKDIR}"
 
+echo "=== Backfill and verify raw topology contexts ==="
+python Sys/Preprocess/backfill_topology_context.py \
+    --cases-root "${PINGMESH_DATA}" \
+    --raw-root "${PINGMESH_RAW_DATA}" \
+    --report "${WORKDIR}/topology_context_backfill_report.json" \
+    --write \
+    --require-complete
+
 run_stage2() {
     local name="$1"
     shift
