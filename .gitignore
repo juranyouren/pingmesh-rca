@@ -13,6 +13,9 @@ data/
 # Agent outputs
 agent/output/
 agent/ms_agent.log
+/.codex-tmp/
+/output/
+*.inspect.ndjson
 
 # Jupyter checkpoints
 *.ipynb_checkpoints/
@@ -42,3 +45,22 @@ docs/毕业论文/
 
 # Local manuscript/build artifacts
 paper/
+
+# Local RCA work products
+/.superpowers/
+/docs/superpowers/
+/docs/ppt/
+/tests/*
+!/tests/test_neural_stage1_ssl.py
+/archive/
+/archive/tests/legacy_scripts/
+/tmp/*
+!/tmp/README.md
+
+# Locally archived presentation assets (keep the Markdown index tracked)
+/archive/ppt/**/*.png
+/archive/ppt/**/*.jpg
+/archive/ppt/**/*.jpeg
+/archive/ppt/**/*.gif
+/archive/ppt/**/*.ppt
+/archive/ppt/**/*.pptx

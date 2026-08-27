@@ -29,6 +29,13 @@
 import os, json, sys, shutil
 from collections import defaultdict, Counter
 
+if __package__ in (None, ""):
+    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+
+from Sys.RootCauseAnalyze.propagation.topology_context import build_topology_context
+
 
 # ══════════════════════════════════════════════════════════════════
 # Phase 1: Raw Cleanup — 合并同 CSN 文件
@@ -281,6 +288,7 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
             continue
 
         node_map = _extract_nodes(topo_value, full_link)
+        topology_context = build_topology_context(topo_value, task_info)
 
         # ── RC 设备名校验 (遍历所有 gt_labels) ──
         rc_names = set()
@@ -319,6 +327,7 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
         cases.append({
             "csn": csn, "path": fpath, "data": data,
             "task_info": task_info, "node_map": node_map, "gt_labels": gt_labels,
+            "topology_context": topology_context,
             "gt_ips": gt_ips, "n_devices": len(node_map),
         })
 
@@ -367,6 +376,11 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
         out_name = f"pingmesh-{csn}-全链路.json"
         json.dump(c["node_map"], open(os.path.join(case_dir, out_name), "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
+
+        # Stage 2 sidecar — preserves factual topology/port context without labels.
+        topology_context_path = os.path.join(case_dir, "topology_context.json")
+        with open(topology_context_path, "w", encoding="utf-8") as handle:
+            json.dump(c["topology_context"], handle, ensure_ascii=False, indent=2)
 
         written += 1
 

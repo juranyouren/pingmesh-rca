@@ -2,7 +2,7 @@
 Score_N — 根因定位评测模块
 =========================
 从 res.json 读取结果，计算 Top-1~5 命中率。
-输出 sum.json: {skill_evaluation, llm_evaluation}
+输出 sum.json: {ranking_evaluation, response_evaluation}
 
 用法:
     python Sys/Score/Score_N.py path/to/res.json
@@ -135,7 +135,7 @@ class Scorer:
             labels_v2 = Scorer._load_json(label_v2_path)
             gt_ips = Scorer._get_groundtruth_v2(labels_v2)
             if gt_ips:
-                return GroundTruth(ips=gt_ips, source="label_v2.json")
+                return GroundTruth(ips=gt_ips, source="label_v2.json:single_root")
 
         label_path = os.path.join(dir_name, "label.json")
         if not os.path.exists(label_path):
@@ -144,13 +144,15 @@ class Scorer:
         if not isinstance(labels, list):
             return GroundTruth(ips=[])
         labels_sorted = sorted(labels, key=lambda x: x.get("ranking", 999))
-        gt_ips = []
-        for lb in labels_sorted[:3]:
+        for lb in labels_sorted:
             for an in lb.get("abnormal_node", []):
-                ip = an.get("ip")
-                if ip and ip not in gt_ips:
-                    gt_ips.append(ip)
-        return GroundTruth(ips=gt_ips, source="label.json:top3_ranking")
+                ip = an.get("ip") if isinstance(an, dict) else None
+                if ip:
+                    return GroundTruth(
+                        ips=[str(ip)],
+                        source="label.json:rank1_root",
+                    )
+        return GroundTruth(ips=[])
 
     @staticmethod
     def _extract_ips(value) -> List[str]:
@@ -176,35 +178,60 @@ class Scorer:
     @staticmethod
     def _get_groundtruth_v2(labels: Any) -> List[str]:
         """
-        Preferred strict label schema for paper-grade evaluation.
+        Return the canonical single root from the strict paper label schema.
 
-        Supported fields:
-          - primary_root_cause / primary_root_causes: counted first
-          - secondary_root_causes: counted after primary roots
-          - root_causes: fallback when primary/secondary split is absent
+        Fields are checked in priority order.  If a field contains multiple
+        devices, only its first device is the case-level root.  Secondary and
+        generic roots are compatibility fallbacks for older annotations.
 
         Fields such as victims/affected_nodes are intentionally ignored.
         """
         if not isinstance(labels, dict):
             return []
 
-        gt_ips = []
-        primary = []
-        for key in ("primary_root_cause", "primary_root_causes"):
-            primary.extend(Scorer._extract_ips(labels.get(key)))
-
-        secondary = Scorer._extract_ips(labels.get("secondary_root_causes"))
-        fallback = Scorer._extract_ips(labels.get("root_causes"))
-
-        for ip in primary + secondary + fallback:
-            if ip and ip not in gt_ips:
-                gt_ips.append(ip)
-        return gt_ips
+        for key in (
+            "primary_root_cause",
+            "primary_root_causes",
+            "secondary_root_causes",
+            "root_causes",
+        ):
+            ips = Scorer._extract_ips(labels.get(key))
+            if ips:
+                return [str(ips[0])]
+        return []
 
     # ── core eval ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _ranked_ips(record: Dict[str, Any]) -> List[str]:
+        direct = record.get("ranked_ips")
+        if isinstance(direct, list):
+            return [str(ip) for ip in direct if ip]
+
+        for key in ("final_root_rankings", "initial_root_rankings"):
+            rankings = record.get(key)
+            if isinstance(rankings, list):
+                ips = [
+                    str(item.get("ip"))
+                    for item in rankings
+                    if isinstance(item, dict) and item.get("ip")
+                ]
+                if ips:
+                    return ips
+
+        stage1 = record.get("stage1")
+        if isinstance(stage1, dict) and isinstance(stage1.get("root_rankings"), list):
+            return [
+                str(item.get("ip"))
+                for item in stage1["root_rankings"]
+                if isinstance(item, dict) and item.get("ip")
+            ]
+
+        root_ips = record.get("root_ips")
+        return [str(ip) for ip in root_ips if ip] if isinstance(root_ips, list) else []
+
     def _eval_ips(self, res_data: List[Dict], ip_source: str) -> Dict[str, Any]:
-        """ip_source: "skill_ips" (纯算法) 或 "response" (LLM 解析)。"""
+        """Evaluate canonical rankings or IPs parsed from a response field."""
         sums = {f"sum_top{i}": 0 for i in range(1, 6)}
         n = 0
         # Top-1 失败案例 (按 gt 实际落点分桶)
@@ -218,9 +245,8 @@ class Scorer:
             if not gt.ips:
                 continue
 
-            if ip_source == "skill_ips":
-                ips = rd.get("skill_ips", [])
-                pred = Prediction(ips=ips if isinstance(ips, list) else [])
+            if ip_source == "ranking":
+                pred = Prediction(ips=self._ranked_ips(rd))
             else:
                 pred = self.parser.parse(rd.get(ip_source, ""))
 
@@ -267,19 +293,19 @@ class Scorer:
         if not res_data:
             raise ValueError(f"empty: {self.res_path}")
 
-        skill_eval = self._eval_ips(res_data, "skill_ips")
-        llm_eval = self._eval_ips(res_data, "response")
+        ranking_eval = self._eval_ips(res_data, "ranking")
+        response_eval = self._eval_ips(res_data, "response")
 
         # 分离失败案例详情, 单独存盘, sum.json 只留指标
         failures = {}
-        for name, ev in [("skill", skill_eval), ("llm", llm_eval)]:
+        for name, ev in [("ranking", ranking_eval), ("response", response_eval)]:
             if ev and "_top1_failures" in ev:
                 failures[name] = ev.pop("_top1_failures")
 
         summary = {
             "total_cases_in_file": len(res_data),
-            "skill_evaluation": skill_eval,
-            "llm_evaluation": llm_eval,
+            "ranking_evaluation": ranking_eval,
+            "response_evaluation": response_eval,
         }
 
         sum_path = os.path.join(self.out_dir, "sum.json")

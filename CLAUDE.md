@@ -3,9 +3,18 @@
 ## Project
 
 This repository is a DCN root-cause analysis research prototype for Huawei Cloud
-Pingmesh-triggered incidents. The active pipeline is:
+Pingmesh-triggered incidents. The target paper pipeline is:
 
-`Pingmesh case data -> topo ranker + temporal ranker -> fused evidence -> trust-tree gate -> optional local LLM review -> Score_N evaluation`
+`Pingmesh case data -> PC-STGR Stage 1 Top-K -> Stage 2/M1 root-independent hypothesis graph -> Stage 2/M2 root-conditioned graphs and reranking`
+
+PC-STGR is the Stage 1 design recorded in `docs/PC-STGR设计方案.md`. The current
+`stage1/neural_*` implementation has migrated to PC-STGR, but a fresh grouped
+OOF evaluation is still pending. The existing 159-case scores remain historical
+IC-STGR artifacts and must not be reported as PC-STGR results.
+
+`stage1/neural_ssl_*` adds PC-STGR-SSL as an optional, separate
+self-supervised-pretrained variant. It leaves the original PC-STGR network
+unchanged, uses a separate checkpoint format, and requires its own OOF result.
 
 ## Non-Negotiables
 
@@ -17,17 +26,13 @@ Pingmesh-triggered incidents. The active pipeline is:
 ## Key Paths
 
 ### Core pipeline
-- `Sys/RootCauseAnalyze/skill_pipeline.py`: deterministic topo/temporal skill pipeline (offline, no LLM).
-- `Sys/RootCauseAnalyze/skills/`: built-in topo, temporal, and fusion logic.
-- `Sys/RootCauseAnalyze/gate/`: evidence builder, trust-tree decision, summarizer, bypass response.
-- `Sys/RootCauseAnalyze/trust_trees/`: auditable topo/temporal trust tree rules.
-- `Sys/RootCauseAnalyze/SkilledAnalyzer.py`: LLM inference path, gate integration, NPU-aware worker orchestration.
+- `Sys/RootCauseAnalyze/stage1/`: current PC-STGR implementation, optional PC-STGR-SSL path, and deterministic Stage 1 baselines.
+- `Sys/RootCauseAnalyze/propagation/`: Stage 2 M1/M2 reconstruction and reranking.
+- `Sys/RootCauseAnalyze/propagation_pipeline.py`: label-free Stage 1 → Stage 2 entrypoint.
 
 ### Evaluation
-- `Sys/Score/Score_N.py`: Top-K hit-rate evaluation for skill_ips and LLM responses.
-- `Sys/Score/evaluate_trust_gate.py`: gate routing evaluation (per-route Top-K stats).
-- `Sys/Score/evaluate_gate_selection.py`: per-case topo-vs-temporal-vs-LLM comparison for invoke_llm cases.
-- `Sys/Score/apply_trust_gate.py`: apply gate to skillpipe results without calling LLM.
+- `Sys/Score/Score_N.py`: Top-K hit-rate evaluation for canonical rankings and response payloads.
+- `Sys/Score/evaluate_propagation.py`: Stage 2 validity and optional label-aware evaluation.
 - `Sys/Score/score_utils.py`: backward-compat shim → real implementations in `Sys/utils/io_utils.py`.
 
 ### Utilities & config
@@ -38,14 +43,11 @@ Pingmesh-triggered incidents. The active pipeline is:
 - `Sys/utils/alarm_utils.py`: alarm/event extraction and weight helpers.
 - `Sys/utils/ranking_utils.py`: stable score sorting and fusion helpers.
 
-### Backward-compat shims (thin re-exports to old paths)
-- `Sys/RootCauseAnalyze/confidence_gate.py` → `gate/decision.py` + `gate/response.py`
-- `Sys/RootCauseAnalyze/evidence_fusion.py` → `gate/evidence.py`
-
 ### Prompts, scripts, data
-- `prompts/`: active LLM prompt templates; do not recreate root-level `utils/`.
+- `prompts/`: baseline and ablation prompt templates; do not recreate root-level `utils/`.
 - `scripts/common.sh`: single source of default server paths and model parameters.
-- `scripts/run_gate_pipe_experiments.sh`: current main experiment driver.
+- `scripts/run_paper_05_pc_stgr.sh`: current executable Stage 1 paper workflow with supervised/SSL selection.
+- `scripts/run_stage2_edge_probability_ablation.sh`: Stage 2 edge-probability ablation.
 - `Baseline/`: TraceRCA, NetEventCause, and BiAn baseline adapters.
 - `docs/project_overview.md`: detailed project state and roadmap.
 
@@ -59,7 +61,7 @@ Pingmesh-triggered incidents. The active pipeline is:
 ```bash
 python -m pytest -q
 source scripts/common.sh
-python Sys/RootCauseAnalyze/skill_pipeline.py --help
-python Sys/Score/evaluate_trust_gate.py --help
-python Sys/Score/evaluate_gate_selection.py --help
+python Sys/RootCauseAnalyze/stage1/pipeline.py --help
+python Sys/RootCauseAnalyze/stage1/neural_pipeline.py --help
+python Sys/RootCauseAnalyze/propagation_pipeline.py --help
 ```

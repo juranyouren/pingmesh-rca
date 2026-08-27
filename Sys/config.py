@@ -20,17 +20,13 @@ _ROOT = os.environ.get("PINGMESH_PROJECT_ROOT", "/home/sbp/lixinyang/pingmesh")
 
 class DataPaths:
     def __init__(self, root=_ROOT):
-        self.pingmesh_raw = os.path.join(root, "data", "raw", "pingmesh_v1")
+        self.pingmesh_raw = os.environ.get(
+            "PINGMESH_RAW_DATA",
+            os.path.join(root, "data", "raw", "pingmesh_labeled"),
+        )
         self.nodes_labeled = os.environ.get("PINGMESH_DATA", os.path.join(root, "data", "node", "nodes_max_labeled"))
         self.results       = os.environ.get("PINGMESH_RESULTS", os.path.join(root, "data", "res"))
         self.alarm_weights = os.environ.get("PINGMESH_WEIGHTS_MANUAL", os.path.join(root, "data", "weights", "classified_alarms", "all_alarms.json"))
-
-
-class SkillPaths:
-    def __init__(self, root=_ROOT):
-        self.skills_folder = os.path.join(root, "Sys", "RootCauseAnalyze", "skills")
-        self.skills_json   = os.path.join(root, "Sys", "RootCauseAnalyze", "skills", "builtin_skills.json")
-        self.checklist     = os.path.join(root, "Sys", "RootCauseAnalyze", "gate", "check_list.json")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -79,13 +75,6 @@ class TemporalConfig:
         self.top_k = int(os.environ.get("PINGMESH_TOP_K", "10"))
 
 
-class SkillConfig:
-    def __init__(self):
-        env_skills = os.environ.get("PINGMESH_SKILLS", "")
-        self.skill_ids = [int(x) for x in env_skills.split()] if env_skills else [1, 2]
-        self.short_mode = 0
-
-
 # ══════════════════════════════════════════════════════════════════
 # Unified config object
 # ══════════════════════════════════════════════════════════════════
@@ -93,10 +82,8 @@ class SkillConfig:
 class Config:
     def __init__(self):
         self.data = DataPaths()
-        self.skills = SkillPaths()
         self.model = ModelConfig()
         self.pagerank = PageRankConfig()
         self.temporal = TemporalConfig()
-        self.skill = SkillConfig()
 
 config = Config()

@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from typing import Sequence
+
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..")
+)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from Sys.RootCauseAnalyze.stage1.fusion import rank_root_causes
+from Sys.utils.case_utils import find_full_link_file, load_case_info, load_case_nodes
+from Sys.utils.io_utils import save_json
+
+__all__ = [
+    "rank_root_causes",
+    "run_stage1_pipeline",
+]
+
+
+def run_stage1_pipeline(
+    data_root: str,
+    output_dir: str,
+    ranker_ids: Sequence[int] = (1, 2),
+    directed: bool = True,
+    top_k: int = 5,
+    weight_path: str | None = None,
+) -> str:
+    ranker_ids = tuple(int(ranker_id) for ranker_id in ranker_ids)
+    if weight_path:
+        resolved_weight_path = weight_path
+    else:
+        try:
+            from Sys.config import config
+
+            resolved_weight_path = config.data.alarm_weights
+        except Exception:
+            resolved_weight_path = None
+
+    ranker_labels = {1: "topology", 2: "temporal"}
+    mode_desc = "+".join(ranker_labels.get(ranker_id, str(ranker_id)) for ranker_id in ranker_ids) or "none"
+    method_name = f"deterministic_{mode_desc.replace('+', '_')}_ranking"
+    print(f"Stage 1 Pipeline ({mode_desc}, top_k={top_k})")
+    print(f"Scanning: {data_root}")
+
+    start_time = time.time()
+    results = []
+    case_count = 0
+
+    for dirpath, _dirnames, filenames in os.walk(data_root):
+        node_file = find_full_link_file(dirpath, filenames)
+        if not (node_file and "info.json" in filenames):
+            continue
+
+        try:
+            node_list = load_case_nodes(dirpath)
+            info = load_case_info(dirpath)
+            predicted_ips, details = rank_root_causes(
+                node_list,
+                info,
+                dirpath,
+                ranker_ids=ranker_ids,
+                directed=directed,
+                weight_dirpath=resolved_weight_path,
+                top_k=top_k,
+            )
+
+            mock_response = json.dumps(
+                {
+                    "reasoning": f"Deterministic Stage 1 pipeline ({mode_desc}), rankers={list(ranker_ids)}.",
+                    "ip": predicted_ips,
+                    "ranking_details": details,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            mock_str = f"```json\n{mock_response}\n```"
+
+            results.append(
+                {
+                    "dir": dirpath,
+                    "prompt": f"STAGE1_PIPELINE_{mode_desc.upper()}",
+                    "draft_response": mock_str,
+                    "response": mock_str,
+                    "ranked_ips": predicted_ips,
+                    "ranking_details": details,
+                    "stage1": {
+                        "method": method_name,
+                        "root_rankings": details.get("combined", {}).get("topk", []),
+                    },
+                    "initial_root_rankings": details.get("combined", {}).get("topk", []),
+                    "gt_ips": [],
+                }
+            )
+            case_count += 1
+        except Exception as exc:
+            print(f"[Error] {dirpath}: {exc}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    res_path = os.path.join(output_dir, "res.json")
+    save_json(results, res_path, indent=4)
+
+    elapsed = time.time() - start_time
+    print(f"Done: {case_count} cases, {elapsed:.2f}s")
+    print(f"Result: {res_path}")
+    return res_path
+
+
+def main() -> None:
+    try:
+        from Sys.config import config
+
+        data_root = config.data.nodes_labeled
+        result_root = config.data.results
+    except Exception:
+        data_root = "/home/sbp/lixinyang/pingmesh/data/node/nodes_max_labeled"
+        result_root = "/home/sbp/lixinyang/pingmesh/data/res"
+
+    parser = argparse.ArgumentParser(description="Run deterministic Stage 1 root ranking.")
+    parser.add_argument("--data-root", "-d", default=data_root)
+    parser.add_argument("--output-dir", "-o", default=None)
+    parser.add_argument(
+        "--rankers",
+        "-r",
+        nargs="*",
+        choices=("topology", "temporal"),
+        default=None,
+        help="Deterministic baseline branches (default: topology temporal).",
+    )
+    parser.add_argument("--directed", action="store_true", default=True)
+    parser.add_argument("--top-k", "-k", type=int, default=5)
+    parser.add_argument("--weight-file", "-w", default=None)
+    args = parser.parse_args()
+
+    variant = "dir" if args.directed else "undir"
+    ranker_name_to_id = {"topology": 1, "temporal": 2}
+    ranker_names = args.rankers if args.rankers is not None else ["topology", "temporal"]
+    ranker_ids = [ranker_name_to_id[name] for name in ranker_names]
+    ranker_tag = "_".join(ranker_names) or "none"
+    if args.weight_file:
+        ranker_tag += f"__{os.path.splitext(os.path.basename(args.weight_file))[0]}"
+    out_dir = (
+        os.path.join(result_root, args.output_dir)
+        if args.output_dir
+        else os.path.join(result_root, f"stage1_baseline_{ranker_tag}_{variant}_{int(time.time())}")
+    )
+
+    run_stage1_pipeline(
+        args.data_root,
+        out_dir,
+        ranker_ids=ranker_ids,
+        directed=args.directed,
+        top_k=args.top_k,
+        weight_path=args.weight_file,
+    )
+
+
+if __name__ == "__main__":
+    main()
