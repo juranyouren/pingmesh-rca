@@ -13,6 +13,9 @@ data/
 # Agent outputs
 agent/output/
 agent/ms_agent.log
+/.codex-tmp/
+/output/
+*.inspect.ndjson
 
 # Jupyter checkpoints
 *.ipynb_checkpoints/

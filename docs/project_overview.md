@@ -83,6 +83,7 @@ paths are not part of the executable pipeline.
 | `scripts/` | Supported server-side experiment entrypoints and shared configuration; see `scripts/README.md`. |
 | `tests/` | Regression tests; the PC-STGR-SSL contract test is tracked, while older workspace-only tests remain ignored. |
 | `docs/PC-STGR设计方案.md` | Target PC-STGR decisions, feature schema, tensor dimensions, network structure, loss, and migration checklist. |
+| `docs/Stage2_M1_M2实现说明.md` | Code-aligned Stage 2 M1/M2 algorithm, probability methods, fallback behavior, output contract, and current limitations. |
 | `docs/papers/` | Paper text extractions and summaries. Original PDFs live outside the repo. |
 | `tmp/` | Ignored generated outputs only; reusable diagnostics belong under `Sys/` and historical tools under `archive/`. |
 
@@ -167,17 +168,22 @@ separately as `response_evaluation`. The retired
 `skill_ips`, `skill_details`, and `skill_evaluation` names are not supported.
 
 Stage 2 first builds a root-independent weighted relation graph over
-the incident-conditioned undirected topology, retaining inactive, forward,
-reverse, ambiguous, and common-cause states. This single graph is the M1 output
-and does not depend on root candidates or their scores. M2 then evaluates each
+the incident-conditioned undirected topology, assigning forward, reverse, and
+no-direct-propagation probabilities to each candidate pair. This single graph
+is the M1 output and does not depend on root candidates or their scores. M2
+then evaluates each
 Stage 1 Top-K root against the same hypothesis graph, constructs its corresponding
 device-level propagation graph, and produces one explanation score. The final
 ranking is a weighted sum of only the normalized Stage 1 score and the
 normalized Stage 2 explanation score; insufficient path evidence falls back to
 the Stage 1 order.
 Interface fields are optional and their absence is not a quality penalty.
-Cases supported only by topology are marked `unidentifiable`; M2 then falls
-back to the Stage 1 order and emits an empty selected propagation graph.
+The current fallback test checks only whether M1 has positive effective relation
+mass and whether any root candidate produces a non-empty propagation graph.
+`unidentifiable` is assessed after reranking and is not yet a reranking gate, so
+it must not be treated as equivalent to `fallback_to_stage1`. The exact current
+algorithm and the remaining gating work are documented in
+[`docs/Stage2_M1_M2实现说明.md`](./Stage2_M1_M2实现说明.md).
 
 Engineer annotation of a path-labeling subset remains the next stage because
 the current labels identify root-cause devices but do not contain ordered nodes
@@ -196,6 +202,7 @@ Main files:
 
 Design source:
 
+- `docs/Stage2_M1_M2实现说明.md` (current executable behavior)
 - `docs/论文方案.md`
 
 ## 6. Deprecated Or Removed Areas
