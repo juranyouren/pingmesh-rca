@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set, Tuple
 
@@ -11,6 +12,14 @@ from Sys.utils.io_utils import load_json
 
 
 TOPOLOGY_SCHEMA_VERSION = "topology-context-v1"
+_POD_NUMBER_RE = re.compile(r"(?:^|[^a-z0-9])pod[\s_-]*0*(\d+)", re.IGNORECASE)
+
+
+def parse_pod_number(value: Any) -> int | None:
+    """Extract the numeric suffix immediately following a ``pod`` name token."""
+
+    match = _POD_NUMBER_RE.search(str(value or "").strip())
+    return int(match.group(1)) if match else None
 
 
 def parse_endpoint_values(value: Any) -> List[str]:
@@ -100,6 +109,7 @@ def build_topology_context(
                     "device_id": device_id,
                     "name": str(raw_node.get("name", "") or ""),
                     "role": str(raw_node.get("role", "") or ""),
+                    "pod_number": parse_pod_number(raw_node.get("name")),
                     "group_ids": [],
                     "segment_ids": [],
                 },
@@ -207,6 +217,7 @@ def topology_context_from_nodes(
             "device_id": device_id,
             "name": str(node.get("name", "") or ""),
             "role": str(node.get("role", "") or ""),
+            "pod_number": parse_pod_number(node.get("name")),
             "group_ids": ["FALLBACK"],
             "segment_ids": ["FALLBACK"],
         }

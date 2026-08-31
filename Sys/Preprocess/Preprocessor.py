@@ -353,6 +353,7 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
         # info.json
         info = {k: task_info.get(k, "") for k in (
             "alarm_name", "alarm_time", "source_ip", "sink_ip",
+            "source_pod", "sink_pod", "source_az", "sink_az",
             "src_tunnel_ip", "dst_tunnel_ip", "scenario_code",
             "analysis_type", "task_num", "alarm_description",
         )}
