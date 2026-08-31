@@ -2,66 +2,77 @@
 
 ## Project
 
-This repository is a DCN root-cause analysis research prototype for Huawei Cloud
-Pingmesh-triggered incidents. The target paper pipeline is:
+The active paper task is **Pingmesh heterogeneous fault-propagation graph
+reconstruction**:
 
-`Pingmesh case data -> PC-STGR Stage 1 Top-K -> Stage 2/M1 root-independent hypothesis graph -> Stage 2/M2 root-conditioned graphs and reranking`
+`observations -> M1 candidate heterogeneous evidence graph -> M2 root/relation probabilities -> M3 joint root-and-graph constrained reconstruction`
 
-PC-STGR is the Stage 1 design recorded in `docs/PC-STGR设计方案.md`. The current
-`stage1/neural_*` implementation has migrated to PC-STGR, but a fresh grouped
-OOF evaluation is still pending. The existing 159-case scores remain historical
-IC-STGR artifacts and must not be reported as PC-STGR results.
+The main output contains a device propagation DAG, a jointly inferred root
+device or link, an event-evolution explanation layer, evidence-grounding links,
+and explicit alternatives/abstention. The device propagation DAG is the primary
+quantitative object; events explain why its edges and root are selected.
 
-`stage1/neural_ssl_*` adds PC-STGR-SSL as an optional, separate
-self-supervised-pretrained variant. It leaves the original PC-STGR network
-unchanged, uses a separate checkpoint format, and requires its own OOF result.
+The current device-only, externally root-conditioned code is a prototype and
+baseline, not the new method architecture. Use `docs/论文方案.md` as the only
+active paper-plan source. `docs/PC-STGR设计方案.md` is historical.
 
 ## Non-Negotiables
 
-- Internal fault data is not publishable. Do not move `data/` into tracked code.
-- Do not call external LLM APIs for project experiments. The intended runtime is local vLLM on Ascend NPU servers.
-- Do not let inference code read `label.json`; labels are only for evaluation.
-- Run tests with `python -m pytest`, not bare `pytest`, unless a local `PYTHONPATH` is already configured.
+- Do not publish or track internal fault data.
+- Do not call external LLM APIs in experiments.
+- Runtime inference must not read root or propagation labels.
+- Device propagation edges must exist in raw `task_topo`.
+- Physical, ownership, temporal, and semantic relations are evidence, not
+  deterministic causality.
+- Unknown relations are masked, not labeled negative.
+- Event-event outputs are dependency/evolution hypotheses unless causally
+  labeled.
+- Without engineer labels, report validity diagnostics, never root/path
+  accuracy.
+- Use incident-grouped splits and leakage-safe calibration.
+- Run tests with `python -m pytest`.
 
-## Key Paths
+## Active Paper Modules
 
-### Core pipeline
-- `Sys/RootCauseAnalyze/stage1/`: current PC-STGR implementation, optional PC-STGR-SSL path, and deterministic Stage 1 baselines.
-- `Sys/RootCauseAnalyze/propagation/`: Stage 2 M1/M2 reconstruction and reranking.
-- `Sys/RootCauseAnalyze/propagation_pipeline.py`: label-free Stage 1 → Stage 2 entrypoint.
+- **M1:** evidence episodes plus candidate Device/Event/Symptom graph.
+- **M2:** relation-aware encoder with a root-potential head, device-device
+  three-state head, and event-event three-state head.
+- **M3:** constrained joint root-and-graph decoder with topology, reachability,
+  acyclicity, evidence coverage, alternatives, and identifiability.
 
-### Evaluation
-- `Sys/Score/Score_N.py`: Top-K hit-rate evaluation for canonical rankings and response payloads.
-- `Sys/Score/evaluate_propagation.py`: Stage 2 validity and optional label-aware evaluation.
-- `Sys/Score/score_utils.py`: backward-compat shim → real implementations in `Sys/utils/io_utils.py`.
+Oracle-root decoding is a controlled evaluation mode. Joint root-graph inference
+is the target setting.
 
-### Utilities & config
-- `Sys/config.py`: single Python-side config reading env vars set by `scripts/common.sh`.
-- `Sys/utils/io_utils.py`: canonical I/O helpers (`load_json`, `save_json`, `write_jsonl`, `write_csv`, `case_id_from_dir`, `dedupe`, `hit_at`). **Prefer this over `score_utils`.**
-- `Sys/utils/npu_utils.py`: Ascend NPU memory inspection and waiting (`get_npu_memory_info`, `wait_npu_memory`).
-- `Sys/utils/case_utils.py`: case file discovery, node/info loading, ground-truth reading.
-- `Sys/utils/alarm_utils.py`: alarm/event extraction and weight helpers.
-- `Sys/utils/ranking_utils.py`: stable score sorting and fusion helpers.
+## Current Code Status
 
-### Prompts, scripts, data
-- `prompts/`: baseline and ablation prompt templates; do not recreate root-level `utils/`.
-- `scripts/common.sh`: single source of default server paths and model parameters.
-- `scripts/run_paper_05_pc_stgr.sh`: current executable Stage 1 paper workflow with supervised/SSL selection.
-- `scripts/run_stage2_edge_probability_ablation.sh`: Stage 2 edge-probability ablation.
-- `Baseline/`: TraceRCA, NetEventCause, and BiAn baseline adapters.
-- `docs/project_overview.md`: detailed project state and roadmap.
+`Sys/RootCauseAnalyze/propagation/heterogeneous/` now provides a runnable V0:
+typed Device/Event/Symptom construction, internal heuristic root potentials,
+DD/EE relations, bounded single-device-root joint search, event explanations,
+and identifiability output. The older propagation files provide the reusable
+device probability and DAG-decoding substrate.
 
-## Data And Artifacts
+V0 is not the final learned method. Relation-aware GAT, calibration, CP-SAT,
+link roots, and multi-root reconstruction remain unimplemented.
 
-- `data/` is ignored and should stay local.
-- `docs/papers/` keeps text extractions and summaries only.
+PC-STGR and other `stage1` rankers are supporting baselines only. Compatibility
+names such as `stage1`, `stage2`, `m1`, `m2`, and `two-stage-*` do not define the
+paper structure.
+
+## Current Priority
+
+1. Run V0 on server data and audit heterogeneous evidence/schema failures.
+2. Finalize labels and annotate a pilot set.
+3. Verify M1 candidate recall.
+4. Replace heuristic potentials with incident-grouped OOF learning/calibration.
+5. Replace bounded enumeration with CP-SAT joint device/link-root inference.
 
 ## Common Commands
 
 ```bash
 python -m pytest -q
 source scripts/common.sh
-python Sys/RootCauseAnalyze/stage1/pipeline.py --help
-python Sys/RootCauseAnalyze/stage1/neural_pipeline.py --help
+python Sys/Preprocess/backfill_topology_context.py --help
+python Sys/RootCauseAnalyze/heterogeneous_propagation_pipeline.py --help
 python Sys/RootCauseAnalyze/propagation_pipeline.py --help
+python Sys/Score/evaluate_propagation.py --help
 ```

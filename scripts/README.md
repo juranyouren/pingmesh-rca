@@ -1,4 +1,37 @@
-# RCA Experiment Scripts
+# Legacy and Device-Level Prototype Experiment Scripts
+
+> The active paper method is the three-module heterogeneous root-and-propagation
+> graph design in `docs/论文方案.md`. A dependency-free heterogeneous V0 now runs
+> end to end without an external root input. The remaining scripts implement the
+> older device-level prototype and historical root-ranking baselines.
+
+## Runnable heterogeneous V0
+
+The V0 builds a typed Device/Event/Symptom graph, produces interpretable root and
+DD/EE relation potentials, enumerates single-device roots, decodes a
+topology-valid device DAG, and attaches event/evidence explanations. It is a
+baseline scaffold; Relation-aware GAT, calibrated learned heads, CP-SAT, link
+roots, and multi-root reconstruction are not implemented yet.
+
+Run one case:
+
+```bash
+python Sys/RootCauseAnalyze/heterogeneous_propagation_pipeline.py \
+  --case-dir /path/to/case \
+  --output-dir "$PINGMESH_RESULTS/heterogeneous_v0"
+```
+
+Run all discoverable cases:
+
+```bash
+bash scripts/run_heterogeneous_propagation_v0.sh
+```
+
+The command never reads `label.json` or a root-result file. It writes compact
+case summaries to `res.json` and full graphs to `heterogeneous_graphs.json`.
+The wrapper first backfills and verifies raw topology contexts. Set
+`PINGMESH_HETERO_BACKFILL_TOPOLOGY=0` only when the sidecars have already been
+verified. The first positional argument changes the run tag.
 
 `scripts/common.sh` is the single source of server paths, model settings, NPU
 cards, and default Top-K values. Override it with environment variables instead
@@ -7,33 +40,36 @@ of editing individual runners.
 Set `PINGMESH_RAW_DATA` to the directory containing the original full-link JSON
 files whose `full_link.task_topo.value` corresponds to `PINGMESH_DATA` cases.
 
-## Supported entrypoints
+## Supported legacy/prototype entrypoints
 
 | Script | Purpose |
 | --- | --- |
-| `run_paper_05_pc_stgr.sh` | Current executable Stage 1 paper workflow: deterministic baseline, selectable supervised or self-supervised PC-STGR, then Stage 2 reranking. |
-| `run_stage2_edge_probability_ablation.sh` | Compare P0, P1 Logit/Softmax, and leakage-safe P4 supervised edge probabilities with one Stage 1 result. |
+| `run_heterogeneous_propagation_v0.sh` | Active root-input-free heterogeneous V0: topology backfill, Device/Event/Symptom construction, bounded joint root/DAG reconstruction, and full graph artifacts. |
+| `run_paper_05_pc_stgr.sh` | Legacy-compatible runner that generates optional PC-STGR candidates and then invokes propagation reconstruction; not the paper's main experiment definition. |
+| `run_stage2_edge_probability_ablation.sh` | Compare P0, P1 Logit/Softmax, and leakage-safe P4 supervised edge probabilities with one replaceable root-candidate file. |
 | `run_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
 | `../Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Current PC-STGR OOF training and label-free inference implementation. |
 | `../Sys/RootCauseAnalyze/stage1/neural_ssl_pipeline.py` | Optional fold-local self-supervised pretraining, supervised fine-tuning, OOF evaluation, and label-free inference. |
 | `../Sys/Preprocess/backfill_topology_context.py` | Backfill and verify per-case topology contexts from raw `task_topo`. |
-| `../Sys/RootCauseAnalyze/propagation_pipeline.py` | Stage 1 → Stage 2 (M1 + M2) label-free pipeline. |
+| `../Sys/RootCauseAnalyze/propagation_pipeline.py` | Current device-level, label-free propagation prototype with compatibility root-candidate input. |
 | `../Sys/Score/evaluate_propagation.py` | Propagation validity and optional path-label evaluation. |
 
 The Gate, Trust-Tree, Skill Pipeline, candidate-summary path, and their old
 paper-01 through paper-04 wrappers have been removed. They are not part of the
-paper runtime or supported comparison workflow.
+runtime or supported comparison workflow.
 
-## Stage 1 status
+## Supporting root-candidate status
 
-The Stage 1 method is **PC-STGR (Path-Conditioned Spatio-Temporal Graph
-Ranker)**, specified in `docs/PC-STGR设计方案.md`. The current
+PC-STGR is an available **supporting root-candidate generator**, not the active
+paper method. Its historical implementation contract is recorded in
+`docs/PC-STGR设计方案.md`; the active paper plan is `docs/论文方案.md`. The current
 `stage1/neural_*` code and `run_paper_05_pc_stgr.sh` implement PC-STGR. A new
-grouped OOF run is still required; do not rename the historical IC-STGR
-73.58/93.71/97.48 Top-1/Top-3/Top-5 result as PC-STGR.
+grouped OOF run is still required for any candidate-quality claim; do not rename
+the historical IC-STGR 73.58/93.71/97.48 Top-1/Top-3/Top-5 result as PC-STGR or
+as a propagation-graph result.
 
-Run the current reproducible workflow in the server PyTorch environment:
+Run the compatibility end-to-end workflow in the server PyTorch environment:
 
 ```bash
 bash scripts/run_paper_05_pc_stgr.sh
@@ -54,7 +90,7 @@ PC-STGR-SSL pretrains only on the current fold's training cases reloaded without
 labels, then fine-tunes on their root labels. Validation-fold cases are excluded
 from the vocabulary and pretraining data.
 
-It produces three comparable rows:
+It produces three compatibility rows:
 
 - `deterministic`: topology + temporal white-box baseline;
 - `pc_stgr_oof`: grouped OOF PC-STGR predictions;
@@ -62,9 +98,10 @@ It produces three comparable rows:
 
 The run directory contains `summary.json`, `summary.csv`, fold checkpoints,
 training histories, OOF `res.json`, Stage 2 validity metrics, and
-`pc_stgr_oof/final_model.pt`. Scored paper results must use
+`pc_stgr_oof/final_model.pt`. Candidate-ranking scores must use
 `pc_stgr_oof/res.json`; the final model is trained on all labeled cases only for
-later unseen-case inference.
+later unseen-case inference. These rows do not constitute the
+propagation-reconstruction main table.
 
 When `self_supervised` is selected, the corresponding directories are
 `pc_stgr_ssl_oof` and `pc_stgr_ssl_stage2`, and the checkpoint is stored as
@@ -92,14 +129,16 @@ All supported result writers expose `ranked_ips`; Stage 1 also emits
 adds `final_root_rankings`. `Score_N.py` stores direct ranking metrics under
 `ranking_evaluation` and parsed response metrics under `response_evaluation`.
 
-## Stage 2 workflow
+## Current device-level prototype workflow
 
-Stage 2/M1 builds one root-independent probabilistic hypothesis graph. Stage
-2/M2 explains that shared graph with every Stage 1 root candidate, constructs
-the corresponding root-conditioned DAG, and reranks roots using the Stage 1 and
-explanation scores.
+This legacy-compatible implementation first builds one device-level,
+root-independent probabilistic relation graph, then decodes a root-conditioned
+propagation DAG for every external root candidate. It may compare graph
+explanations and rerank roots as an auxiliary output. Existing
+`Stage 2/M1/M2` schema names are compatibility labels, not the active paper
+structure and not an implementation of the new heterogeneous M1/M2/M3 design.
 
-Backfill or verify the raw topology sidecars before running Stage 2:
+Backfill or verify the raw topology sidecars before reconstruction:
 
 ```bash
 python Sys/Preprocess/backfill_topology_context.py \

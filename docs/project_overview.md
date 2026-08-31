@@ -1,311 +1,200 @@
-# Pingmesh RCA Project Overview
+# Pingmesh Heterogeneous Fault-Propagation Graph Project Overview
 
-## 2026-08-18 Stage 1 Design Update
+## Active Direction
 
-The next Stage 1 target design is **PC-STGR (Path-Conditioned
-Spatio-Temporal Graph Ranker)**. It uses a Device-Event graph, direct endpoint
-and path-corridor device features, fixed two-dimensional node-type one-hot
-encoding, a 16-dimensional event-name embedding, a 42-to-64-dimensional node
-encoder, two relation-aware attention layers, and a single-root case-wise
-softmax loss. The complete decision record and target tensor specification are
-in [`docs/PC-STGR设计方案.md`](./PC-STGR设计方案.md).
+As of 2026-08-28, the paper has one primary task: **reconstruct a globally
+consistent, evidence-grounded heterogeneous fault-propagation graph from each
+Pingmesh incident**.
 
-The `stage1/neural_*` implementation has now migrated to this PC-STGR design.
-This is still not a relabeling of existing results: the documented 159-case OOF
-scores and old checkpoints remain IC-STGR artifacts until PC-STGR completes an
-independent grouped OOF evaluation. Do not report the existing IC-STGR metrics
-as PC-STGR results.
+```text
+Pingmesh context + raw task_topo + alarms/logs
+  -> M1 candidate Device/Event/Symptom evidence graph
+  -> M2 root potentials + local DD/EE relation probabilities
+  -> M3 joint root-and-graph constrained reconstruction
+  -> root + device propagation DAG + event explanation + uncertainty
+```
 
-## Active Paper Branch
+The root is not required as an upstream input in the target setting. It is a
+latent source variable selected together with the graph. An oracle root can be
+injected only for controlled evaluation that isolates propagation-reconstruction
+quality.
 
-`2stage` is the primary working branch for the current paper proposal, method
-implementation, and experiment workflow. Unless a task explicitly specifies
-another target, paper-related development, experiment results, and documentation
-must use `2stage` as the source of truth and should be committed to this branch.
-Other branches are not the default basis for the current paper.
+The detailed and authoritative design is
+[`docs/论文方案.md`](./论文方案.md). The former device-only and PC-STGR-first plans
+are retained only as implementation history and baselines.
 
-## 1. Project Positioning
+## 1. Output Semantics
 
-This project studies automated root-cause localization for large-scale data
-center network incidents triggered by Pingmesh alarms. The working assumption is
-that Pingmesh reliably detects network-side symptoms, but cannot identify the
-physical root-cause device because ECMP and high fan-out DCN topologies obscure
-the actual forwarding path.
+The final heterogeneous explanation graph has three clearly separated layers:
 
-The target paper system is a two-stage pipeline:
-
-1. Parse one incident case from full-link node data and `info.json`.
-2. Stage 1 uses **PC-STGR (Path-Conditioned Spatio-Temporal Graph Ranker)** to
-   construct a path-conditioned Device-Event graph and learn a high-recall
-   root-cause candidate ranking.
-3. Stage 2/M1 builds one root-independent hypothesis propagation graph.
-4. Stage 2/M2 evaluates every Stage 1 candidate against that shared graph and
-   emits the final ranking plus root-conditioned propagation graphs.
-5. Evaluate Stage 1 with grouped out-of-fold Top-1/Top-3/Top-5 and MRR; evaluate
-   Stage 2 validity or path accuracy separately according to label availability.
-
-The executable neural pipeline now implements PC-STGR. Its independent grouped
-OOF evaluation is still pending, so the existing IC-STGR metrics remain only a
-historical neural reference. The deterministic topology + temporal fusion
-remains a strong white-box Stage 1 baseline. Deprecated orchestration and review
-paths are not part of the executable pipeline.
-
-## 2. Current Constraints
-
-- The production dataset is internal Huawei Cloud fault data and cannot be
-  published.
-- Experiments are designed for an internal/offline environment. External LLM API
-  calls should not be part of the experiment path.
-- The intended LLM runtime is local vLLM with DeepSeek-R1-Distill-Qwen-32B on
-  Ascend NPU servers.
-- Server defaults are centralized in `scripts/common.sh`; Python config reads
-  equivalent environment variables through `Sys/config.py`.
-- Use `python -m pytest`, because bare `pytest` may not include the repository
-  root on `sys.path` in this Windows workspace.
-
-## 3. Active Repository Structure
-
-| Path | Role |
-| --- | --- |
-| `Sys/config.py` | Central Python config derived from environment variables. |
-| `Sys/Preprocess/Preprocessor.py` | RAW merge, validation, and NODE data extraction. |
-| `Sys/Preprocess/backfill_topology_context.py` | Idempotent raw `task_topo` sidecar backfill and validation. |
-| `Sys/RootCauseAnalyze/stage1/neural_graph.py` | PC-STGR path-conditioned Device-Event graph construction. |
-| `Sys/RootCauseAnalyze/stage1/neural_model.py` | PC-STGR 42-to-64 encoder, relation-aware graph layers, root head, and single-root loss. |
-| `Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Grouped OOF training and label-free PC-STGR inference. |
-| `Sys/RootCauseAnalyze/stage1/neural_ssl_model.py` | Optional PC-STGR-SSL encoder plus masked token, feature, and edge-reconstruction pretraining heads. |
-| `Sys/RootCauseAnalyze/stage1/neural_ssl_pipeline.py` | Fold-local label-free pretraining, supervised fine-tuning, grouped OOF evaluation, and inference for PC-STGR-SSL. |
-| `Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic temporal + alarm-topology Stage 1 baseline. |
-| `Sys/Score/` | Stage 1, Stage 2, propagation, and baseline evaluation scripts. |
-| `Sys/utils/` | Shared case, alarm, ranking, and I/O utilities. |
-| `prompts/` | Prompt templates retained for baseline and ablation experiments. |
-| `Baseline/` | Adapted TraceRCA, NetEventCause, and BiAn baselines. |
-| `scripts/` | Supported server-side experiment entrypoints and shared configuration; see `scripts/README.md`. |
-| `tests/` | Regression tests; the PC-STGR-SSL contract test is tracked, while older workspace-only tests remain ignored. |
-| `docs/PC-STGR设计方案.md` | Target PC-STGR decisions, feature schema, tensor dimensions, network structure, loss, and migration checklist. |
-| `docs/papers/` | Paper text extractions and summaries. Original PDFs live outside the repo. |
-| `tmp/` | Ignored generated outputs only; reusable diagnostics belong under `Sys/` and historical tools under `archive/`. |
-
-## 4. Current Performance Snapshot
-
-The latest documented production-data setting uses 159 manually labeled cases.
-Learned Stage 1 results must use grouped 5-fold out-of-fold predictions.
-
-| Stage 1 method | Evaluation | Cases | Top-1 | Top-3 | Top-5 | Paper role |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| deterministic topology + temporal fusion | deterministic | 159 | **77.36%** | 89.94% | 94.34% | strong white-box baseline |
-| **IC-STGR** | grouped 5-fold OOF | 159 | 73.58% | **93.71%** | **97.48%** | implemented historical neural reference |
-
-The supported claim is improved candidate coverage, not improved Top-1. IC-STGR
-changes Top-1 by -3.78 percentage points, Top-3 by +3.77 points, and Top-5 by
-+3.14 points versus the deterministic baseline. Top-5 misses fall from 9 to 4
-cases (55.6% fewer misses). Its full-data `final_model.pt` is for later unseen
-inference and must not be scored back on these 159 labeled cases as a paper result.
-
-### 4.1 Stage 1 Target Decision
-
-PC-STGR is the fixed Stage 1 implementation. IC-STGR remains a historical neural
-reference and its existing metrics remain valid only under that name. The
-comparison plan is:
-
-| Method | Role | Status |
+| Layer | Relation | Role |
 | --- | --- | --- |
-| PC-STGR | main method; path-conditioned Device-Event spatio-temporal ranking | implementation complete; grouped OOF pending |
-| PC-STGR-SSL | optional self-supervised initialization of a separate PC-STGR network; reported as its own experiment | implementation complete; grouped OOF pending |
-| IC-STGR | historical reference; Device-Event-Incident ranking | first OOF result complete |
-| deterministic topology + temporal fusion | strong interpretable baseline | complete |
-| LambdaMART | learned ranking baseline over researcher-defined, automatically computed device features | pending |
-| device-only GAT/GCN | graph-structure baseline | pending |
-| PC-STGR path/type/event/time removals | required component ablations | pending |
+| Device backbone | directed Device → Device propagation edges | Primary reconstructed propagation DAG; every edge must exist in raw `task_topo` |
+| Event explanation | directed Event → Event dependency/evolution edges | Explains temporal and semantic development without overstating causality |
+| Evidence grounding | Device ↔ Event observed-on/ownership links | Connects inferred structure to raw alarms and logs; not a propagation edge |
 
-PC-STGR is a project method name, not the name of an existing paper. The paper
-claim is scoped to the Pingmesh path-conditioned Device-Event construction,
-explicit spatio-temporal relations, and case-wise single-root ranking, not to a
-new general attention operator. See `docs/PC-STGR设计方案.md` for the exact
-feature, tensor, loss, and evaluation contract.
+The output also includes a root device or root link, edge confidence, evidence
+references, Top-K near-optimal alternatives, and an identifiability/abstention
+decision. The method may return a partial graph when the evidence is
+insufficient.
 
-## 5. Supporting Directions
+## 2. Problem Boundary
 
-### 5.1 Alarm Weight And Semantic Coverage
+Pingmesh observes end-to-end reachability symptoms rather than the internal
+fault process. Raw physical topology, timestamps, alarm semantics, and peer
+relations constrain the possible explanation, but none independently proves a
+propagation direction. ECMP, missing alarms, timestamp uncertainty, repeated
+alarm templates, and concurrent faults can make multiple graphs observationally
+equivalent.
 
-Alarm weights are maintained manually in `data/weights/classified_alarms/all_alarms.json`.
-Earlier experiments with LLM-based alarm scoring and classification showed that semantic
-classification can help temporal-only ranking, but can hurt fused ranking when coverage
-is partial. The next useful work is broader alarm-name normalization and coverage
-analysis before applying semantic weights globally.
+The task therefore does not claim to recover the true packet-by-packet path. It
+seeks the best supported global explanation while exposing ambiguity instead of
+inventing certainty.
 
-Main files:
+## 3. Method Modules
 
-- `Sys/utils/alarm_utils.py`
-- `data/weights/classified_alarms/all_alarms.json`
+| Module | Input | Core operation | Output |
+| --- | --- | --- | --- |
+| **M1 Evidence modeling and candidate graph** | Pingmesh source/destination and time window, raw `task_topo`, alarms/logs | Normalize records into event episodes; select endpoint corridor, event-bearing devices, necessary connectors, and symptoms | Candidate heterogeneous graph `G_c` with Device/Event/Symptom nodes and typed evidence edges |
+| **M2 Heterogeneous relation learning** | `G_c` and node/edge evidence features | Relation-aware graph encoding plus root, device-device, and event-event prediction heads | Root potentials; `A→B / B→A / No Direct`; `Ei→Ej / Ej→Ei / No Dependency`; calibrated probabilistic graph `H` |
+| **M3 Globally constrained reconstruction** | `H`, raw topology constraints, evidence coverage requirements, optional oracle root | Joint combinatorial optimization over root, selected nodes, DD edges, EE edges, and symptom coverage | Root + topology-valid device DAG + event explanation + evidence traces + alternatives/identifiability |
 
-### 5.2 Public Dataset / NIKA Direction
+### M1: candidate heterogeneous evidence graph
 
-The `main` branch is for internal company datasets. The `nika` branch is the
-intended public-dataset adaptation path. Work for public release should avoid
-Huawei-internal raw data and should replace private labels and alarm names with
-publishable equivalents.
+Node types are `Device`, `Event`, and `Symptom`. Candidate edges distinguish raw
+physical adjacency, event ownership/observation, endpoint association, and
+event-event candidate relations. M1 only restricts the search space; its edges
+must never be drawn as confirmed propagation.
 
-### 5.3 Fault Propagation Path Reconstruction
+M1 should preserve high recall for engineer-labeled required nodes and edges.
+That recall is a hard upper bound on all downstream results and is evaluated
+separately from M2 and M3.
 
-The `2stage` branch is the primary working branch for the current paper. It
-contains the PC-STGR implementation and the Stage 2 joint-inference
-implementation. Stage 2 consumes the stable `initial_root_rankings` contract
-and remains compatible with PC-STGR output.
+### M2: local probabilistic relations
 
-Supported result writers use one neutral ranking schema:
+The proposed encoder is a two-layer relation-aware GAT with four 16-dimensional
+heads per layer, residual connections, LayerNorm, and a feed-forward block. Its
+three heads predict:
 
-- `ranked_ips`: ordered device IPs for direct Top-K evaluation;
-- `ranking_details`: method-specific ranking evidence and diagnostics;
-- `stage1.root_rankings` and `initial_root_rankings`: canonical scored candidate
-  records passed from Stage 1 to Stage 2;
-- `final_root_rankings`: Stage 2 reranked candidates when Stage 2 is present.
+1. a unary root potential for every device and virtual link-root candidate;
+2. a swap-equivariant three-state relation for every candidate device pair;
+3. a three-state dependency/evolution relation for every candidate event pair.
 
-`Sys/Score/Score_N.py` evaluates one canonical root device per case and reports
-the result as `ranking_evaluation`; parsed response payloads are reported
-separately as `response_evaluation`. The retired
-`skill_ips`, `skill_details`, and `skill_evaluation` names are not supported.
+The root potential is an input to M3, not an independently finalized ranking.
+Device relation prediction must not receive the selected root identity. Event
+relations are auxiliary until reliable event-dependency labels exist.
 
-Stage 2 first builds a root-independent weighted relation graph over
-the incident-conditioned undirected topology, retaining inactive, forward,
-reverse, ambiguous, and common-cause states. This single graph is the M1 output
-and does not depend on root candidates or their scores. M2 then evaluates each
-Stage 1 Top-K root against the same hypothesis graph, constructs its corresponding
-device-level propagation graph, and produces one explanation score. The final
-ranking is a weighted sum of only the normalized Stage 1 score and the
-normalized Stage 2 explanation score; insufficient path evidence falls back to
-the Stage 1 order.
-Interface fields are optional and their absence is not a quality penalty.
-Cases supported only by topology are marked `unidentifiable`; M2 then falls
-back to the Stage 1 order and emits an empty selected propagation graph.
+### M3: joint global reconstruction
 
-Engineer annotation of a path-labeling subset remains the next stage because
-the current labels identify root-cause devices but do not contain ordered nodes
-or directed propagation edges. Evaluation metrics remain configurable; strict
-matching, component scores, and a fully specified tolerant/rounded case-level
-accuracy are supported. Before path labels exist, topology validity, temporal
-consistency, and evidence grounding are validity checks rather than causal-path
-accuracy.
+The first implementation target is CP-SAT or an equivalent constrained integer
+optimizer. It maximizes calibrated relation/root scores and evidence coverage,
+while penalizing unsupported graph size, bridge use, conflicts, and excessive
+roots. Constraints enforce raw-topology validity, one direction per physical
+edge, root reachability, non-root parent support, acyclicity, symptom coverage,
+and evidence consistency.
 
-Main files:
+Two evaluation modes share the same decoder:
 
-- `Sys/RootCauseAnalyze/propagation/`
-- `Sys/RootCauseAnalyze/propagation_pipeline.py`
-- `Sys/Score/evaluate_propagation.py`
-- `Sys/Preprocess/Preprocessor.py` (`topology_context.json` sidecar)
+- **Oracle-root:** fix the root to measure graph reconstruction independently.
+- **Joint:** infer a device or link root together with the graph; this is the
+  target system setting.
 
-Design source:
+Top-K near-optimal solutions are retained so observational equivalence becomes
+an explicit result rather than a hidden model error.
 
-- `docs/论文方案.md`
+## 4. Labels and Leakage Control
 
-## 6. Deprecated Or Removed Areas
+The current case root labels are insufficient for the main paper claim. A pilot
+annotation set should include root device/link, required and allowed device
+nodes, required and allowed directed DD edges, event dependencies where
+identifiable, acceptable alternatives, explicit no-direct relations, and
+unidentifiable cases.
 
-- The Gate, Trust-Tree, Skill Pipeline, `skills/` compatibility package,
-  `SkilledAnalyzer.py`, and candidate-summary path were removed. Active
-  deterministic Stage 1 implementations live only in
-  `Sys/RootCauseAnalyze/stage1/`.
-- `SkillNRefineAnalyzer.py`, `RootCauseAnalyzer.py`, and old confidence/
-  credence calibration scripts are removed. Any remaining `.pyc` files from
-  those modules are stale generated artifacts and must not be restored.
-- `docs/毕业论文/` was obsolete and removed.
-- Original paper PDFs were moved to `../pingmeshPaper_papers_pdf/`; keep only
-  text extracts and summaries in `docs/papers/`.
+Local relation labels use four annotation states:
 
-## 7. Experiment Commands
+- `definite`: one direction is supported;
+- `possible`: a set of states remains acceptable;
+- `explicit_no_direct`: evidence supports no direct propagation/dependency;
+- `unknown`: insufficient evidence; mask it from supervised loss.
 
-Use these from the repository root on the server. The executable neural
-workflow is PC-STGR:
+Split by incident group. Use fold-local vocabularies, negative sampling,
+training, calibration, and threshold selection. Normalize loss per case so
+large topologies do not dominate merely because they contain more edges.
 
-```bash
-source scripts/common.sh
-export PINGMESH_RAW_DATA=/path/to/raw/full-link/json
-bash scripts/run_paper_05_pc_stgr.sh
-```
+## 5. Evaluation
 
-The original supervised model remains the default. Run the optional
-self-supervised-pretrained network as a separate experiment with:
+Evaluation follows the error decomposition `M1 recall -> M2 relation quality ->
+M3 graph quality -> joint root-and-graph quality`.
 
-```bash
-bash scripts/run_paper_05_pc_stgr.sh paper_05_pc_stgr_ssl self_supervised
-```
+- **M1:** required-node/edge coverage, candidate reduction ratio, candidate
+  size, and construction time.
+- **M2:** DD/EE Macro-F1 and per-state PR, root Top-K/MRR as an auxiliary head,
+  calibration error, Brier/NLL, and case-macro metrics.
+- **M3 oracle-root:** directed-edge and node Precision/Recall/F1, graph edit
+  distance, exact/tolerant match, DAG/topology validity, symptom coverage,
+  evidence grounding, and coverage-risk.
+- **M3 joint:** root Top-K/MRR, joint root-and-graph success, device-root versus
+  link-root accuracy, alternative-set coverage, and identifiability quality.
 
-It produces deterministic-baseline, PC-STGR OOF, and PC-STGR-plus-Stage-2 rows
-under `pc_stgr_oof` and `pc_stgr_stage2`. These rows receive paper metrics only
-after a new grouped OOF run; historical IC-STGR rows and checkpoints remain
-separate.
+Without engineer graph labels, DAG rate, topology validity, evidence coverage,
+and graph size are diagnostics only—not path accuracy.
 
-For the optional self-supervised run, the corresponding directories are
-`pc_stgr_ssl_oof` and `pc_stgr_ssl_stage2`. Each OOF fold pretrains only on its
-training cases loaded without labels; the validation fold is excluded from the
-event vocabulary and pretraining corpus.
+## 6. Scientific Challenges
 
-The deterministic baseline and Stage 2 can also be run directly:
+1. **Latent Propagation Inference from Circumstantial Evidence:** observations
+   constrain propagation but do not directly identify it.
+2. **Globally Consistent Reconstruction from Locally Uncertain Relations:**
+   locally plausible directions can conflict, create cycles, or fail to connect
+   root and symptoms.
+3. **Identifiability under Observational Equivalence:** several root/graph
+   explanations can generate nearly the same observations.
 
-```bash
-python Sys/RootCauseAnalyze/stage1/pipeline.py \
-  --data-root "$PINGMESH_DATA" \
-  --output-dir deterministic_manual \
-  --rankers topology temporal \
-  --top-k "$PINGMESH_TOP_K" \
-  --weight-file "$PINGMESH_WEIGHTS_MANUAL"
+These challenges map directly to the paper design: heterogeneous evidence
+modeling, probabilistic local relation learning plus constrained decoding, and
+near-optimal alternatives with calibrated abstention.
 
-python Sys/RootCauseAnalyze/propagation_pipeline.py \
-  --data-root "$PINGMESH_DATA" \
-  --root-results "$PINGMESH_RESULTS/<paper_05_run>/pc_stgr_oof/res.json" \
-  --output-dir "$PINGMESH_RESULTS/<run>/propagation"
+## 7. Current Implementation Boundary
 
-python Sys/Score/evaluate_propagation.py \
-  --predictions "$PINGMESH_RESULTS/<run>/propagation/res.json" \
-  --selected-paths "$PINGMESH_RESULTS/<run>/propagation/selected_propagation_paths.json" \
-  --out "$PINGMESH_RESULTS/<run>/propagation/validity.json"
-```
+The repository now contains a runnable heterogeneous V0 under
+`Sys/RootCauseAnalyze/propagation/heterogeneous/` and a root-input-free CLI at
+`Sys/RootCauseAnalyze/heterogeneous_propagation_pipeline.py`. It implements:
 
-Stage 2 keeps `res.json` compact and writes each selected graph to the sibling
-`selected_propagation_paths.json`. That file follows the JSON-array prediction
-contract of `pingmesh-propagation-labeler`; `res.json` links records to it with
-`selected_path_ref`. The evaluator also resolves these references automatically.
-Every emitted propagation edge must match an edge ID in the case's raw
-`task_topo` context. If that raw topology sidecar is unavailable, Stage 2 emits
-no propagation edges and preserves the Stage 1 ranking.
-The supported experiment scripts run `backfill_topology_context.py` with
-`--write --require-complete` before Stage 2 and store a per-run backfill report.
+- typed Device/Event/Symptom candidate graph construction;
+- internal interpretable device-root potentials;
+- reusable DD three-state probabilities and heuristic EE three-state relations;
+- bounded enumeration of single-device roots with topology-valid DAG decoding;
+- event explanations, evidence grounding, alternatives, and a score-margin
+  identifiability result.
 
-Use `scripts/run_stage2_edge_probability_ablation.sh` for the P0/P1/P4 Stage 2
-comparison and `scripts/run_baselines.sh` for TraceRCA, NetEventCause, and BiAn.
-The removed Gate/Trust-Tree/Skill/LLM orchestration paths have no supported
-runtime entrypoints.
+V0 is an end-to-end engineering baseline, not the final paper model. It does not
+yet implement:
 
-## 8. Testing
+- a learned Relation-aware GAT over the heterogeneous graph;
+- supervised/calibrated root and event-relation heads;
+- exact CP-SAT joint optimization;
+- link-root or multi-root reconstruction;
+- posterior-quality Top-K near-optimal heterogeneous explanations.
 
-The root `tests/` directory is intentionally ignored. In a workspace that keeps
-the local test bundle, run:
+`scripts/README.md` documents the legacy/prototype entrypoints. Historical
+PC-STGR, PC-STGR-SSL, IC-STGR, deterministic rankers, and external RCA baselines
+remain useful comparisons but do not define the new method.
 
-```bash
-python -m pytest -q
-```
+## 8. Immediate Priorities
 
-Current module-level coverage includes:
+1. Run V0 on full server data and audit schema failures, graph sizes, missing
+   topology/events, runtime, and output validity.
+2. Finalize the annotation protocol and label a small, diverse pilot set.
+3. Measure M1 candidate recall and identify evidence lost before learning.
+4. Train and calibrate M2 with incident-grouped OOF evaluation.
+5. Implement/evaluate M3 in oracle-root mode, then add joint device/link-root
+   inference and near-optimal alternatives.
 
-- no active Stage 1 dependency on the removed Skill/Gate/Trust-Tree paths;
-- deterministic ranker tie behavior and ranking details;
-- topology-context preservation, alarm episode normalization, propagation DAG
-  reconstruction, abstention, and propagation evaluation;
-- neural Stage 1 graph/model contracts and Stage 2 joint inference.
+## Maintenance Rules
 
-Obsolete tests for removed script wrappers, including the old propagation
-labeler, are not part of the maintained test bundle.
-
-## 9. Maintenance Rules
-
-- Keep generated files out of Git: `__pycache__/`, `.pytest_cache/`, local JSON
-  outputs, and large binary paper PDFs.
-- Keep source-of-truth docs small:
-  - `AGENT.md` is the concise agent entrypoint.
-  - `docs/project_overview.md` is the detailed project state document.
-- Prefer adding small utilities under `Sys/utils/` instead of duplicating JSON,
-  case-loading, or ranking helpers in new scripts. Do not restore the removed
-  root-level `utils/` package.
-- If a script needs labels, keep it clearly in the evaluation or diagnostic
-  path. Runtime inference must not read labels.
-- Update `scripts/common.sh` first when changing default server paths, then let
-  Python config consume the environment.
+- Keep generated data, checkpoints, and result artifacts out of Git.
+- Keep this file and `AGENT.md` aligned with `docs/论文方案.md`.
+- Do not turn preprocessing, annotation tooling, or baselines into extra paper
+  modules.
+- Do not equate observation, ownership, topology, or temporal order with a
+  confirmed causal edge.
+- Use `docs/论文流程图统一绘图风格与传播图重构提示词.md` for method figures.
