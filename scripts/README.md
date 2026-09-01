@@ -165,13 +165,13 @@ python scripts/reconstruct_collapsed_clos_topology.py \
 The output keeps `observed_topology` unchanged and adds `recovered_topology`
 with virtual `SPINE_SET` nodes for connected `LEAF--CORE` projections. It also
 emits source-oriented `core_forwarding_layers` and adjacent
-`core_layer_connections`. Parallel CORE devices occupy one forwarding stage;
-observed inter-stage links stay authoritative, while structurally supported
-missing cartesian pairs are marked as non-labelable candidates. A disconnected
-source/sink CORE fabric is bridged only through a virtual, cardinality-unknown
-CORE stage. The output also records reconstructed paths, Pod-number assignments,
-and diagnostics. Virtual nodes and inferred links are display/audit hints only;
-they are not valid propagation-label devices or edges.
+`core_layer_connections`. Parallel CORE devices occupy one forwarding stage,
+but inter-stage links are never completed into a cartesian product: only raw
+`task_topo` CORE—CORE pairs are retained. A disconnected source/sink CORE fabric
+is reported as a structural gap without a virtual bridge. The output also
+records reconstructed paths, Pod-number assignments, and diagnostics. Virtual
+SPINE nodes are display/audit hints only; they are not valid propagation-label
+devices or edges.
 
 ```bash
 python Sys/RootCauseAnalyze/propagation_pipeline.py \

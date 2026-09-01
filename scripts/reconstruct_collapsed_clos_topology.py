@@ -2,9 +2,9 @@
 """Recover a conservative Clos topology overlay from cropped Pingmesh data.
 
 The raw ``task_topo`` is kept intact.  The recovery overlay expands collapsed
-LEAF--CORE projections, identifies parallel CORE forwarding stages, and marks
-structurally supported missing inter-stage pairs as non-authoritative
-candidates. Virtual sets are deliberately not real devices and must not be
+LEAF--CORE projections and identifies parallel CORE forwarding stages. CORE
+stage edges are never completed: only links observed in raw ``task_topo`` are
+retained. Virtual SPINE sets are deliberately not real devices and must not be
 used as propagation-label endpoints.
 
 Examples::
@@ -184,13 +184,12 @@ def _core_forwarding_overlay(
         if device_id in source_distances and device_id in sink_distances
     ]
     stage_groups: list[list[str]] = []
-    hidden_core_id: str | None = None
     if shared_core_ids:
         grouped: dict[int, list[str]] = {}
         for device_id in shared_core_ids:
             grouped.setdefault(source_distances[device_id], []).append(device_id)
         stage_groups = [sorted(grouped[value]) for value in sorted(grouped)]
-        status = "connected"
+        status = "connected_observed_only"
     else:
         source_groups: dict[int, list[str]] = {}
         sink_groups: dict[int, list[str]] = {}
@@ -200,35 +199,10 @@ def _core_forwarding_overlay(
             if device_id in sink_distances:
                 sink_groups.setdefault(sink_distances[device_id], []).append(device_id)
         stage_groups.extend(sorted(source_groups[value]) for value in sorted(source_groups))
-        if source_groups and sink_groups:
-            source_terminal = stage_groups[-1]
-            sink_entry = sorted(sink_groups[max(sink_groups)])
-            hidden_core_id = _stable_id("VCORE", *source_terminal, "TO", *sink_entry)
-            display_nodes.append(
-                {
-                    "device_id": hidden_core_id,
-                    "name": "隐藏 CORE 中转集合",
-                    "topology_role": "CORE_SET",
-                    "group_ids": [],
-                    "segment_ids": [],
-                    "pod_number": None,
-                    "pod_source": "unknown",
-                    "is_inferred": True,
-                    "annotation_selectable": False,
-                    "inference_kind": "collapsed_core_stage_set",
-                    "inference_confidence": "structural",
-                    "inference_note": (
-                        "源侧与目的侧 CORE 子图在裁剪拓扑中断开；该集合代表一个或多个被省略的 "
-                        "CORE 转发级，真实层数、设备数量、名称和管理 IP 未知。"
-                    ),
-                }
-            )
-            by_id[hidden_core_id] = display_nodes[-1]
-            stage_groups.append([hidden_core_id])
         stage_groups.extend(
             sorted(sink_groups[value]) for value in sorted(sink_groups, reverse=True)
         )
-        status = "disconnected_with_hidden_stage" if hidden_core_id else "one_sided"
+        status = "disconnected_observed_only" if source_groups and sink_groups else "one_sided"
 
     if not stage_groups:
         return {
@@ -243,9 +217,7 @@ def _core_forwarding_overlay(
     stage_index_by_device: dict[str, int] = {}
     final_index = len(stage_groups) - 1
     for index, device_ids in enumerate(stage_groups):
-        if hidden_core_id in device_ids:
-            layer_role = "hidden_transit_core"
-        elif final_index == 0:
+        if final_index == 0:
             layer_role = "shared_core"
         elif index == 0:
             layer_role = "source_core"
@@ -266,7 +238,7 @@ def _core_forwarding_overlay(
                 "layer_role": layer_role,
                 "device_ids": device_ids,
                 "device_count": len(device_ids),
-                "is_inferred_stage": hidden_core_id in device_ids,
+                "is_inferred_stage": False,
             }
         )
 
@@ -301,37 +273,8 @@ def _core_forwarding_overlay(
             and {pair[0] for pair in observed_pairs} == set(left_ids)
             and {pair[1] for pair in observed_pairs} == set(right_ids)
         )
-        has_virtual_stage = hidden_core_id in left_ids or hidden_core_id in right_ids
         inferred_pairs: list[tuple[str, str]] = []
-        if has_virtual_stage or endpoint_coverage:
-            observed_pair_set = set(observed_pairs)
-            for endpoint_a in left_ids:
-                for endpoint_b in right_ids:
-                    if (endpoint_a, endpoint_b) in observed_pair_set:
-                        continue
-                    inferred_pairs.append((endpoint_a, endpoint_b))
-                    display_edges.append(
-                        {
-                            "edge_id": _stable_id("VCORELINK", endpoint_a, endpoint_b),
-                            "endpoint_a": endpoint_a,
-                            "endpoint_b": endpoint_b,
-                            "endpoint_a_port": "",
-                            "endpoint_b_port": "",
-                            "group_ids": [],
-                            "segment_ids": [],
-                            "is_inferred": True,
-                            "annotation_selectable": False,
-                            "inference_kind": (
-                                "collapsed_core_stage_bridge"
-                                if has_virtual_stage
-                                else "layered_core_candidate"
-                            ),
-                            "inference_confidence": "structural",
-                            "supporting_observed_edge_ids": sorted(set(observed_edge_ids)),
-                        }
-                    )
-                    inferred_edge_count += 1
-        if observed_pairs or inferred_pairs:
+        if observed_pairs:
             possible_pair_count = len(left_ids) * len(right_ids)
             connections.append(
                 {
@@ -357,7 +300,7 @@ def _core_forwarding_overlay(
     return {
         "layers": layers,
         "connections": connections,
-        "virtual_node_count": 1 if hidden_core_id else 0,
+        "virtual_node_count": 0,
         "inferred_edge_count": inferred_edge_count,
         "status": status,
     }
@@ -536,6 +479,7 @@ def _reconstruct(
     inferred_structure = bool(component_rows) or bool(
         core_forwarding["virtual_node_count"] or core_forwarding["inferred_edge_count"]
     )
+    incomplete_core_fabric = core_forwarding["status"] == "disconnected_observed_only"
     pod_assignments = [
         {
             "device_id": item["device_id"],
@@ -557,7 +501,13 @@ def _reconstruct(
         "core_layer_connections": core_forwarding["connections"],
         "pod_assignments": pod_assignments,
         "diagnostics": {
-            "status": "partial_structural_reconstruction" if inferred_structure else "not_needed",
+            "status": (
+                "partial_structural_reconstruction"
+                if inferred_structure
+                else "incomplete_observed_topology"
+                if incomplete_core_fabric
+                else "not_needed"
+            ),
             "method": "clos_layered_fabric_v2",
             "observed_node_count": len(observed_nodes),
             "observed_edge_count": len(observed_edges),
@@ -565,13 +515,17 @@ def _reconstruct(
             "projected_raw_pair_count": len(reconstructed_paths),
             "inferred_core_edge_count": core_forwarding["inferred_edge_count"],
             "core_forwarding_status": core_forwarding["status"],
-            "exact_hidden_device_count_known": False if inferred_structure else None,
+            "exact_hidden_device_count_known": (
+                False if inferred_structure or incomplete_core_fabric else None
+            ),
             "components": component_rows,
             "core_forwarding_layers": core_forwarding["layers"],
             "core_layer_connections": core_forwarding["connections"],
             "warning": (
                 "恢复拓扑仅用于结构理解；虚拟节点不是原始设备，原始 task_topo 才是事实边界。"
                 if inferred_structure
+                else "源侧与目的侧 CORE 子图在观测拓扑中断开；缺失连接保持未知，未生成推测 CORE 边。"
+                if incomplete_core_fabric
                 else ""
             ),
         },
