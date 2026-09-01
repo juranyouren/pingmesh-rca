@@ -13,6 +13,15 @@ from Sys.utils.io_utils import load_json
 
 TOPOLOGY_SCHEMA_VERSION = "topology-context-v1"
 _POD_NUMBER_RE = re.compile(r"(?:^|[^a-z0-9])pod[\s_-]*0*(\d+)", re.IGNORECASE)
+_FAILURE_DOMAIN_FIELDS = (
+    "az",
+    "availability_zone",
+    "region",
+    "plane",
+    "fabric_plane",
+    "fault_domain",
+    "cluster",
+)
 
 
 def parse_pod_number(value: Any) -> int | None:
@@ -112,6 +121,10 @@ def build_topology_context(
                     "pod_number": parse_pod_number(raw_node.get("name")),
                     "group_ids": [],
                     "segment_ids": [],
+                    **{
+                        field: str(raw_node.get(field, "") or "")
+                        for field in _FAILURE_DOMAIN_FIELDS
+                    },
                 },
             )
             if group_id not in row["group_ids"]:
@@ -220,6 +233,10 @@ def topology_context_from_nodes(
             "pod_number": parse_pod_number(node.get("name")),
             "group_ids": ["FALLBACK"],
             "segment_ids": ["FALLBACK"],
+            **{
+                field: str(node.get(field, "") or "")
+                for field in _FAILURE_DOMAIN_FIELDS
+            },
         }
         for neighbor in list(node.get("linked_to", [])) + list(node.get("linked_from", [])):
             neighbor = str(neighbor or "")

@@ -233,6 +233,7 @@ class Scorer:
     def _eval_ips(self, res_data: List[Dict], ip_source: str) -> Dict[str, Any]:
         """Evaluate canonical rankings or IPs parsed from a response field."""
         sums = {f"sum_top{i}": 0 for i in range(1, 6)}
+        reciprocal_rank_sum = 0.0
         n = 0
         # Top-1 失败案例 (按 gt 实际落点分桶)
         fail_in_top3 = []   # Top-1 未命中, 但 gt 在 rank 2-3
@@ -254,6 +255,8 @@ class Scorer:
             n += 1
             for i in range(1, 6):
                 sums[f"sum_top{i}"] += res[f"top{i}_hit"]
+            if res["best_rank"] is not None:
+                reciprocal_rank_sum += 1.0 / float(res["best_rank"])
 
             # 收集 Top-1 失败案例
             if not res["top1_hit"]:
@@ -278,6 +281,7 @@ class Scorer:
                 "Total Evaluated Cases": n,
                 **{f"Top-{i} Acc (%)": round(sums[f"sum_top{i}"] / n * 100, 2)
                    for i in range(1, 6)},
+                "MRR": round(reciprocal_rank_sum / n, 6),
             },
             "_top1_failures": {
                 "in_top3 (rank 2-3)": fail_in_top3,

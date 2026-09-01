@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 from decimal import Decimal, ROUND_HALF_UP
+from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set, Tuple
 
 if __package__ in (None, ""):
@@ -14,6 +15,13 @@ if __package__ in (None, ""):
 from Sys.RootCauseAnalyze.propagation.schema import root_devices
 from Sys.RootCauseAnalyze.propagation.solver import is_dag
 from Sys.RootCauseAnalyze.propagation.artifacts import load_prediction_records
+from Sys.RootCauseAnalyze.propagation.equivalence import (
+    build_structural_equivalence,
+    project_directed_edges,
+)
+from Sys.RootCauseAnalyze.propagation.episodes import build_evidence_episodes
+from Sys.RootCauseAnalyze.propagation.topology_context import load_topology_context
+from Sys.utils.case_utils import load_case_info, load_case_nodes
 from Sys.utils.io_utils import load_json, save_json
 
 
@@ -112,10 +120,10 @@ def prediction_validity(record: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _set_scores(predicted: Set[Any], required: Set[Any], allowed: Set[Any]) -> Dict[str, float]:
-    correct = len(predicted & allowed)
-    precision = _safe_ratio(correct, len(predicted), empty=1.0 if not required else 0.0)
-    recall = _safe_ratio(len(predicted & required), len(required), empty=1.0)
+def _set_scores(predicted: Set[Any], reference: Set[Any]) -> Dict[str, float]:
+    correct = len(predicted & reference)
+    precision = _safe_ratio(correct, len(predicted), empty=1.0 if not reference else 0.0)
+    recall = _safe_ratio(correct, len(reference), empty=1.0)
     return {
         "precision": round(precision, 6),
         "recall": round(recall, 6),
@@ -123,50 +131,72 @@ def _set_scores(predicted: Set[Any], required: Set[Any], allowed: Set[Any]) -> D
     }
 
 
-def _label_edges(label: Mapping[str, Any]) -> Tuple[Dict[str, Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]]]:
+def _label_edge_rows(label: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    rows = label.get("edges")
+    if not isinstance(rows, list):
+        rows = label.get("dd_edges", [])
+    return [item for item in rows if isinstance(item, Mapping)]
+
+
+def _label_edges(
+    label: Mapping[str, Any],
+) -> Tuple[Dict[str, Tuple[str, str]], Set[Tuple[str, str]]]:
     by_id: Dict[str, Tuple[str, str]] = {}
-    required: Set[Tuple[str, str]] = set()
-    allowed: Set[Tuple[str, str]] = set()
-    for item in label.get("edges", []):
-        if not isinstance(item, Mapping):
-            continue
-        edge = (str(item.get("from", "")), str(item.get("to", "")))
+    positives: Set[Tuple[str, str]] = set()
+    for item in _label_edge_rows(label):
+        edge = (
+            str(item.get("from", item.get("source", "")) or ""),
+            str(item.get("to", item.get("target", "")) or ""),
+        )
         if not all(edge):
             continue
-        edge_id = str(item.get("edge_id", "") or "")
+        edge_id = str(item.get("edge_id", item.get("dd_edge_id", "")) or "")
         if edge_id:
             by_id[edge_id] = edge
-        membership = item.get("membership")
-        if membership == "definite":
-            required.add(edge)
-            allowed.add(edge)
-        elif membership == "possible":
-            allowed.add(edge)
-    return by_id, required, allowed
+        membership = item.get("membership", item.get("state"))
+        if membership in {"definite", "possible"}:
+            positives.add(edge)
+    return by_id, positives
 
 
-def _acceptable_edge_sets(label: Mapping[str, Any]) -> List[Tuple[Set[Tuple[str, str]], Set[Tuple[str, str]]]]:
-    by_id, base_required, base_allowed = _label_edges(label)
-    variants = [(base_required, base_allowed)]
+def _acceptable_edge_sets(label: Mapping[str, Any]) -> List[Set[Tuple[str, str]]]:
+    by_id, base_positive = _label_edges(label)
+    variants = [base_positive]
     for hypothesis in label.get("acceptable_hypotheses", []):
         if not isinstance(hypothesis, Mapping):
             continue
         required_ids = hypothesis.get("required_edges", [])
         allowed_ids = hypothesis.get("allowed_edges", [])
-        required = {by_id[item] for item in required_ids if item in by_id}
-        allowed = required | {by_id[item] for item in allowed_ids if item in by_id}
-        if not required_ids:
-            required |= base_required
-        allowed |= required
-        variants.append((required, allowed))
-    unique = []
-    seen = set()
-    for required, allowed in variants:
-        key = (tuple(sorted(required)), tuple(sorted(allowed)))
+        reference = {
+            by_id[item]
+            for item in [*required_ids, *allowed_ids]
+            if item in by_id
+        }
+        if not reference:
+            reference = set(base_positive)
+        variants.append(reference)
+    unique: List[Set[Tuple[str, str]]] = []
+    seen: Set[Tuple[Tuple[str, str], ...]] = set()
+    for reference in variants:
+        key = tuple(sorted(reference))
         if key not in seen:
             seen.add(key)
-            unique.append((required, allowed))
+            unique.append(reference)
     return unique
+
+
+@lru_cache(maxsize=512)
+def _case_structural_equivalence(dirpath: str) -> Dict[str, Any] | None:
+    absolute = os.path.abspath(dirpath)
+    if not os.path.isdir(absolute):
+        return None
+    nodes = load_case_nodes(absolute)
+    info = load_case_info(absolute)
+    if not nodes or not info:
+        return None
+    episodes = build_evidence_episodes(nodes, info)
+    topology = load_topology_context(absolute, node_list=nodes, info=info)
+    return build_structural_equivalence(topology, episodes)
 
 
 def _root_score(prediction: Mapping[str, Any], label: Mapping[str, Any]) -> float:
@@ -191,50 +221,71 @@ def _root_score(prediction: Mapping[str, Any], label: Mapping[str, Any]) -> floa
     return 1.0 if expected_devices and expected_devices & actual_devices else 0.0
 
 
-def label_components(record: Mapping[str, Any], label: Mapping[str, Any]) -> Dict[str, Any]:
+def label_components(
+    record: Mapping[str, Any],
+    label: Mapping[str, Any],
+    *,
+    structural_equivalence: bool = True,
+) -> Dict[str, Any]:
     prediction = _prediction(record)
-    predicted_nodes = {
-        str(item.get("device_id"))
-        for item in prediction.get("nodes", [])
-        if isinstance(item, Mapping) and item.get("device_id")
-    }
-    required_nodes = {
-        str(item.get("device_id"))
-        for item in label.get("nodes", [])
-        if isinstance(item, Mapping)
-        and item.get("device_id")
-        and item.get("membership") == "definite"
-    }
-    allowed_nodes = required_nodes | {
-        str(item.get("device_id"))
-        for item in label.get("nodes", [])
-        if isinstance(item, Mapping)
-        and item.get("device_id")
-        and item.get("membership") == "possible"
-    }
-    predicted_edges = {
+    raw_predicted_edges = {
         (str(item.get("from")), str(item.get("to")))
         for item in prediction.get("edges", [])
         if isinstance(item, Mapping) and item.get("from") and item.get("to")
     }
-    _edge_by_id, strict_required_edges, _strict_allowed_edges = _label_edges(label)
-    edge_variants = _acceptable_edge_sets(label)
-    edge_scores = [_set_scores(predicted_edges, required, allowed) for required, allowed in edge_variants]
-    best_edge = max(edge_scores, key=lambda item: (item["f1"], item["recall"], item["precision"]))
-    node_score = _set_scores(predicted_nodes, required_nodes, allowed_nodes)
+    equivalence = None
+    if structural_equivalence:
+        dirpath = str(record.get("dir", "") or "")
+        if dirpath:
+            equivalence = _case_structural_equivalence(dirpath)
+    predicted_edges = project_directed_edges(raw_predicted_edges, equivalence)
+    raw_edge_variants = _acceptable_edge_sets(label)
+    edge_variants = [
+        project_directed_edges(reference, equivalence)
+        for reference in raw_edge_variants
+    ]
+    scored_variants = []
+    for reference_edges in edge_variants:
+        reference_nodes = {
+            device_id for edge in reference_edges for device_id in edge
+        }
+        predicted_nodes = {
+            device_id for edge in predicted_edges for device_id in edge
+        }
+        edge_score = _set_scores(predicted_edges, reference_edges)
+        node_score = _set_scores(predicted_nodes, reference_nodes)
+        scored_variants.append((edge_score, node_score, reference_edges, reference_nodes))
+    best_edge, node_score, best_reference_edges, best_reference_nodes = max(
+        scored_variants,
+        key=lambda item: (
+            item[0]["f1"],
+            item[0]["recall"],
+            item[0]["precision"],
+            item[1]["f1"],
+        ),
+    )
+    predicted_nodes = {device_id for edge in predicted_edges for device_id in edge}
     evidence_score = _safe_ratio(
         sum(
             1
             for item in prediction.get("edges", [])
             if isinstance(item, Mapping) and item.get("evidence_ids")
         ),
-        len(predicted_edges),
-        empty=1.0 if not predicted_edges else 0.0,
+        len(raw_predicted_edges),
+        empty=1.0 if not raw_predicted_edges else 0.0,
     )
     strict = (
         _root_score(prediction, label) == 1.0
-        and predicted_nodes == required_nodes
-        and predicted_edges == strict_required_edges
+        and predicted_nodes == best_reference_nodes
+        and predicted_edges == best_reference_edges
+    )
+    aggregation_diagnostics = (
+        dict(equivalence.get("diagnostics", {}))
+        if isinstance(equivalence, Mapping)
+        else {
+            "cluster_count": 0,
+            "aggregated_member_count": 0,
+        }
     )
     return {
         "root": _root_score(prediction, label),
@@ -242,6 +293,50 @@ def label_components(record: Mapping[str, Any], label: Mapping[str, Any]) -> Dic
         "directed_edge": best_edge,
         "evidence": round(evidence_score, 6),
         "strict_exact": strict,
+        "aggregation": {
+            "enabled": bool(structural_equivalence),
+            "cluster_count": int(aggregation_diagnostics.get("cluster_count", 0) or 0),
+            "aggregated_member_count": int(
+                aggregation_diagnostics.get("aggregated_member_count", 0) or 0
+            ),
+            "raw_prediction_edge_count": len(raw_predicted_edges),
+            "projected_prediction_edge_count": len(predicted_edges),
+            "raw_reference_edge_count": len(raw_edge_variants[0]),
+            "projected_reference_edge_count": len(edge_variants[0]),
+        },
+    }
+
+
+def aggregate_label_metrics(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not rows:
+        return {"case_count": 0}
+
+    def macro(component: str, metric: str) -> float:
+        return round(
+            sum(float(row[component][metric]) for row in rows) / len(rows),
+            6,
+        )
+
+    return {
+        "case_count": len(rows),
+        "root_accuracy": round(
+            sum(float(row.get("root", 0.0) or 0.0) for row in rows) / len(rows),
+            6,
+        ),
+        "macro_directed_edge_precision": macro("directed_edge", "precision"),
+        "macro_directed_edge_recall": macro("directed_edge", "recall"),
+        "macro_directed_edge_f1": macro("directed_edge", "f1"),
+        "macro_node_precision": macro("node", "precision"),
+        "macro_node_recall": macro("node", "recall"),
+        "macro_node_f1": macro("node", "f1"),
+        "strict_exact_rate": round(
+            sum(bool(row.get("strict_exact")) for row in rows) / len(rows),
+            6,
+        ),
+        "cases_with_aggregation": sum(
+            int(row.get("aggregation", {}).get("cluster_count", 0) or 0) > 0
+            for row in rows
+        ),
     }
 
 
@@ -326,6 +421,11 @@ def main() -> None:
     parser.add_argument("--weights", default=None, help="root=1,node=1,directed_edge=2,evidence=0")
     parser.add_argument("--round-digits", type=int, default=3)
     parser.add_argument("--threshold", type=float, default=0.8)
+    parser.add_argument(
+        "--disable-structural-equivalence",
+        action="store_true",
+        help="Evaluate raw device paths without aggregating evidence-free structural twins.",
+    )
     args = parser.parse_args()
 
     records = load_prediction_records(
@@ -344,7 +444,11 @@ def main() -> None:
             label = load_json(label_path, default=None)
             if not isinstance(label, Mapping):
                 continue
-            components = label_components(record, label)
+            components = label_components(
+                record,
+                label,
+                structural_equivalence=not args.disable_structural_equivalence,
+            )
             case_row: Dict[str, Any] = {"case_id": case_id, "components": components}
             if weights:
                 similarity = combine_similarity(components, weights)
@@ -357,6 +461,14 @@ def main() -> None:
             output["cases"].append(case_row)
             labeled += 1
         output["labeled_case_count"] = labeled
+        output["label_metrics"] = aggregate_label_metrics(
+            [item["components"] for item in output["cases"]]
+        )
+        output["label_metrics"]["structural_equivalence"] = (
+            "disabled"
+            if args.disable_structural_equivalence
+            else "evidence_free_exact_structural_twins_v1"
+        )
         if weights:
             output["tolerant_accuracy"] = round(correct / labeled, 6) if labeled else None
             output["matcher"] = {

@@ -20,6 +20,11 @@ if __package__ in (None, ""):
 
 
 from Sys.RootCauseAnalyze.propagation.candidates import build_candidate_graph
+from Sys.RootCauseAnalyze.propagation.equivalence import (
+    build_structural_equivalence,
+    project_device_id,
+    project_directed_edges,
+)
 from Sys.RootCauseAnalyze.propagation.episodes import build_evidence_episodes
 from Sys.RootCauseAnalyze.propagation.m1 import (
     EDGE_FEATURE_NAMES,
@@ -61,16 +66,46 @@ def _label_path(data_root: str, labels_root: str, dirpath: str) -> str | None:
     return None
 
 
-def _positive_edges(label: Mapping[str, Any]) -> set[Tuple[str, str]]:
+def _dd_label_rows(label: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    rows = label.get("edges")
+    if not isinstance(rows, list):
+        rows = label.get("dd_edges", [])
+    return [item for item in rows if isinstance(item, Mapping)]
+
+
+def _positive_edges(
+    label: Mapping[str, Any],
+    equivalence: Mapping[str, Any] | None = None,
+) -> set[Tuple[str, str]]:
     result: set[Tuple[str, str]] = set()
-    for item in label.get("edges", []):
-        if not isinstance(item, Mapping):
+    for item in _dd_label_rows(label):
+        if item.get("membership", item.get("state")) not in {"definite", "possible"}:
             continue
-        if item.get("membership") not in {"definite", "possible"}:
-            continue
-        edge = (str(item.get("from", "") or ""), str(item.get("to", "") or ""))
+        edge = (
+            str(item.get("from", item.get("source", "")) or ""),
+            str(item.get("to", item.get("target", "")) or ""),
+        )
         if all(edge):
             result.add(edge)
+    return project_directed_edges(result, equivalence)
+
+
+def _explicit_no_direct_pairs(
+    label: Mapping[str, Any],
+    equivalence: Mapping[str, Any] | None = None,
+) -> set[frozenset[str]]:
+    result: set[frozenset[str]] = set()
+    for item in _dd_label_rows(label):
+        if item.get("membership", item.get("state")) != "explicit_no_direct":
+            continue
+        source = project_device_id(
+            item.get("from", item.get("source", "")), equivalence
+        )
+        target = project_device_id(
+            item.get("to", item.get("target", "")), equivalence
+        )
+        if source and target and source != target:
+            result.add(frozenset((source, target)))
     return result
 
 
@@ -89,7 +124,11 @@ def _split_group_key(info: Mapping[str, Any]) -> str:
     )
 
 
-def _edge_class(pair: Mapping[str, Any], positives: set[Tuple[str, str]]) -> int | None:
+def _edge_class(
+    pair: Mapping[str, Any],
+    positives: set[Tuple[str, str]],
+    explicit_no_direct: set[frozenset[str]] | None = None,
+) -> int | None:
     endpoint_a = str(pair.get("endpoint_a", "") or "")
     endpoint_b = str(pair.get("endpoint_b", "") or "")
     forward = (endpoint_a, endpoint_b) in positives
@@ -100,10 +139,16 @@ def _edge_class(pair: Mapping[str, Any], positives: set[Tuple[str, str]]) -> int
         return 0
     if reverse:
         return 1
-    return NO_DIRECT_INDEX
+    if frozenset((endpoint_a, endpoint_b)) in (explicit_no_direct or set()):
+        return NO_DIRECT_INDEX
+    # Partial propagation annotations are positive-unlabeled. An unmarked raw
+    # physical pair is unknown, not a supervised No Direct example.
+    return None
 
 
-def _raw_relation_graph(dirpath: str, config: PropagationConfig) -> Dict[str, Any]:
+def _raw_case_graphs(
+    dirpath: str, config: PropagationConfig
+) -> tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
     nodes = load_case_nodes(dirpath)
     info = load_case_info(dirpath)
     if not nodes or not info:
@@ -111,7 +156,52 @@ def _raw_relation_graph(dirpath: str, config: PropagationConfig) -> Dict[str, An
     episodes = build_evidence_episodes(nodes, info, config=config)
     topology = load_topology_context(dirpath, node_list=nodes, info=info)
     candidates = build_candidate_graph(nodes, info, topology, episodes, config=config)
-    return build_edge_relation_graph(candidates, episodes, config=config)
+    relation_graph = build_edge_relation_graph(candidates, episodes, config=config)
+    equivalence = build_structural_equivalence(topology, episodes)
+    return relation_graph, equivalence, episodes
+
+
+def _quotient_pair_vectors(
+    relation_graph: Mapping[str, Any],
+    equivalence: Mapping[str, Any] | None,
+) -> List[Dict[str, Any]]:
+    buckets: Dict[Tuple[str, str], List[List[float]]] = defaultdict(list)
+    raw_counts: Counter[Tuple[str, str]] = Counter()
+    for pair in relation_graph.get("edge_hypotheses", []):
+        if not isinstance(pair, Mapping):
+            continue
+        raw_a = str(pair.get("endpoint_a", "") or "")
+        raw_b = str(pair.get("endpoint_b", "") or "")
+        projected_a = project_device_id(raw_a, equivalence)
+        projected_b = project_device_id(raw_b, equivalence)
+        if not projected_a or not projected_b or projected_a == projected_b:
+            continue
+        canonical = tuple(sorted((projected_a, projected_b)))
+        features = extract_edge_probability_features(pair)
+        vector = [features[name] for name in EDGE_FEATURE_NAMES]
+        if (projected_a, projected_b) != canonical:
+            vector = _swap_orientation(vector)
+        buckets[canonical].append(vector)
+        raw_counts[canonical] += 1
+
+    dynamic_index = EDGE_FEATURE_NAMES.index("any_dynamic_support")
+    rows: List[Dict[str, Any]] = []
+    for pair in sorted(buckets):
+        matrix = np.asarray(buckets[pair], dtype=np.float64)
+        vector = matrix.mean(axis=0)
+        # Presence of dynamic evidence is an existential property of the
+        # quotient edge; averaging a binary flag would make it multiplicity
+        # dependent.
+        vector[dynamic_index] = matrix[:, dynamic_index].max()
+        rows.append(
+            {
+                "endpoint_a": pair[0],
+                "endpoint_b": pair[1],
+                "vector": vector.tolist(),
+                "raw_pair_count": raw_counts[pair],
+            }
+        )
+    return rows
 
 
 def _swap_orientation(vector: Sequence[float]) -> List[float]:
@@ -151,29 +241,40 @@ def collect_labeled_cases(
         if not isinstance(label, Mapping):
             diagnostics["invalid_path_labels"] += 1
             continue
-        positives = _positive_edges(label)
         try:
             info = load_case_info(dirpath)
-            relation_graph = _raw_relation_graph(dirpath, cfg)
+            relation_graph, equivalence, _episodes = _raw_case_graphs(dirpath, cfg)
         except Exception:
             diagnostics["case_build_errors"] += 1
             continue
+        positives = _positive_edges(label, equivalence)
+        explicit_no_direct = _explicit_no_direct_pairs(label, equivalence)
         x_rows: List[List[float]] = []
         y_rows: List[int] = []
-        for pair in relation_graph.get("edge_hypotheses", []):
-            if not isinstance(pair, Mapping):
-                continue
-            target = _edge_class(pair, positives)
+        quotient_pairs = _quotient_pair_vectors(relation_graph, equivalence)
+        seen_positive_pairs: set[frozenset[str]] = set()
+        for pair in quotient_pairs:
+            target = _edge_class(pair, positives, explicit_no_direct)
             if target is None:
-                diagnostics["ambiguous_bidirectional_pairs"] += 1
+                endpoint_a = str(pair.get("endpoint_a", "") or "")
+                endpoint_b = str(pair.get("endpoint_b", "") or "")
+                if (
+                    (endpoint_a, endpoint_b) in positives
+                    and (endpoint_b, endpoint_a) in positives
+                ):
+                    diagnostics["ambiguous_bidirectional_pairs"] += 1
+                else:
+                    diagnostics["masked_unknown_pairs"] += 1
                 continue
-            features = extract_edge_probability_features(pair)
-            vector = [features[name] for name in EDGE_FEATURE_NAMES]
+            vector = [float(value) for value in pair["vector"]]
             if vector[dynamic_index] <= 0.0:
-                diagnostics["hard_fallback_pairs"] += 1
+                diagnostics["labeled_pairs_without_dynamic_support"] += 1
                 if target != NO_DIRECT_INDEX:
                     diagnostics["positive_pairs_without_dynamic_support"] += 1
-                continue
+            if target in {0, 1}:
+                seen_positive_pairs.add(
+                    frozenset((str(pair["endpoint_a"]), str(pair["endpoint_b"])))
+                )
             x_rows.append(vector)
             y_rows.append(target)
             if augment_orientation:
@@ -182,6 +283,10 @@ def collect_labeled_cases(
         if not x_rows:
             diagnostics["cases_without_trainable_pairs"] += 1
             continue
+        expected_positive_pairs = {frozenset(edge) for edge in positives}
+        diagnostics["positive_pairs_without_candidates"] += len(
+            expected_positive_pairs - seen_positive_pairs
+        )
         cases.append(
             {
                 "dirpath": os.path.abspath(dirpath),
@@ -193,6 +298,17 @@ def collect_labeled_cases(
         )
         diagnostics["labeled_cases"] += 1
         diagnostics["trainable_pairs"] += len(x_rows)
+        diagnostics["raw_candidate_pairs"] += len(
+            relation_graph.get("edge_hypotheses", [])
+        )
+        diagnostics["quotient_candidate_pairs"] += len(quotient_pairs)
+        diagnostics["structural_equivalence_clusters"] += int(
+            equivalence.get("diagnostics", {}).get("cluster_count", 0) or 0
+        )
+        diagnostics["aggregated_structural_members"] += int(
+            equivalence.get("diagnostics", {}).get("aggregated_member_count", 0)
+            or 0
+        )
     return cases, dict(sorted(diagnostics.items()))
 
 
@@ -387,6 +503,8 @@ def fit_softmax_classifier(
             "learning_rate": float(learning_rate),
             "l2": float(l2),
             "class_counts": np.bincount(train_y, minlength=len(STATE_NAMES)).tolist(),
+            "label_semantics": "positive_unlabeled_with_explicit_no_direct_only",
+            "structural_equivalence": "evidence_free_exact_structural_twins_v1",
         },
     }
     return model, {"best_epoch": best_epoch, "history": history}

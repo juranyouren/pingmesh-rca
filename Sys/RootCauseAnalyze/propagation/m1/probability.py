@@ -269,11 +269,6 @@ def _supervised_probabilities(
     edge_hypothesis: Mapping[str, Any], config: PropagationConfig
 ) -> tuple[tuple[float, float, float], Dict[str, Any]]:
     features = extract_edge_probability_features(edge_hypothesis)
-    if features["any_dynamic_support"] <= 0.0:
-        return (0.0, 0.0, 1.0), {
-            "override": "no_dynamic_propagation_support",
-            "feature_names": list(EDGE_FEATURE_NAMES),
-        }
     model_path = os.path.abspath(str(config.edge_probability_model_path))
     model = _load_supervised_model(model_path)
     vector = [features[name] for name in EDGE_FEATURE_NAMES]
@@ -298,6 +293,7 @@ def _supervised_probabilities(
         "temperature": round(temperature, 6),
         "model_id": model.get("model_id", os.path.basename(model_path)),
         "feature_names": list(EDGE_FEATURE_NAMES),
+        "dynamic_support_available": bool(features["any_dynamic_support"] > 0.0),
     }
 
 

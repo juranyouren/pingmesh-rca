@@ -34,6 +34,13 @@ python Sys/Preprocess/backfill_topology_context.py \
     --write \
     --require-complete
 
+echo "=== Build evidence-free structural-equivalence sidecars ==="
+python Sys/Preprocess/build_structural_equivalence.py \
+    --cases-root "${PINGMESH_DATA}" \
+    --report "${WORKDIR}/topology_equivalence_report.json" \
+    --write \
+    --require-raw-topology
+
 run_stage2() {
     local name="$1"
     shift
@@ -51,7 +58,8 @@ run_stage2() {
     python Sys/Score/evaluate_propagation.py \
         --predictions "${WORKDIR}/${name}/res.json" \
         --selected-paths "${WORKDIR}/${name}/selected_propagation_paths.json" \
-        --out "${WORKDIR}/${name}/validity.json"
+        --out "${WORKDIR}/${name}/validity.json" \
+        --labels-root "${PINGMESH_PROPAGATION_LABELS_ROOT}"
 }
 
 echo "=== P0: deterministic evidence normalization ==="
@@ -93,7 +101,9 @@ for name in ("p0", "p1", "p4"):
     summary_path = workdir / name / "sum.json"
     validity_path = workdir / name / "validity.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    validity = json.loads(validity_path.read_text(encoding="utf-8"))["validity"]
+    evaluation = json.loads(validity_path.read_text(encoding="utf-8"))
+    validity = evaluation["validity"]
+    label_metrics = evaluation.get("label_metrics", {})
     metrics = summary["ranking_evaluation"]["ranking_metrics"]
     rows.append(
         {
@@ -102,6 +112,9 @@ for name in ("p0", "p1", "p4"):
             "top1": metrics.get("Top-1 Acc (%)", 0),
             "top3": metrics.get("Top-3 Acc (%)", 0),
             "top5": metrics.get("Top-5 Acc (%)", 0),
+            "mrr": metrics.get("MRR", metrics.get("Mean Reciprocal Rank", 0)),
+            "dd_edge_f1": label_metrics.get("macro_directed_edge_f1", 0),
+            "node_f1": label_metrics.get("macro_node_f1", 0),
             "mean_coverage": validity.get("mean_observed_impact_coverage", 0),
             "mean_grounding": validity.get("mean_evidence_grounding", 0),
             "mean_edge_count": validity.get("mean_edge_count", 0),

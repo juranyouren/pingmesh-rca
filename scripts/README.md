@@ -198,6 +198,26 @@ raw `task_topo`. Legacy `linked_from`/`linked_to` fallback data may still expose
 devices, but it cannot produce propagation edges or change the Stage 1 order.
 This makes every emitted edge traceable to at least one raw topology edge ID.
 
+Before DD training/evaluation, the edge-probability ablation also builds a
+label-free `topology_equivalence.json` sidecar. Evidence-free internal devices
+are merged only when their role, Pod/failure-domain metadata, and exact
+upstream/downstream sets match. Labels and predictions are projected through
+the same mapping for macro directed-edge F1 and node F1; root Top-K/MRR remain
+at raw-device granularity. The mapping can be audited independently:
+
+```bash
+python Sys/Preprocess/build_structural_equivalence.py \
+  --cases-root "$PINGMESH_DATA" \
+  --report "$PINGMESH_RESULTS/topology_equivalence_report.json" \
+  --write \
+  --require-raw-topology
+```
+
+Unmarked physical pairs remain `unknown` during supervised edge training.
+Only `explicit_no_direct` supplies the No Direct class; `definite` and
+`possible` DD edges are the annotated positive witness path. The evaluator
+derives node sets from DD endpoints and reports case-macro F1.
+
 The sidecar can be opened as an overlay without conversion:
 
 ```bash
