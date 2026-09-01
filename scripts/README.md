@@ -154,6 +154,25 @@ are left unchanged; differing files are reported as conflicts unless
 `--overwrite` is explicitly supplied. It never reads or rewrites case labels,
 nodes, or info files.
 
+To inspect a cropped Clos topology and emit a conservative recovery overlay:
+
+```bash
+python scripts/reconstruct_collapsed_clos_topology.py \
+  --input "$PINGMESH_RAW_DATA" \
+  --output "$PINGMESH_RESULTS/reconstructed_topology"
+```
+
+The output keeps `observed_topology` unchanged and adds `recovered_topology`
+with virtual `SPINE_SET` nodes for connected `LEAF--CORE` projections. It also
+emits source-oriented `core_forwarding_layers` and adjacent
+`core_layer_connections`. Parallel CORE devices occupy one forwarding stage;
+observed inter-stage links stay authoritative, while structurally supported
+missing cartesian pairs are marked as non-labelable candidates. A disconnected
+source/sink CORE fabric is bridged only through a virtual, cardinality-unknown
+CORE stage. The output also records reconstructed paths, Pod-number assignments,
+and diagnostics. Virtual nodes and inferred links are display/audit hints only;
+they are not valid propagation-label devices or edges.
+
 ```bash
 python Sys/RootCauseAnalyze/propagation_pipeline.py \
   --data-root "$PINGMESH_DATA" \
