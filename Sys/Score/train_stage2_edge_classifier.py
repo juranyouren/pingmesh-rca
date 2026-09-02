@@ -335,6 +335,104 @@ def _softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
     return exp / exp.sum(axis=1, keepdims=True)
 
 
+def _predict_with_decision_policy(
+    probabilities: np.ndarray,
+    *,
+    direction_min_probability: float,
+    direction_vs_no_direct_margin: float,
+) -> np.ndarray:
+    """Apply the conservative P4 edge-admission rule used by reconstruction."""
+
+    directional = probabilities[:, :NO_DIRECT_INDEX]
+    predicted_direction = directional.argmax(axis=1)
+    row_indices = np.arange(len(probabilities))
+    direction_probability = directional[row_indices, predicted_direction]
+    no_direct_probability = probabilities[:, NO_DIRECT_INDEX]
+    accepted = (
+        (direction_probability >= float(direction_min_probability))
+        & (
+            direction_probability - no_direct_probability
+            >= float(direction_vs_no_direct_margin)
+        )
+    )
+    return np.where(accepted, predicted_direction, NO_DIRECT_INDEX).astype(np.int64)
+
+
+def _directional_metrics(predicted: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    actual_directional = y != NO_DIRECT_INDEX
+    predicted_directional = predicted != NO_DIRECT_INDEX
+    true_positive = int(((predicted == y) & actual_directional).sum())
+    false_positive = int((predicted_directional & (predicted != y)).sum())
+    false_negative = int((actual_directional & (predicted != y)).sum())
+    precision = true_positive / max(true_positive + false_positive, 1)
+    recall = true_positive / max(true_positive + false_negative, 1)
+    f1 = 2.0 * precision * recall / max(precision + recall, 1e-12)
+    beta2 = 0.25
+    f_half = (1.0 + beta2) * precision * recall / max(
+        beta2 * precision + recall, 1e-12
+    )
+    no_direct_mask = y == NO_DIRECT_INDEX
+    no_direct_recall = (
+        float((predicted[no_direct_mask] == NO_DIRECT_INDEX).mean())
+        if no_direct_mask.any()
+        else 0.0
+    )
+    return {
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1": float(f1),
+        "f0_5": float(f_half),
+        "no_direct_recall": no_direct_recall,
+        "accuracy": float((predicted == y).mean()),
+    }
+
+
+def _select_decision_policy(probabilities: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
+    """Select a precision-aware P4 policy on fold-local validation data."""
+
+    best: tuple[tuple[float, ...], Dict[str, Any]] | None = None
+    thresholds = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85)
+    margins = (0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35)
+    for threshold in thresholds:
+        for margin in margins:
+            predicted = _predict_with_decision_policy(
+                probabilities,
+                direction_min_probability=threshold,
+                direction_vs_no_direct_margin=margin,
+            )
+            metrics = _directional_metrics(predicted, y)
+            # F0.5 deliberately favors precision because the propagation solver
+            # unions one path per reachable symptom; false-positive edges expand
+            # the final graph much faster than isolated false negatives shrink it.
+            ordering = (
+                metrics["f0_5"],
+                metrics["precision"],
+                metrics["f1"],
+                metrics["no_direct_recall"],
+                metrics["accuracy"],
+                threshold,
+                margin,
+            )
+            policy = {
+                "direction_min_probability": threshold,
+                "direction_vs_no_direct_margin": margin,
+                "selection_objective": "validation_directional_f0_5",
+                "validation_metrics": {
+                    key: round(value, 6) for key, value in metrics.items()
+                },
+            }
+            if best is None or ordering > best[0]:
+                best = (ordering, policy)
+    if best is None:
+        return {
+            "direction_min_probability": 0.50,
+            "direction_vs_no_direct_margin": 0.10,
+            "selection_objective": "conservative_default",
+            "validation_metrics": {},
+        }
+    return best[1]
+
+
 def _loss(
     x: np.ndarray,
     y: np.ndarray,
@@ -457,6 +555,8 @@ def fit_softmax_classifier(
     seed: int = 42,
     fixed_epochs: int | None = None,
     fixed_temperature: float | None = None,
+    fixed_decision_threshold: float | None = None,
+    fixed_no_direct_margin: float | None = None,
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     train_x, train_y = training
     mean = train_x.mean(axis=0)
@@ -487,6 +587,28 @@ def fit_softmax_classifier(
         )
     else:
         temperature = 1.0
+    if fixed_decision_threshold is not None and fixed_no_direct_margin is not None:
+        decision_policy = {
+            "direction_min_probability": float(fixed_decision_threshold),
+            "direction_vs_no_direct_margin": float(fixed_no_direct_margin),
+            "selection_objective": "fixed_from_inner_validation",
+            "validation_metrics": {},
+        }
+    elif standardized_validation is not None:
+        validation_probabilities = _softmax(
+            standardized_validation[0] @ weights.T + bias,
+            temperature,
+        )
+        decision_policy = _select_decision_policy(
+            validation_probabilities, standardized_validation[1]
+        )
+    else:
+        decision_policy = {
+            "direction_min_probability": 0.50,
+            "direction_vs_no_direct_margin": 0.10,
+            "selection_objective": "conservative_default",
+            "validation_metrics": {},
+        }
     model = {
         "schema_version": MODEL_SCHEMA,
         "model_type": "class_weighted_multinomial_logistic_regression",
@@ -498,6 +620,7 @@ def fit_softmax_classifier(
         "weights": weights.tolist(),
         "bias": bias.tolist(),
         "temperature": float(temperature),
+        "decision_policy": decision_policy,
         "training": {
             "epochs": int(best_epoch),
             "learning_rate": float(learning_rate),
@@ -526,12 +649,22 @@ def classification_metrics(
     model: Mapping[str, Any], x: np.ndarray, y: np.ndarray
 ) -> Dict[str, Any]:
     probabilities = predict_probabilities(model, x)
-    predicted = probabilities.argmax(axis=1)
+    policy = model.get("decision_policy", {})
+    predicted = _predict_with_decision_policy(
+        probabilities,
+        direction_min_probability=float(
+            policy.get("direction_min_probability", 0.50) or 0.50
+        ),
+        direction_vs_no_direct_margin=float(
+            policy.get("direction_vs_no_direct_margin", 0.10) or 0.0
+        ),
+    )
     recalls = []
     for state in range(len(STATE_NAMES)):
         mask = y == state
         recalls.append(float((predicted[mask] == state).mean()) if mask.any() else None)
     one_hot = np.eye(len(STATE_NAMES), dtype=np.float64)[y]
+    directional = _directional_metrics(predicted, y)
     return {
         "samples": int(len(y)),
         "accuracy": round(float((predicted == y).mean()), 6),
@@ -547,6 +680,11 @@ def classification_metrics(
         "class_counts": {
             name: int((y == index).sum()) for index, name in enumerate(STATE_NAMES)
         },
+        "directional_precision": round(directional["precision"], 6),
+        "directional_recall": round(directional["recall"], 6),
+        "directional_f1": round(directional["f1"], 6),
+        "directional_f0_5": round(directional["f0_5"], 6),
+        "decision_policy": dict(policy),
     }
 
 
@@ -630,6 +768,8 @@ def run_crossval(args: argparse.Namespace) -> str:
     fold_rows = []
     selected_epochs = []
     selected_temperatures = []
+    selected_decision_thresholds = []
+    selected_no_direct_margins = []
     for fold_number, test_indices in enumerate(folds, 1):
         outer_train = sorted(all_indices - set(test_indices))
         inner_train, inner_validation = _inner_split(
@@ -647,13 +787,24 @@ def run_crossval(args: argparse.Namespace) -> str:
             )
             best_epoch = int(selection["best_epoch"])
             temperature = float(selection_model["temperature"])
+            decision_policy = selection_model["decision_policy"]
+            decision_threshold = float(
+                decision_policy["direction_min_probability"]
+            )
+            no_direct_margin = float(
+                decision_policy["direction_vs_no_direct_margin"]
+            )
         else:
             best_epoch = args.epochs
             temperature = 1.0
+            decision_threshold = 0.50
+            no_direct_margin = 0.10
         fold_model, _ = fit_softmax_classifier(
             _join_cases([cases[index] for index in outer_train]),
             fixed_epochs=best_epoch,
             fixed_temperature=temperature,
+            fixed_decision_threshold=decision_threshold,
+            fixed_no_direct_margin=no_direct_margin,
             epochs=args.epochs,
             patience=args.patience,
             learning_rate=args.learning_rate,
@@ -671,6 +822,8 @@ def run_crossval(args: argparse.Namespace) -> str:
             case_models[os.path.abspath(cases[index]["dirpath"])] = model_path
         selected_epochs.append(best_epoch)
         selected_temperatures.append(temperature)
+        selected_decision_thresholds.append(decision_threshold)
+        selected_no_direct_margins.append(no_direct_margin)
         fold_rows.append(
             {
                 "fold": fold_number,
@@ -680,6 +833,8 @@ def run_crossval(args: argparse.Namespace) -> str:
                 "test_cases": len(test_indices),
                 "selected_epochs": best_epoch,
                 "selected_temperature": temperature,
+                "selected_direction_min_probability": decision_threshold,
+                "selected_direction_vs_no_direct_margin": no_direct_margin,
                 "test_metrics": metrics,
                 "model": model_path,
             }
@@ -688,10 +843,16 @@ def run_crossval(args: argparse.Namespace) -> str:
 
     final_epochs = max(1, int(statistics.median(selected_epochs)))
     final_temperature = float(statistics.median(selected_temperatures))
+    final_decision_threshold = float(
+        statistics.median(selected_decision_thresholds)
+    )
+    final_no_direct_margin = float(statistics.median(selected_no_direct_margins))
     final_model, _ = fit_softmax_classifier(
         _join_cases(cases),
         fixed_epochs=final_epochs,
         fixed_temperature=final_temperature,
+        fixed_decision_threshold=final_decision_threshold,
+        fixed_no_direct_margin=final_no_direct_margin,
         epochs=args.epochs,
         patience=args.patience,
         learning_rate=args.learning_rate,
@@ -729,6 +890,8 @@ def run_crossval(args: argparse.Namespace) -> str:
         "final_model": final_path,
         "final_training_epochs": final_epochs,
         "final_temperature": final_temperature,
+        "final_direction_min_probability": final_decision_threshold,
+        "final_direction_vs_no_direct_margin": final_no_direct_margin,
         "dataset_diagnostics": diagnostics,
     }
     manifest_path = os.path.join(args.output_dir, "oof_manifest.json")
@@ -740,6 +903,7 @@ def run_crossval(args: argparse.Namespace) -> str:
             "fold_count": len(folds),
             "folds": fold_rows,
             "final_model": final_path,
+            "final_decision_policy": dict(final_model["decision_policy"]),
             "oof_manifest": os.path.abspath(manifest_path),
             "dataset_diagnostics": diagnostics,
         },
@@ -776,13 +940,24 @@ def run_train(args: argparse.Namespace) -> str:
         )
         selected_epochs = int(selection["best_epoch"])
         temperature = float(selection_model["temperature"])
+        selected_policy = selection_model["decision_policy"]
+        decision_threshold = float(
+            selected_policy["direction_min_probability"]
+        )
+        no_direct_margin = float(
+            selected_policy["direction_vs_no_direct_margin"]
+        )
     else:
         selected_epochs = args.epochs
         temperature = 1.0
+        decision_threshold = 0.50
+        no_direct_margin = 0.10
     model, _ = fit_softmax_classifier(
         _join_cases(cases),
         fixed_epochs=selected_epochs,
         fixed_temperature=temperature,
+        fixed_decision_threshold=decision_threshold,
+        fixed_no_direct_margin=no_direct_margin,
         epochs=args.epochs,
         patience=args.patience,
         learning_rate=args.learning_rate,

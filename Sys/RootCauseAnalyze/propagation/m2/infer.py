@@ -109,6 +109,26 @@ def _condition_edges(
         no_direct = float(
             pair.get("state_probabilities", {}).get("no_direct_propagation", 0.0) or 0.0
         )
+        probability_details = pair.get("probability_details", {})
+        decision_policy = (
+            probability_details.get("decision_policy", {})
+            if isinstance(probability_details, Mapping)
+            else {}
+        )
+        supervised_policy = bool(decision_policy)
+        direction_min_probability = max(
+            config.min_edge_support,
+            float(decision_policy.get("direction_min_probability", config.min_edge_support)),
+        )
+        no_direct_margin = float(
+            decision_policy.get("direction_vs_no_direct_margin", 0.0) or 0.0
+        )
+        directional_probabilities = [
+            float(direction.get("state_probability", 0.0) or 0.0)
+            for direction in pair.get("directions", [])
+            if isinstance(direction, Mapping)
+        ]
+        maximum_directional_probability = max(directional_probabilities, default=0.0)
         for raw_direction in pair.get("directions", []):
             if not isinstance(raw_direction, Mapping):
                 continue
@@ -123,7 +143,17 @@ def _condition_edges(
                 and target_distance is not None
                 and target_distance > source_distance
             )
-            eligible = outward and probability > no_direct and probability >= config.min_edge_support
+            if supervised_policy:
+                probability_eligible = (
+                    probability >= direction_min_probability
+                    and probability - no_direct >= no_direct_margin
+                    and probability >= maximum_directional_probability
+                )
+            else:
+                probability_eligible = (
+                    probability > no_direct and probability >= config.min_edge_support
+                )
+            eligible = outward and probability_eligible
             rows.append(
                 {
                     "edge_hypothesis_id": pair.get("edge_hypothesis_id"),
@@ -150,6 +180,8 @@ def _condition_edges(
                         "topology_valid": 1.0,
                         "root_distance_consistency": 1.0 if outward else 0.0,
                         "contradiction": 0.0 if outward else 1.0,
+                        "direction_min_probability": direction_min_probability,
+                        "direction_vs_no_direct_margin": no_direct_margin,
                     },
                     "topology_edge_ids": validated_topology_ids,
                     "topology_validation": "raw_edge_match",

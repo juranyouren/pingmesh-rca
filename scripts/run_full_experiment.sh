@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end experiment: preprocessing -> root OOF -> DD model -> graph -> metrics.
+# End-to-end experiment: preprocessing -> root OOF -> P0/P4 graph -> unified metrics.
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ Options:
   --resume RUN_DIR                 Continue an existing full run
   --stages LIST                    Comma-separated stages to consider
                                    (default: preprocess,root,dd,graph,evaluate)
-  --with-edge-ablations            Also run P0/P1 propagation baselines
+  --with-edge-ablations            Deprecated compatibility flag; P0/P4 always run
   --with-raw-node-metrics          Also evaluate without node aggregation
   --with-baselines                 Also run TraceRCA/NetEventCause/BiAn
   --dry-run                        Print the resolved workflow without executing it
@@ -38,7 +38,6 @@ ROOT_VARIANT="${PINGMESH_NEURAL_VARIANT}"
 ROOT_VARIANT_EXPLICIT=0
 RESUME_DIR=""
 STAGES="preprocess,root,dd,graph,evaluate"
-WITH_EDGE_ABLATIONS=0
 WITH_RAW_NODE_METRICS=0
 WITH_BASELINES=0
 DRY_RUN=0
@@ -59,7 +58,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --with-edge-ablations)
-            WITH_EDGE_ABLATIONS=1
+            echo "[WARN] --with-edge-ablations is deprecated; P0 and P4 are always run, P1 is retired." >&2
             shift
             ;;
         --with-raw-node-metrics)
@@ -137,6 +136,7 @@ DD_MODEL_DIR="${WORKDIR}/dd_edge_model"
 DD_MANIFEST="${DD_MODEL_DIR}/oof_manifest.json"
 PROPAGATION_DIR="${WORKDIR}/propagation"
 P4_DIR="${PROPAGATION_DIR}/p4"
+P0_DIR="${PROPAGATION_DIR}/p0"
 EVALUATION_DIR="${WORKDIR}/evaluation"
 
 stage_selected() {
@@ -154,28 +154,33 @@ stage_completed() {
             [[ -f "${ROOT_RESULTS}" && -f "${ROOT_DIR}/summary.json" ]]
             ;;
         dd)
-            [[ -f "${DD_MANIFEST}" ]]
+            [[ -f "${DD_MANIFEST}" ]] || return 1
+            grep -q '"final_direction_min_probability"' "${DD_MANIFEST}" || return 1
             ;;
         graph)
-            [[ -f "${P4_DIR}/res.json" \
+            [[ -f "${P0_DIR}/res.json" \
+                && -f "${P0_DIR}/selected_propagation_paths.json" \
+                && -f "${P4_DIR}/res.json" \
                 && -f "${P4_DIR}/selected_propagation_paths.json" ]] || return 1
-            if [[ "${WITH_EDGE_ABLATIONS}" == "1" ]]; then
-                [[ -f "${PROPAGATION_DIR}/p0/res.json" \
-                    && -f "${PROPAGATION_DIR}/p1/res.json" ]] || return 1
-            fi
+            [[ "${P0_DIR}/res.json" -nt "${ROOT_RESULTS}" \
+                && "${P4_DIR}/res.json" -nt "${ROOT_RESULTS}" \
+                && "${P4_DIR}/res.json" -nt "${DD_MANIFEST}" ]] || return 1
             ;;
         evaluate)
-            [[ -f "${WORKDIR}/summary.json" && -f "${EVALUATION_DIR}/p4.json" ]] || return 1
-            if [[ "${WITH_EDGE_ABLATIONS}" == "1" ]]; then
-                [[ -f "${EVALUATION_DIR}/p0.json" \
-                    && -f "${EVALUATION_DIR}/p1.json" ]] || return 1
-            fi
+            [[ -f "${WORKDIR}/summary.json" \
+                && -f "${WORKDIR}/summary.csv" \
+                && -f "${WORKDIR}/summary.md" \
+                && -f "${EVALUATION_DIR}/p0.json" \
+                && -f "${EVALUATION_DIR}/p4.json" ]] || return 1
+            grep -q '"schema_version": "pingmesh-full-experiment-summary-v2"' \
+                "${WORKDIR}/summary.json" || return 1
+            [[ "${EVALUATION_DIR}/p0.json" -nt "${P0_DIR}/res.json" \
+                && "${EVALUATION_DIR}/p4.json" -nt "${P4_DIR}/res.json" \
+                && "${WORKDIR}/summary.json" -nt "${EVALUATION_DIR}/p0.json" \
+                && "${WORKDIR}/summary.json" -nt "${EVALUATION_DIR}/p4.json" ]] || return 1
             if [[ "${WITH_RAW_NODE_METRICS}" == "1" ]]; then
-                [[ -f "${EVALUATION_DIR}/p4_raw.json" ]] || return 1
-                if [[ "${WITH_EDGE_ABLATIONS}" == "1" ]]; then
-                    [[ -f "${EVALUATION_DIR}/p0_raw.json" \
-                        && -f "${EVALUATION_DIR}/p1_raw.json" ]] || return 1
-                fi
+                [[ -f "${EVALUATION_DIR}/p0_raw.json" \
+                    && -f "${EVALUATION_DIR}/p4_raw.json" ]] || return 1
             fi
             ;;
     esac
@@ -245,7 +250,8 @@ echo "  run:          $(basename "${WORKDIR}")"
 echo "  workdir:      ${WORKDIR}"
 echo "  root variant: ${ROOT_VARIANT}"
 echo "  stages:       ${STAGES}"
-echo "  DD ablations: ${WITH_EDGE_ABLATIONS}"
+echo "  primary:      P0 deterministic evidence"
+echo "  optimization: P4 supervised conservative admission"
 echo "  raw metrics:  ${WITH_RAW_NODE_METRICS}"
 echo "  baselines:    ${WITH_BASELINES}"
 echo "  dry run:      ${DRY_RUN}"
@@ -255,7 +261,6 @@ if [[ "${DRY_RUN}" == "0" ]]; then
     export PINGMESH_FULL_WORKDIR="${WORKDIR}"
     export PINGMESH_FULL_ROOT_VARIANT="${ROOT_VARIANT}"
     export PINGMESH_FULL_STAGES="${STAGES}"
-    export PINGMESH_FULL_WITH_EDGE_ABLATIONS="${WITH_EDGE_ABLATIONS}"
     export PINGMESH_FULL_WITH_RAW_NODE_METRICS="${WITH_RAW_NODE_METRICS}"
     export PINGMESH_FULL_WITH_BASELINES="${WITH_BASELINES}"
     python - <<'PY'
@@ -289,7 +294,9 @@ else:
         "git_sha": git_sha,
         "root_variant": os.environ["PINGMESH_FULL_ROOT_VARIANT"],
         "stages": os.environ["PINGMESH_FULL_STAGES"].split(","),
-        "with_edge_ablations": os.environ["PINGMESH_FULL_WITH_EDGE_ABLATIONS"] == "1",
+        "primary_method": "p0",
+        "optimization_method": "p4",
+        "methods": ["p0", "p4"],
         "with_raw_node_metrics": os.environ["PINGMESH_FULL_WITH_RAW_NODE_METRICS"] == "1",
         "with_baselines": os.environ["PINGMESH_FULL_WITH_BASELINES"] == "1",
         "paths": {
@@ -386,12 +393,9 @@ if stage_selected graph; then
     else
         require_file "${ROOT_RESULTS}"
         require_file "${DD_MANIFEST}"
+        run_propagation p0 deterministic_evidence_v1
         run_propagation p4 supervised_softmax_v1 \
             --edge-probability-oof-manifest "${DD_MANIFEST}"
-        if [[ "${WITH_EDGE_ABLATIONS}" == "1" ]]; then
-            run_propagation p0 deterministic_evidence_v1
-            run_propagation p1 logit_softmax_v1
-        fi
         [[ "${DRY_RUN}" == "1" ]] || mark_stage graph
     fi
 fi
@@ -420,79 +424,19 @@ if stage_selected evaluate; then
         echo "[SKIP] evaluate already completed"
     else
         ensure_dir "${EVALUATION_DIR}"
+        require_file "${P0_DIR}/res.json"
+        require_file "${P0_DIR}/selected_propagation_paths.json"
+        evaluate_one p0
         require_file "${P4_DIR}/res.json"
         require_file "${P4_DIR}/selected_propagation_paths.json"
         evaluate_one p4
-        if [[ "${WITH_EDGE_ABLATIONS}" == "1" ]]; then
-            evaluate_one p0
-            evaluate_one p1
-        fi
 
-        if [[ "${DRY_RUN}" == "0" ]]; then
-            export PINGMESH_FULL_OOF_NAME="${OOF_NAME}"
-            python - <<'PY'
-import csv
-import json
-import os
-from pathlib import Path
-
-workdir = Path(os.environ["PINGMESH_FULL_WORKDIR"])
-oof_name = os.environ["PINGMESH_FULL_OOF_NAME"]
-root_summary = json.loads((workdir / "root" / "summary.json").read_text(encoding="utf-8"))
-root_row = next(row for row in root_summary["results"] if row["experiment"] == oof_name)
-rows = []
-for name in ("p4", "p0", "p1"):
-    score_path = workdir / "propagation" / name / "sum.json"
-    evaluation_path = workdir / "evaluation" / f"{name}.json"
-    if not score_path.exists() or not evaluation_path.exists():
-        continue
-    score = json.loads(score_path.read_text(encoding="utf-8"))
-    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
-    ranking = score["ranking_evaluation"]["ranking_metrics"]
-    labels = evaluation.get("label_metrics", {})
-    rows.append(
-        {
-            "experiment": name,
-            "cases": ranking.get("Total Evaluated Cases", 0),
-            "top1": ranking.get("Top-1 Acc (%)", 0),
-            "top3": ranking.get("Top-3 Acc (%)", 0),
-            "top5": ranking.get("Top-5 Acc (%)", 0),
-            "mrr": ranking.get("MRR", ranking.get("Mean Reciprocal Rank", 0)),
-            "dd_edge_f1": labels.get("macro_directed_edge_f1", 0),
-            "node_f1": labels.get("macro_node_f1", 0),
-        }
-    )
-
-payload = {
-    "run_id": workdir.name,
-    "workdir": str(workdir),
-    "root_variant": os.environ["PINGMESH_FULL_ROOT_VARIANT"],
-    "root_metrics": {
-        key: root_row[key] for key in ("cases", "top1", "top3", "top5", "mrr")
-    },
-    "propagation_metrics": rows,
-    "artifacts": {
-        "root_predictions": str(workdir / "root" / oof_name / "res.json"),
-        "dd_oof_manifest": str(workdir / "dd_edge_model" / "oof_manifest.json"),
-        "propagation_predictions": str(workdir / "propagation" / "p4" / "res.json"),
-        "propagation_graphs": str(
-            workdir / "propagation" / "p4" / "selected_propagation_paths.json"
-        ),
-        "evaluation": str(workdir / "evaluation" / "p4.json"),
-    },
-}
-(workdir / "summary.json").write_text(
-    json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-)
-with (workdir / "summary.csv").open("w", encoding="utf-8", newline="") as handle:
-    fieldnames = ("experiment", "cases", "top1", "top3", "top5", "mrr", "dd_edge_f1", "node_f1")
-    writer = csv.DictWriter(handle, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
-print(json.dumps(payload, ensure_ascii=False, indent=2))
-PY
-            mark_stage evaluate
-        fi
+        run_logged evaluate python Sys/Score/summarize_full_experiment.py \
+            --workdir "${WORKDIR}" \
+            --oof-name "${OOF_NAME}" \
+            --methods p0,p4 \
+            --primary-method p0
+        [[ "${DRY_RUN}" == "1" ]] || mark_stage evaluate
     fi
 fi
 
@@ -512,4 +456,5 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 else
     echo "Full experiment completed: ${WORKDIR}"
     echo "Summary: ${WORKDIR}/summary.json"
+    echo "Table:   ${WORKDIR}/summary.md"
 fi

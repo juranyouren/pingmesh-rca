@@ -294,6 +294,16 @@ def _supervised_probabilities(
         "model_id": model.get("model_id", os.path.basename(model_path)),
         "feature_names": list(EDGE_FEATURE_NAMES),
         "dynamic_support_available": bool(features["any_dynamic_support"] > 0.0),
+        "decision_policy": dict(
+            model.get(
+                "decision_policy",
+                {
+                    "direction_min_probability": 0.50,
+                    "direction_vs_no_direct_margin": 0.10,
+                    "selection_objective": "conservative_legacy_default",
+                },
+            )
+        ),
     }
 
 

@@ -5,20 +5,22 @@
 This repository studies **Pingmesh fault-propagation graph reconstruction**.
 The active paper design is:
 
-`Pingmesh anomaly + raw task_topo + alarms/logs -> M1 candidate heterogeneous evidence graph -> M2 root potentials and local relation probabilities -> M3 jointly constrained root-and-graph reconstruction`
+`Pingmesh anomaly + raw task_topo + alarms/logs -> Stage 1 PC-STGR root ranking -> Stage 2 P0 root-conditioned propagation-DAG reconstruction`
 
 The output is an evidence-grounded heterogeneous explanation graph containing:
 
 - a device-level directed propagation DAG as the primary result;
-- a root device or root link inferred together with the graph;
+- a root device selected from the Stage-1 Top-K ranking and optionally reranked
+  by graph explanation quality;
 - an event-evolution/dependency layer that explains the device path;
 - device-event observation links that ground conclusions in raw evidence;
 - alternative hypotheses and an identifiability/abstention decision.
 
-The previous device-only, externally root-conditioned implementation remains a
-prototype and baseline. It does not define the new paper architecture. Use
-`docs/论文方案.md` as the only active source of truth. Treat
-`docs/PC-STGR设计方案.md` as a historical implementation record.
+P0 deterministic evidence normalization is the approved paper method. P4 is a
+supervised optimization track and must be reported separately until it exceeds
+P0 on graph-reconstruction quality. P1 is retired from the active experiment
+matrix. Use `docs/论文方案.md` as the active source of truth and
+`docs/PC-STGR设计方案.md` as the Stage-1 implementation contract.
 
 ## Non-Negotiables
 
@@ -43,35 +45,23 @@ prototype and baseline. It does not define the new paper architecture. Use
 
 ## Active Paper Modules
 
-- **M1 — Evidence modeling and candidate heterogeneous graph:** normalize
-  alarms/logs into event episodes and select devices, events, symptoms, physical
-  links, and observation links relevant to the incident.
-- **M2 — Heterogeneous relation learning:** use a relation-aware graph encoder
-  to predict root potentials, device-device three-state probabilities
-  (`A→B / B→A / No Direct`), and event-event three-state probabilities
-  (`Ei→Ej / Ej→Ei / No Dependency`).
-- **M3 — Globally constrained reconstruction:** jointly select the root and a
-  topology-valid, root-reachable, acyclic device propagation graph, then attach
-  event explanations, evidence traces, alternatives, and uncertainty.
+- **Stage 1 — Root location:** PC-STGR produces a calibrated Top-K device
+  ranking from Pingmesh context, topology, alarms, and event timing.
+- **Stage 2 — Graph rebuild:** P0 constructs root-independent device-pair
+  evidence, conditions it on each Top-K root, and decodes a topology-valid,
+  root-reachable, acyclic propagation DAG.
+- **Final selection:** combine Stage-1 root evidence and graph explanation
+  quality to select the reported root and graph while retaining alternatives.
 
-The oracle-root setting fixes the root only for controlled evaluation. Joint
-root-graph inference is the target system setting.
+The oracle-root setting remains a controlled evaluation of graph reconstruction.
 
 ## Current Implementation Status
 
-The code now contains two implementation levels:
-
-- `Sys/RootCauseAnalyze/propagation/heterogeneous/` implements the runnable V0
-  heterogeneous baseline: typed Device/Event/Symptom construction, internal
-  root potentials, DD/EE probabilistic relations, bounded single-device-root
-  joint search, event explanations, and identifiability output.
-- The older files under `Sys/RootCauseAnalyze/propagation/` remain the reusable
-  device-level probability and DAG-decoding substrate.
-
-V0 is not the final learned method. Root and EE potentials are interpretable
-heuristics, the decoder enumerates a bounded set of device roots, and link-root,
-multi-root, Relation-aware GAT, calibrated probabilities, and CP-SAT remain to
-be implemented.
+The active implementation is under `stage1/`, `propagation/`, and
+`propagation_pipeline.py`. The heterogeneous V0 remains a historical prototype.
+P4 uses a grouped-OOF supervised three-state edge classifier with fold-local
+probability calibration and conservative edge admission; it is an optimization
+experiment, not the paper method.
 
 Useful prototype paths:
 
@@ -86,27 +76,25 @@ Useful prototype paths:
   V0 heterogeneous entrypoint.
 - `Sys/Score/evaluate_propagation.py`: graph validity and optional label metrics.
 
-Compatibility names such as `stage1`, `stage2`, `m1`, `m2`, and `two-stage-*`
-do not define the paper modules. PC-STGR, PC-STGR-SSL, IC-STGR, and deterministic
-root rankers are supporting baselines or optional candidate generators only.
+Compatibility names `m1` and `m2` remain in code, but the paper uses the simpler
+Stage-1 root-location / Stage-2 graph-rebuild terminology. PC-STGR is active;
+IC-STGR and deterministic root rankers are baselines.
 
 ## Current Priority
 
-1. Run V0 on full server data and audit schema failures, candidate sizes,
-   topology availability, empty-event cases, and runtime.
-2. Finalize the relation-label schema and annotate a representative pilot set.
-3. Measure M1 candidate-subgraph recall before optimizing downstream models.
-4. Replace V0 root/DD/EE heuristics with incident-grouped learned heads and
-   calibrated OOF probabilities.
-5. Replace bounded device-root enumeration with CP-SAT device/link-root decoding
-   and Top-K near-optimal alternatives.
+1. Treat P0 as the paper system and reproduce its grouped-OOF root and graph
+   metrics through `scripts/run_full_experiment.sh`.
+2. Optimize P4 precision without using held-out labels for threshold selection.
+3. Report root-location and graph-rebuild metrics together in `summary.json/csv`.
+4. Add oracle-root evaluation and analyze error propagation from Stage 1.
+5. Consider link-root and multi-root extensions only after the single-root
+   system is stable.
 
 ## Figure Style
 
 Use `docs/论文流程图统一绘图风格与传播图重构提示词.md`. Figures must distinguish
-physical/observation relations from inferred dependency and final propagation
-relations, and must show the root as a joint output rather than a mandatory
-upstream ranking.
+physical/observation relations from inferred propagation relations and show the
+explicit Stage-1 ranking to Stage-2 graph-rebuild dependency.
 
 ## Common Commands
 

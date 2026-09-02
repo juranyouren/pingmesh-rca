@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
+
+import numpy as np
 
 from Sys.RootCauseAnalyze.heterogeneous_propagation_pipeline import (
     run_heterogeneous_propagation_pipeline,
@@ -13,6 +17,12 @@ from Sys.RootCauseAnalyze.propagation.heterogeneous import (
 )
 from Sys.RootCauseAnalyze.propagation.solver import is_dag
 from Sys.RootCauseAnalyze.propagation.topology_context import TOPOLOGY_SCHEMA_VERSION
+from Sys.Score.summarize_full_experiment import build_summary, write_summary
+from Sys.Score.train_stage2_edge_classifier import (
+    NO_DIRECT_INDEX,
+    _predict_with_decision_policy,
+    _select_decision_policy,
+)
 from Sys.utils.io_utils import load_json, save_json
 
 
@@ -203,3 +213,118 @@ def test_v0_batch_pipeline_writes_compact_and_full_artifacts(tmp_path: Path):
     assert compact[0]["root_input_required"] is False
     assert "error" not in compact[0]
     assert full[0]["result"]["selected_root"] in {"D1", "D2", "D3"}
+
+
+def test_p4_conservative_policy_rejects_weak_directional_edges():
+    probabilities = np.asarray(
+        [
+            [0.45, 0.20, 0.35],
+            [0.15, 0.20, 0.65],
+            [0.70, 0.10, 0.20],
+            [0.10, 0.65, 0.25],
+        ],
+        dtype=np.float64,
+    )
+    predicted = _predict_with_decision_policy(
+        probabilities,
+        direction_min_probability=0.50,
+        direction_vs_no_direct_margin=0.10,
+    )
+    assert predicted.tolist() == [NO_DIRECT_INDEX, NO_DIRECT_INDEX, 0, 1]
+
+
+def test_p4_policy_selection_returns_auditable_thresholds():
+    probabilities = np.asarray(
+        [
+            [0.80, 0.05, 0.15],
+            [0.05, 0.80, 0.15],
+            [0.38, 0.20, 0.42],
+            [0.20, 0.35, 0.45],
+        ],
+        dtype=np.float64,
+    )
+    labels = np.asarray([0, 1, NO_DIRECT_INDEX, NO_DIRECT_INDEX], dtype=np.int64)
+    policy = _select_decision_policy(probabilities, labels)
+    assert 0.30 <= policy["direction_min_probability"] <= 0.85
+    assert 0.0 <= policy["direction_vs_no_direct_margin"] <= 0.35
+    assert policy["selection_objective"] == "validation_directional_f0_5"
+    assert policy["validation_metrics"]["precision"] == 1.0
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_unified_summary_contains_root_and_graph_metrics(tmp_path: Path):
+    _write_json(
+        tmp_path / "root" / "summary.json",
+        {
+            "stage1_variant": "supervised",
+            "final_checkpoint": "root/final_model.pt",
+            "results": [
+                {
+                    "experiment": "pc_stgr_oof",
+                    "evaluation": "out_of_fold",
+                    "cases": 207,
+                    "top1": 75.0,
+                    "top3": 91.0,
+                    "top5": 96.0,
+                    "mrr": 0.83,
+                }
+            ],
+        },
+    )
+    ranking = {
+        "ranking_evaluation": {
+            "ranking_metrics": {
+                "Total Evaluated Cases": 207,
+                "Top-1 Acc (%)": 76.0,
+                "Top-3 Acc (%)": 92.0,
+                "Top-5 Acc (%)": 97.0,
+                "MRR": 0.84,
+            }
+        }
+    }
+    for name, edge_f1 in (("p0", 0.60), ("p4", 0.40)):
+        _write_json(tmp_path / "propagation" / name / "sum.json", ranking)
+        _write_json(
+            tmp_path / "evaluation" / f"{name}.json",
+            {
+                "validity": {
+                    "mean_edge_count": 4.0,
+                    "dag_valid_rate": 1.0,
+                    "root_reachable_rate": 1.0,
+                },
+                "label_metrics": {
+                    "case_count": 207,
+                    "root_accuracy": 0.76,
+                    "macro_directed_edge_precision": edge_f1,
+                    "macro_directed_edge_recall": edge_f1,
+                    "macro_directed_edge_f1": edge_f1,
+                    "macro_node_precision": 0.7,
+                    "macro_node_recall": 0.8,
+                    "macro_node_f1": 0.74,
+                    "strict_exact_rate": 0.47,
+                    "cases_with_aggregation": 182,
+                    "structural_equivalence": "test-equivalence",
+                },
+            },
+        )
+
+    payload = build_summary(tmp_path, oof_name="pc_stgr_oof")
+    assert payload["primary_method"] == "p0"
+    assert payload["root_location"]["stage1_oof"]["top1_accuracy_percent"] == 75.0
+    assert payload["root_location"]["after_graph_rebuild"]["p0"][
+        "selected_root_accuracy"
+    ] == 0.76
+    assert payload["graph_rebuild"]["p0"]["directed_edge_f1"] == 0.60
+    assert payload["graph_rebuild"]["p4"]["directed_edge_f1"] == 0.40
+
+    write_summary(payload, tmp_path)
+    with (tmp_path / "summary.csv").open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["method"] for row in rows] == ["p0", "p4"]
+    assert "root_final_accuracy" in rows[0]
+    assert "graph_edge_f1" in rows[0]
+    assert "P0" in (tmp_path / "summary.md").read_text(encoding="utf-8").upper()

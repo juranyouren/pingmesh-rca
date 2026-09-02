@@ -1,15 +1,14 @@
 # Experiment Scripts
 
-> The active paper method is the three-module heterogeneous root-and-propagation
-> graph design in `docs/论文方案.md`. A dependency-free heterogeneous V0 now runs
-> end to end without an external root input. The supervised root/DD experiment
-> now has one supported end-to-end entrypoint; focused runners remain available
-> for ablations and historical baselines.
+> The active paper system is a two-stage pipeline: PC-STGR first ranks root
+> candidates, then P0 reconstructs a root-conditioned propagation DAG. P0 is the
+> approved primary method. P4 is a supervised optimization track; P1 is retired
+> from the active experiment matrix.
 
 ## Full root + propagation experiment
 
-Run preprocessing, grouped-OOF root training, grouped-OOF DD-edge training,
-propagation-graph reconstruction, and evaluation with one command:
+Run preprocessing, grouped-OOF root training, P0 reconstruction, grouped-OOF
+P4 optimization, and unified evaluation with one command:
 
 ```bash
 bash scripts/run_full_experiment.sh
@@ -26,9 +25,6 @@ Useful variants:
 # Fold-local self-supervised pretraining before root fine-tuning
 bash scripts/run_full_experiment.sh --root-variant self_supervised
 
-# Include P0/P1 DD-edge probability ablations
-bash scripts/run_full_experiment.sh --with-edge-ablations
-
 # Also report metrics without structural-equivalence node aggregation
 bash scripts/run_full_experiment.sh --with-raw-node-metrics
 
@@ -39,11 +35,16 @@ bash scripts/run_full_experiment.sh --dry-run
 bash scripts/run_full_experiment.sh --resume "$PINGMESH_RESULTS/<full-run-dir>"
 ```
 
-The main output is `summary.json`: root Top-1/Top-3/Top-5/MRR plus propagation
-DD-edge F1 and node F1. The full predicted graph is stored at
-`propagation/p4/selected_propagation_paths.json`; detailed per-case components
-are stored in `evaluation/p4.json`. Each stage has a log and a completion marker,
-so a failed run can resume without retraining completed stages.
+The main output is `summary.json`. Its `root_location` section contains Stage-1
+OOF and post-reconstruction root metrics; `graph_rebuild` contains directed-edge,
+node, exact-match, and validity metrics for P0 and P4. `summary.csv` places both
+metric groups in one table. The primary predicted graph is stored at
+`propagation/p0/selected_propagation_paths.json`; P4 optimization artifacts are
+stored under `propagation/p4/`. Each stage has a log and a completion marker, so
+a failed run can resume without retraining completed stages.
+
+For direct reading, `summary.md` renders the same Root Location and Graph Rebuild
+metrics as one Markdown table.
 
 ## Runnable heterogeneous V0
 
@@ -81,14 +82,14 @@ of editing individual runners.
 Set `PINGMESH_RAW_DATA` to the directory containing the original full-link JSON
 files whose `full_link.task_topo.value` corresponds to `PINGMESH_DATA` cases.
 
-## Supported legacy/prototype entrypoints
+## Supported experiment entrypoints
 
 | Script | Purpose |
 | --- | --- |
-| `run_full_experiment.sh` | One entrypoint for preprocessing, root OOF, DD-edge OOF, propagation-graph reconstruction, and all requested metrics. |
-| `run_heterogeneous_v0.sh` | Active root-input-free heterogeneous V0: topology backfill, Device/Event/Symptom construction, bounded joint root/DAG reconstruction, and full graph artifacts. |
+| `run_full_experiment.sh` | Primary entrypoint: root OOF, P0 paper system, optimized P4 comparison, and unified root/graph metrics. |
+| `run_heterogeneous_v0.sh` | Historical root-input-free heterogeneous V0 prototype. |
 | `run_root_oof.sh` | Deterministic root baseline plus supervised or self-supervised PC-STGR grouped OOF training. |
-| `run_dd_edge_ablation.sh` | Compare P0, P1 Logit/Softmax, and leakage-safe P4 supervised edge probabilities with one replaceable root-candidate file. |
+| `run_dd_edge_ablation.sh` | Compare the P0 paper method with leakage-safe P4 supervised optimization. |
 | `run_rca_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
 | `../Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Current PC-STGR OOF training and label-free inference implementation. |
@@ -101,12 +102,12 @@ The Gate, Trust-Tree, Skill Pipeline, candidate-summary path, and their old
 paper-01 through paper-04 wrappers have been removed. They are not part of the
 runtime or supported comparison workflow.
 
-## Supporting root-candidate status
+## Stage 1 root-location model
 
-PC-STGR is an available **supporting root-candidate generator**, not the active
-paper method. Its historical implementation contract is recorded in
-`docs/PC-STGR设计方案.md`; the active paper plan is `docs/论文方案.md`. The current
-`stage1/neural_*` code and `run_root_oof.sh` implement PC-STGR. A new
+PC-STGR is the first stage of the active paper system. Its implementation
+contract is recorded in `docs/PC-STGR设计方案.md`; the complete paper plan is
+`docs/论文方案.md`. The current `stage1/neural_*` code and `run_root_oof.sh`
+implement PC-STGR. A new
 grouped OOF run is still required for any candidate-quality claim; do not rename
 the historical IC-STGR 73.58/93.71/97.48 Top-1/Top-3/Top-5 result as PC-STGR or
 as a propagation-graph result.
@@ -170,14 +171,13 @@ All supported result writers expose `ranked_ips`; Stage 1 also emits
 adds `final_root_rankings`. `Score_N.py` stores direct ranking metrics under
 `ranking_evaluation` and parsed response metrics under `response_evaluation`.
 
-## Current device-level prototype workflow
+## Active root-conditioned graph-rebuild workflow
 
-This legacy-compatible implementation first builds one device-level,
+The active implementation first builds one device-level,
 root-independent probabilistic relation graph, then decodes a root-conditioned
-propagation DAG for every external root candidate. It may compare graph
-explanations and rerank roots as an auxiliary output. Existing
-`Stage 2/M1/M2` schema names are compatibility labels, not the active paper
-structure and not an implementation of the new heterogeneous M1/M2/M3 design.
+propagation DAG for every PC-STGR Top-K candidate. P0 uses deterministic evidence
+normalization and is the paper method. The graph explanation can rerank the
+candidate roots, while the device DAG remains the primary output.
 
 Backfill or verify the raw topology sidecars before reconstruction:
 
@@ -272,19 +272,11 @@ propagation-labeler \
 The runtime path does not read root or propagation labels. Add `--labels-root`
 only to the separate evaluator after engineer path labels exist.
 
-P0 remains the default edge-probability method. P1 can be selected during
-label-free inference:
-
-```bash
-python Sys/RootCauseAnalyze/propagation_pipeline.py \
-  --data-root "$PINGMESH_DATA" \
-  --root-results "$PINGMESH_RESULTS/<run>/pc_stgr_oof/res.json" \
-  --output-dir "$PINGMESH_RESULTS/<run>/p1" \
-  --edge-probability-method logit_softmax_v1
-```
-
-P4 training is isolated from runtime and writes JSON classifiers. Scored
-results must use the OOF manifest; the final model is only for later
+P0 remains the paper method and default edge-probability method. P1 is no longer
+run or reported. P4 training is isolated from runtime and writes JSON
+classifiers. Its fold-local validation data select a conservative directional
+probability threshold and a margin over `No Direct` to reduce graph expansion.
+Scored results must use the OOF manifest; the final model is only for later
 label-free inference:
 
 ```bash

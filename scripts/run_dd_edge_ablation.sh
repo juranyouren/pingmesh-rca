@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Compare P0 deterministic normalization, P1 fixed Logit/Softmax, and the P4
-# case-grouped OOF supervised Softmax classifier with the same Stage 1 input.
+# Compare the P0 paper method and the optimized P4 supervised classifier with
+# the same Stage 1 input. P1 is retired from the active experiment matrix.
 
 set -euo pipefail
 
@@ -112,10 +112,6 @@ echo "=== P0: deterministic evidence normalization ==="
 run_stage2 p0 \
     --edge-probability-method deterministic_evidence_v1
 
-echo "=== P1: fixed three-state Logit/Softmax ==="
-run_stage2 p1 \
-    --edge-probability-method logit_softmax_v1
-
 echo "=== P4: train case-grouped OOF supervised classifier ==="
 python Sys/Score/train_stage2_edge_classifier.py crossval \
     --data-root "${PINGMESH_DATA}" \
@@ -143,7 +139,7 @@ from pathlib import Path
 
 workdir = Path(os.environ["PINGMESH_EDGE_ABLATION_WORKDIR"])
 rows = []
-for name in ("p0", "p1", "p4"):
+for name in ("p0", "p4"):
     summary_path = workdir / name / "sum.json"
     validity_path = workdir / name / "validity.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))

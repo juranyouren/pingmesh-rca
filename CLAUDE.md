@@ -1,78 +1,46 @@
-# AGENT.md
+# Project Instructions
 
-## Project
+## Active Paper Design
 
-The active paper task is **Pingmesh heterogeneous fault-propagation graph
-reconstruction**:
+The active task is Pingmesh fault-propagation graph reconstruction through an explicit two-stage system:
 
-`observations -> M1 candidate heterogeneous evidence graph -> M2 root/relation probabilities -> M3 joint root-and-graph constrained reconstruction`
+```text
+Pingmesh context + raw task_topo + alarms/logs
+  -> Stage 1 PC-STGR grouped-OOF root Top-K ranking
+  -> Stage 2 P0 root-conditioned propagation-DAG reconstruction
+  -> final root + device propagation DAG + evidence and alternatives
+```
 
-The main output contains a device propagation DAG, a jointly inferred root
-device or link, an event-evolution explanation layer, evidence-grounding links,
-and explicit alternatives/abstention. The device propagation DAG is the primary
-quantitative object; events explain why its edges and root are selected.
-
-The current device-only, externally root-conditioned code is a prototype and
-baseline, not the new method architecture. Use `docs/论文方案.md` as the only
-active paper-plan source. `docs/PC-STGR设计方案.md` is historical.
+P0 deterministic evidence normalization is the paper method. P4 is a supervised grouped-OOF optimization track with validation-selected conservative edge admission. P1 is retired. `docs/论文方案.md` is the authoritative design and `docs/PC-STGR设计方案.md` defines Stage 1.
 
 ## Non-Negotiables
 
 - Do not publish or track internal fault data.
 - Do not call external LLM APIs in experiments.
 - Runtime inference must not read root or propagation labels.
-- Device propagation edges must exist in raw `task_topo`.
-- Physical, ownership, temporal, and semantic relations are evidence, not
-  deterministic causality.
-- Unknown relations are masked, not labeled negative.
-- Event-event outputs are dependency/evolution hypotheses unless causally
-  labeled.
-- Without engineer labels, report validity diagnostics, never root/path
-  accuracy.
-- Use incident-grouped splits and leakage-safe calibration.
+- Every emitted propagation edge must exist in raw `task_topo`.
+- Unknown relations are masked, never converted to negatives.
+- Use incident-grouped splits; calibration and thresholds must be selected inside the training fold.
+- OOF predictions provide paper scores; full-data checkpoints are only for later unseen cases.
 - Run tests with `python -m pytest`.
 
-## Active Paper Modules
+## Active Modules
 
-- **M1:** evidence episodes plus candidate Device/Event/Symptom graph.
-- **M2:** relation-aware encoder with a root-potential head, device-device
-  three-state head, and event-event three-state head.
-- **M3:** constrained joint root-and-graph decoder with topology, reachability,
-  acyclicity, evidence coverage, alternatives, and identifiability.
+- Stage 1: PC-STGR root location and Top-K candidate output.
+- Stage 2: P0 evidence normalization, root conditioning, path search, and DAG merge.
+- Final selection: combine normalized Stage-1 evidence with graph explanation quality.
+- P4 optimization: supervised three-state edge probabilities using the same decoder.
 
-Oracle-root decoding is a controlled evaluation mode. Joint root-graph inference
-is the target setting.
+## Evaluation
 
-## Current Code Status
-
-`Sys/RootCauseAnalyze/propagation/heterogeneous/` now provides a runnable V0:
-typed Device/Event/Symptom construction, internal heuristic root potentials,
-DD/EE relations, bounded single-device-root joint search, event explanations,
-and identifiability output. The older propagation files provide the reusable
-device probability and DAG-decoding substrate.
-
-V0 is not the final learned method. Relation-aware GAT, calibration, CP-SAT,
-link roots, and multi-root reconstruction remain unimplemented.
-
-PC-STGR and other `stage1` rankers are supporting baselines only. Compatibility
-names such as `stage1`, `stage2`, `m1`, `m2`, and `two-stage-*` do not define the
-paper structure.
-
-## Current Priority
-
-1. Run V0 on server data and audit heterogeneous evidence/schema failures.
-2. Finalize labels and annotate a pilot set.
-3. Verify M1 candidate recall.
-4. Replace heuristic potentials with incident-grouped OOF learning/calibration.
-5. Replace bounded enumeration with CP-SAT joint device/link-root inference.
+`scripts/run_full_experiment.sh` is the unified entrypoint. It runs P0 and P4 and writes root-location plus graph-rebuild metrics into `summary.json` and `summary.csv`. P0 artifacts are the primary paper output.
 
 ## Common Commands
 
 ```bash
 python -m pytest -q
 source scripts/common.sh
-python Sys/Preprocess/backfill_topology_context.py --help
-python Sys/RootCauseAnalyze/heterogeneous_propagation_pipeline.py --help
+bash scripts/run_full_experiment.sh --dry-run
 python Sys/RootCauseAnalyze/propagation_pipeline.py --help
 python Sys/Score/evaluate_propagation.py --help
 ```
