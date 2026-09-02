@@ -80,3 +80,48 @@ export PINGMESH_EDGE_CLASSIFIER_EPOCHS="${PINGMESH_EDGE_CLASSIFIER_EPOCHS:-300}"
 export PINGMESH_EDGE_CLASSIFIER_PATIENCE="${PINGMESH_EDGE_CLASSIFIER_PATIENCE:-30}"
 export PINGMESH_EDGE_CLASSIFIER_LEARNING_RATE="${PINGMESH_EDGE_CLASSIFIER_LEARNING_RATE:-0.03}"
 export PINGMESH_EDGE_CLASSIFIER_L2="${PINGMESH_EDGE_CLASSIFIER_L2:-0.001}"
+
+# ── Experiment run directories ──
+# Run IDs are generated centrally so every entrypoint follows the same naming
+# contract: <experiment>_<variant>_<YYYYMMDD_HHMMSS>_<git-short-sha>[_NN].
+pingmesh_git_short_sha() {
+    git -C "${PINGMESH_PROJECT_ROOT}" rev-parse --short HEAD 2>/dev/null || printf '%s\n' "nogit"
+}
+
+pingmesh_preview_run_dir() {
+    local experiment="$1"
+    local variant="${2:-}"
+    local timestamp sha stem candidate suffix
+
+    timestamp="$(date +%Y%m%d_%H%M%S)"
+    sha="$(pingmesh_git_short_sha)"
+    stem="${experiment}"
+    if [[ -n "${variant}" ]]; then
+        stem="${stem}_${variant}"
+    fi
+    stem="${stem}_${timestamp}_${sha}"
+    candidate="${PINGMESH_RESULTS}/${stem}"
+    suffix=1
+    while [[ -e "${candidate}" ]]; do
+        candidate="${PINGMESH_RESULTS}/${stem}_$(printf '%02d' "${suffix}")"
+        suffix=$((suffix + 1))
+    done
+    printf '%s\n' "${candidate}"
+}
+
+pingmesh_create_run_dir() {
+    local experiment="$1"
+    local variant="${2:-}"
+    local candidate
+
+    mkdir -p "${PINGMESH_RESULTS}"
+    candidate="$(pingmesh_preview_run_dir "${experiment}" "${variant}")"
+    while ! mkdir "${candidate}" 2>/dev/null; do
+        if [[ ! -e "${candidate}" ]]; then
+            echo "[ERROR] Cannot create run directory: ${candidate}" >&2
+            return 1
+        fi
+        candidate="$(pingmesh_preview_run_dir "${experiment}" "${variant}")"
+    done
+    printf '%s\n' "${candidate}"
+}

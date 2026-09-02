@@ -18,10 +18,37 @@ export LANG="${LANG:-C.UTF-8}"
 export LC_ALL="${LC_ALL:-C.UTF-8}"
 export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
 
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-RUN_TAG="${1:-heterogeneous_v0}_${TIMESTAMP}"
-WORKDIR="${PINGMESH_RESULTS}/${RUN_TAG}"
-mkdir -p "${WORKDIR}"
+usage() {
+    cat <<'EOF'
+Usage: bash scripts/run_heterogeneous_v0.sh [--workdir PATH]
+
+Without --workdir, a collision-safe run ID is generated automatically.
+EOF
+}
+
+WORKDIR=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --workdir)
+            WORKDIR="${2:?--workdir requires a path}"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "[ERROR] Unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+if [[ -z "${WORKDIR}" ]]; then
+    WORKDIR="$(pingmesh_create_run_dir heterogeneous v0)"
+else
+    mkdir -p "${WORKDIR}"
+fi
 
 echo "============================================"
 echo "  Heterogeneous Propagation V0"

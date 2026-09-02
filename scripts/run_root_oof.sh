@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# PC-STGR paper experiment 05: deterministic Stage 1 versus a selectable
-# supervised or self-supervised-pretrained PC-STGR, followed by Stage 2 reranking.
-#
-# Neural scores are always computed from grouped out-of-fold predictions.
-# The final_model.pt checkpoint is trained only after OOF predictions are
-# complete and is never used to score those same cases.
+# Train deterministic and grouped-OOF PC-STGR root-cause rankers.
 
 set -euo pipefail
 
@@ -18,18 +13,58 @@ export LANG="${LANG:-C.UTF-8}"
 export LC_ALL="${LC_ALL:-C.UTF-8}"
 export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
 
-STAGE1_VARIANT="${2:-${PINGMESH_NEURAL_VARIANT}}"
+usage() {
+    cat <<'EOF'
+Usage: bash scripts/run_root_oof.sh [options]
+
+Options:
+  --variant supervised|self_supervised  Root model variant (default: supervised)
+  --workdir PATH                         Write into an existing workflow directory
+  --skip-preprocess                      Skip topology backfill (for full workflow)
+  -h, --help                             Show this help
+
+Without --workdir, a collision-safe run ID is generated automatically.
+EOF
+}
+
+STAGE1_VARIANT="${PINGMESH_NEURAL_VARIANT}"
+WORKDIR=""
+SKIP_PREPROCESS=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --variant)
+            STAGE1_VARIANT="${2:?--variant requires a value}"
+            shift 2
+            ;;
+        --workdir)
+            WORKDIR="${2:?--workdir requires a path}"
+            shift 2
+            ;;
+        --skip-preprocess)
+            SKIP_PREPROCESS=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "[ERROR] Unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
 case "${STAGE1_VARIANT}" in
     supervised)
         NEURAL_PIPELINE="Sys/RootCauseAnalyze/stage1/neural_pipeline.py"
         OOF_NAME="pc_stgr_oof"
-        STAGE2_NAME="pc_stgr_stage2"
         PRETRAIN_ARGS=()
         ;;
     self_supervised)
         NEURAL_PIPELINE="Sys/RootCauseAnalyze/stage1/neural_ssl_pipeline.py"
         OOF_NAME="pc_stgr_ssl_oof"
-        STAGE2_NAME="pc_stgr_ssl_stage2"
         PRETRAIN_ARGS=(
             --pretrain-epochs "${PINGMESH_NEURAL_PRETRAIN_EPOCHS}"
             --pretrain-learning-rate "${PINGMESH_NEURAL_PRETRAIN_LEARNING_RATE}"
@@ -45,7 +80,7 @@ case "${STAGE1_VARIANT}" in
         )
         ;;
     *)
-        echo "[ERROR] Stage 1 variant must be supervised or self_supervised: ${STAGE1_VARIANT}" >&2
+        echo "[ERROR] --variant must be supervised or self_supervised: ${STAGE1_VARIANT}" >&2
         exit 2
         ;;
 esac
@@ -55,13 +90,14 @@ python -c "import torch; print('PC-STGR torch:', torch.__version__)" || {
     exit 2
 }
 
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-RUN_TAG="${1:-paper_05_pc_stgr}_${TIMESTAMP}"
-WORKDIR="${PINGMESH_RESULTS}/${RUN_TAG}"
-mkdir -p "${WORKDIR}"
+if [[ -z "${WORKDIR}" ]]; then
+    WORKDIR="$(pingmesh_create_run_dir root "${STAGE1_VARIANT}")"
+else
+    mkdir -p "${WORKDIR}"
+fi
 
 echo "============================================"
-echo "  Paper Exp 05: PC-STGR"
+echo "  Root-cause OOF experiment"
 echo "  data:       ${PINGMESH_DATA}"
 echo "  raw data:   ${PINGMESH_RAW_DATA}"
 echo "  results:    ${WORKDIR}"
@@ -70,27 +106,29 @@ echo "  device:     ${PINGMESH_NEURAL_DEVICE}"
 echo "  variant:    ${STAGE1_VARIANT}"
 echo "============================================"
 
-echo
-echo "=== [topology] backfill and verify raw task_topo contexts ==="
-python Sys/Preprocess/backfill_topology_context.py \
-    --cases-root "${PINGMESH_DATA}" \
-    --raw-root "${PINGMESH_RAW_DATA}" \
-    --report "${WORKDIR}/topology_context_backfill_report.json" \
-    --write \
-    --require-complete
+if [[ "${SKIP_PREPROCESS}" == "0" ]]; then
+    echo
+    echo "=== [topology] backfill and verify raw task_topo contexts ==="
+    python Sys/Preprocess/backfill_topology_context.py \
+        --cases-root "${PINGMESH_DATA}" \
+        --raw-root "${PINGMESH_RAW_DATA}" \
+        --report "${WORKDIR}/topology_context_backfill_report.json" \
+        --write \
+        --require-complete
+fi
 
 echo
-echo "=== [deterministic] current topology + temporal fusion ==="
+echo "=== [deterministic] topology + temporal root baseline ==="
 python Sys/RootCauseAnalyze/stage1/pipeline.py \
     --data-root "${PINGMESH_DATA}" \
     --rankers topology temporal \
     --top-k "${PINGMESH_TOP_K}" \
     --weight-file "${PINGMESH_WEIGHTS_MANUAL}" \
-    --output-dir "${RUN_TAG}/deterministic"
+    --output-dir "${WORKDIR}/deterministic"
 python Sys/Score/Score_N.py "${WORKDIR}/deterministic/res.json"
 
 echo
-echo "=== [${OOF_NAME}] grouped out-of-fold PC-STGR Stage 1 (${STAGE1_VARIANT}) ==="
+echo "=== [${OOF_NAME}] grouped out-of-fold PC-STGR (${STAGE1_VARIANT}) ==="
 python "${NEURAL_PIPELINE}" crossval \
     --data-root "${PINGMESH_DATA}" \
     --output-dir "${WORKDIR}/${OOF_NAME}" \
@@ -111,77 +149,51 @@ python "${NEURAL_PIPELINE}" crossval \
     "${PRETRAIN_ARGS[@]}"
 python Sys/Score/Score_N.py "${WORKDIR}/${OOF_NAME}/res.json"
 
-echo
-echo "=== [${STAGE2_NAME}] OOF PC-STGR roots -> propagation-constrained reranking ==="
-python Sys/RootCauseAnalyze/propagation_pipeline.py \
-    --data-root "${PINGMESH_DATA}" \
-    --root-results "${WORKDIR}/${OOF_NAME}/res.json" \
-    --output-dir "${WORKDIR}/${STAGE2_NAME}" \
-    --top-k "${PINGMESH_NEURAL_STAGE2_TOP_K}" \
-    --weight-file "${PINGMESH_WEIGHTS_MANUAL}" \
-    --max-candidate-nodes "${PINGMESH_PROPAGATION_MAX_CANDIDATE_NODES}" \
-    --max-path-depth "${PINGMESH_PROPAGATION_MAX_PATH_DEPTH}" \
-    --stage1-weight "${PINGMESH_STAGE1_WEIGHT}"
-python Sys/Score/Score_N.py "${WORKDIR}/${STAGE2_NAME}/res.json"
-python Sys/Score/evaluate_propagation.py \
-    --predictions "${WORKDIR}/${STAGE2_NAME}/res.json" \
-    --selected-paths "${WORKDIR}/${STAGE2_NAME}/selected_propagation_paths.json" \
-    --out "${WORKDIR}/${STAGE2_NAME}/validity.json"
-
-export PINGMESH_NEURAL_EXPERIMENT_WORKDIR="${WORKDIR}"
-export PINGMESH_NEURAL_EXPERIMENT_VARIANT="${STAGE1_VARIANT}"
-export PINGMESH_NEURAL_EXPERIMENT_OOF_NAME="${OOF_NAME}"
-export PINGMESH_NEURAL_EXPERIMENT_STAGE2_NAME="${STAGE2_NAME}"
+export PINGMESH_ROOT_WORKDIR="${WORKDIR}"
+export PINGMESH_ROOT_VARIANT="${STAGE1_VARIANT}"
+export PINGMESH_ROOT_OOF_NAME="${OOF_NAME}"
 python - <<'PY'
 import csv
 import json
 import os
 from pathlib import Path
 
-workdir = Path(os.environ["PINGMESH_NEURAL_EXPERIMENT_WORKDIR"])
-variant = os.environ["PINGMESH_NEURAL_EXPERIMENT_VARIANT"]
-oof_name = os.environ["PINGMESH_NEURAL_EXPERIMENT_OOF_NAME"]
-stage2_name = os.environ["PINGMESH_NEURAL_EXPERIMENT_STAGE2_NAME"]
+workdir = Path(os.environ["PINGMESH_ROOT_WORKDIR"])
+variant = os.environ["PINGMESH_ROOT_VARIANT"]
+oof_name = os.environ["PINGMESH_ROOT_OOF_NAME"]
 rows = []
-for name in ("deterministic", oof_name, stage2_name):
-    path = workdir / name / "sum.json"
-    if not path.exists():
-        continue
-    summary = json.loads(path.read_text(encoding="utf-8"))
-    metrics = (summary.get("ranking_evaluation") or {}).get("ranking_metrics") or {}
+for name in ("deterministic", oof_name):
+    summary = json.loads((workdir / name / "sum.json").read_text(encoding="utf-8"))
+    metrics = summary["ranking_evaluation"]["ranking_metrics"]
     rows.append(
         {
             "experiment": name,
-            "stage1_variant": variant if name != "deterministic" else "deterministic",
-            "evaluation": "out_of_fold" if name != "deterministic" else "deterministic",
+            "variant": variant if name == oof_name else "deterministic",
+            "evaluation": "out_of_fold" if name == oof_name else "deterministic",
             "cases": metrics.get("Total Evaluated Cases", 0),
             "top1": metrics.get("Top-1 Acc (%)", 0),
             "top3": metrics.get("Top-3 Acc (%)", 0),
             "top5": metrics.get("Top-5 Acc (%)", 0),
+            "mrr": metrics.get("MRR", metrics.get("Mean Reciprocal Rank", 0)),
         }
     )
 
-validity_path = workdir / stage2_name / "validity.json"
-validity = json.loads(validity_path.read_text(encoding="utf-8")) if validity_path.exists() else None
 payload = {
     "workdir": str(workdir),
     "stage1_variant": variant,
-    "results": rows,
-    "stage2_validity": (validity or {}).get("validity"),
+    "root_results": str(workdir / oof_name / "res.json"),
     "final_checkpoint": str(workdir / oof_name / "final_model.pt"),
+    "results": rows,
 }
 (workdir / "summary.json").write_text(
     json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
 )
 with (workdir / "summary.csv").open("w", encoding="utf-8", newline="") as handle:
-    writer = csv.DictWriter(
-        handle,
-        fieldnames=("experiment", "stage1_variant", "evaluation", "cases", "top1", "top3", "top5"),
-    )
+    writer = csv.DictWriter(handle, fieldnames=tuple(rows[0]))
     writer.writeheader()
     writer.writerows(rows)
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
 
 echo
-echo "Paper Exp 05 completed: ${WORKDIR}"
+echo "Root-cause OOF experiment completed: ${WORKDIR}"

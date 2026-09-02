@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# 基线方法对比实验 — TraceRCA / NetEventCause / BiAn
+# 根因定位基线方法对比实验 — TraceRCA / NetEventCause / BiAn
 # 配置来自 scripts/common.sh
 #
 # 用法:
-#   ./scripts/run_baselines.sh
-#   PINGMESH_DATA=/path/to/data ./scripts/run_baselines.sh
+#   ./scripts/run_rca_baselines.sh
+#   PINGMESH_DATA=/path/to/data ./scripts/run_rca_baselines.sh
 # ============================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,9 +14,37 @@ export PINGMESH_PROJECT_ROOT="${PINGMESH_PROJECT_ROOT:-${PROJECT_ROOT}}"
 source "${SCRIPT_DIR}/common.sh"
 cd "${PROJECT_ROOT}"
 
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-WORKDIR="${PINGMESH_RESULTS}/baselines_${TIMESTAMP}"
-mkdir -p "${WORKDIR}"
+usage() {
+    cat <<'EOF'
+Usage: bash scripts/run_rca_baselines.sh [--workdir PATH]
+
+Without --workdir, a collision-safe run ID is generated automatically.
+EOF
+}
+
+WORKDIR=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --workdir)
+            WORKDIR="${2:?--workdir requires a path}"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "[ERROR] Unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+if [[ -z "${WORKDIR}" ]]; then
+    WORKDIR="$(pingmesh_create_run_dir rca baselines)"
+else
+    mkdir -p "${WORKDIR}"
+fi
 
 echo "============================================"
 echo "  基线对比实验"

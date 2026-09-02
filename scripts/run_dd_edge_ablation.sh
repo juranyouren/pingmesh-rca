@@ -10,9 +10,52 @@ export PINGMESH_PROJECT_ROOT="${PINGMESH_PROJECT_ROOT:-${PROJECT_ROOT}}"
 source "${SCRIPT_DIR}/common.sh"
 cd "${PROJECT_ROOT}"
 
-ROOT_RESULTS="${1:-}"
+usage() {
+    cat <<'EOF'
+Usage: bash scripts/run_dd_edge_ablation.sh --root-results PATH [options]
+
+Options:
+  --root-results PATH   Grouped-OOF root res.json (required)
+  --workdir PATH        Write into an existing workflow directory
+  --skip-preprocess     Skip topology backfill/equivalence preprocessing
+  -h, --help            Show this help
+
+Without --workdir, a collision-safe run ID is generated automatically.
+EOF
+}
+
+ROOT_RESULTS=""
+WORKDIR=""
+SKIP_PREPROCESS=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --root-results)
+            ROOT_RESULTS="${2:?--root-results requires a path}"
+            shift 2
+            ;;
+        --workdir)
+            WORKDIR="${2:?--workdir requires a path}"
+            shift 2
+            ;;
+        --skip-preprocess)
+            SKIP_PREPROCESS=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "[ERROR] Unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
 if [[ -z "${ROOT_RESULTS}" || ! -f "${ROOT_RESULTS}" ]]; then
-    echo "Usage: bash scripts/run_stage2_edge_probability_ablation.sh <stage1-res.json> [run-tag]" >&2
+    echo "[ERROR] --root-results must point to an existing res.json." >&2
+    usage >&2
     exit 2
 fi
 if [[ ! -d "${PINGMESH_PROPAGATION_LABELS_ROOT}" ]]; then
@@ -21,25 +64,28 @@ if [[ ! -d "${PINGMESH_PROPAGATION_LABELS_ROOT}" ]]; then
     exit 2
 fi
 
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-RUN_TAG="${2:-stage2_edge_probability}_${TIMESTAMP}"
-WORKDIR="${PINGMESH_RESULTS}/${RUN_TAG}"
-mkdir -p "${WORKDIR}"
+if [[ -z "${WORKDIR}" ]]; then
+    WORKDIR="$(pingmesh_create_run_dir dd_edge ablation)"
+else
+    mkdir -p "${WORKDIR}"
+fi
 
-echo "=== Backfill and verify raw topology contexts ==="
-python Sys/Preprocess/backfill_topology_context.py \
-    --cases-root "${PINGMESH_DATA}" \
-    --raw-root "${PINGMESH_RAW_DATA}" \
-    --report "${WORKDIR}/topology_context_backfill_report.json" \
-    --write \
-    --require-complete
+if [[ "${SKIP_PREPROCESS}" == "0" ]]; then
+    echo "=== Backfill and verify raw topology contexts ==="
+    python Sys/Preprocess/backfill_topology_context.py \
+        --cases-root "${PINGMESH_DATA}" \
+        --raw-root "${PINGMESH_RAW_DATA}" \
+        --report "${WORKDIR}/topology_context_backfill_report.json" \
+        --write \
+        --require-complete
 
-echo "=== Build evidence-free structural-equivalence sidecars ==="
-python Sys/Preprocess/build_structural_equivalence.py \
-    --cases-root "${PINGMESH_DATA}" \
-    --report "${WORKDIR}/topology_equivalence_report.json" \
-    --write \
-    --require-raw-topology
+    echo "=== Build evidence-free structural-equivalence sidecars ==="
+    python Sys/Preprocess/build_structural_equivalence.py \
+        --cases-root "${PINGMESH_DATA}" \
+        --report "${WORKDIR}/topology_equivalence_report.json" \
+        --write \
+        --require-raw-topology
+fi
 
 run_stage2() {
     local name="$1"

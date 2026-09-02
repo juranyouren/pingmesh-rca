@@ -1,9 +1,49 @@
-# Legacy and Device-Level Prototype Experiment Scripts
+# Experiment Scripts
 
 > The active paper method is the three-module heterogeneous root-and-propagation
 > graph design in `docs/论文方案.md`. A dependency-free heterogeneous V0 now runs
-> end to end without an external root input. The remaining scripts implement the
-> older device-level prototype and historical root-ranking baselines.
+> end to end without an external root input. The supervised root/DD experiment
+> now has one supported end-to-end entrypoint; focused runners remain available
+> for ablations and historical baselines.
+
+## Full root + propagation experiment
+
+Run preprocessing, grouped-OOF root training, grouped-OOF DD-edge training,
+propagation-graph reconstruction, and evaluation with one command:
+
+```bash
+bash scripts/run_full_experiment.sh
+```
+
+The run ID is generated automatically as
+`full_<variant>_<YYYYMMDD_HHMMSS>_<git-short-sha>`. If that directory already
+exists, `_01`, `_02`, and so on are appended. The latest run pointer is written
+to `$PINGMESH_RESULTS/latest_full_run.json`.
+
+Useful variants:
+
+```bash
+# Fold-local self-supervised pretraining before root fine-tuning
+bash scripts/run_full_experiment.sh --root-variant self_supervised
+
+# Include P0/P1 DD-edge probability ablations
+bash scripts/run_full_experiment.sh --with-edge-ablations
+
+# Also report metrics without structural-equivalence node aggregation
+bash scripts/run_full_experiment.sh --with-raw-node-metrics
+
+# Check paths, arguments, and resolved commands without training
+bash scripts/run_full_experiment.sh --dry-run
+
+# Continue a partially completed run; completed stages are skipped
+bash scripts/run_full_experiment.sh --resume "$PINGMESH_RESULTS/<full-run-dir>"
+```
+
+The main output is `summary.json`: root Top-1/Top-3/Top-5/MRR plus propagation
+DD-edge F1 and node F1. The full predicted graph is stored at
+`propagation/p4/selected_propagation_paths.json`; detailed per-case components
+are stored in `evaluation/p4.json`. Each stage has a log and a completion marker,
+so a failed run can resume without retraining completed stages.
 
 ## Runnable heterogeneous V0
 
@@ -24,14 +64,15 @@ python Sys/RootCauseAnalyze/heterogeneous_propagation_pipeline.py \
 Run all discoverable cases:
 
 ```bash
-bash scripts/run_heterogeneous_propagation_v0.sh
+bash scripts/run_heterogeneous_v0.sh
 ```
 
 The command never reads `label.json` or a root-result file. It writes compact
 case summaries to `res.json` and full graphs to `heterogeneous_graphs.json`.
 The wrapper first backfills and verifies raw topology contexts. Set
 `PINGMESH_HETERO_BACKFILL_TOPOLOGY=0` only when the sidecars have already been
-verified. The first positional argument changes the run tag.
+verified. Run IDs are generated automatically; `--workdir` is reserved for a
+parent workflow that needs to control the output directory.
 
 `scripts/common.sh` is the single source of server paths, model settings, NPU
 cards, and default Top-K values. Override it with environment variables instead
@@ -44,10 +85,11 @@ files whose `full_link.task_topo.value` corresponds to `PINGMESH_DATA` cases.
 
 | Script | Purpose |
 | --- | --- |
-| `run_heterogeneous_propagation_v0.sh` | Active root-input-free heterogeneous V0: topology backfill, Device/Event/Symptom construction, bounded joint root/DAG reconstruction, and full graph artifacts. |
-| `run_paper_05_pc_stgr.sh` | Legacy-compatible runner that generates optional PC-STGR candidates and then invokes propagation reconstruction; not the paper's main experiment definition. |
-| `run_stage2_edge_probability_ablation.sh` | Compare P0, P1 Logit/Softmax, and leakage-safe P4 supervised edge probabilities with one replaceable root-candidate file. |
-| `run_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
+| `run_full_experiment.sh` | One entrypoint for preprocessing, root OOF, DD-edge OOF, propagation-graph reconstruction, and all requested metrics. |
+| `run_heterogeneous_v0.sh` | Active root-input-free heterogeneous V0: topology backfill, Device/Event/Symptom construction, bounded joint root/DAG reconstruction, and full graph artifacts. |
+| `run_root_oof.sh` | Deterministic root baseline plus supervised or self-supervised PC-STGR grouped OOF training. |
+| `run_dd_edge_ablation.sh` | Compare P0, P1 Logit/Softmax, and leakage-safe P4 supervised edge probabilities with one replaceable root-candidate file. |
+| `run_rca_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
 | `../Sys/RootCauseAnalyze/stage1/neural_pipeline.py` | Current PC-STGR OOF training and label-free inference implementation. |
 | `../Sys/RootCauseAnalyze/stage1/neural_ssl_pipeline.py` | Optional fold-local self-supervised pretraining, supervised fine-tuning, OOF evaluation, and label-free inference. |
@@ -64,47 +106,46 @@ runtime or supported comparison workflow.
 PC-STGR is an available **supporting root-candidate generator**, not the active
 paper method. Its historical implementation contract is recorded in
 `docs/PC-STGR设计方案.md`; the active paper plan is `docs/论文方案.md`. The current
-`stage1/neural_*` code and `run_paper_05_pc_stgr.sh` implement PC-STGR. A new
+`stage1/neural_*` code and `run_root_oof.sh` implement PC-STGR. A new
 grouped OOF run is still required for any candidate-quality claim; do not rename
 the historical IC-STGR 73.58/93.71/97.48 Top-1/Top-3/Top-5 result as PC-STGR or
 as a propagation-graph result.
 
-Run the compatibility end-to-end workflow in the server PyTorch environment:
+Run the root-candidate workflow in the server PyTorch environment:
 
 ```bash
-bash scripts/run_paper_05_pc_stgr.sh
+bash scripts/run_root_oof.sh
 ```
 
 The default remains the original supervised PC-STGR. Select the optional
 self-supervised-pretrained variant with either form:
 
 ```bash
-bash scripts/run_paper_05_pc_stgr.sh paper_05_pc_stgr_ssl self_supervised
+bash scripts/run_root_oof.sh --variant self_supervised
 
 # Equivalent environment-variable form
 PINGMESH_NEURAL_VARIANT=self_supervised \
-  bash scripts/run_paper_05_pc_stgr.sh paper_05_pc_stgr_ssl
+  bash scripts/run_root_oof.sh
 ```
 
 PC-STGR-SSL pretrains only on the current fold's training cases reloaded without
 labels, then fine-tunes on their root labels. Validation-fold cases are excluded
 from the vocabulary and pretraining data.
 
-It produces three compatibility rows:
+It produces two root-ranking rows:
 
 - `deterministic`: topology + temporal white-box baseline;
-- `pc_stgr_oof`: grouped OOF PC-STGR predictions;
-- `pc_stgr_stage2`: the same OOF candidates after Stage 2 reranking.
+- `pc_stgr_oof`: grouped OOF PC-STGR predictions.
 
 The run directory contains `summary.json`, `summary.csv`, fold checkpoints,
-training histories, OOF `res.json`, Stage 2 validity metrics, and
+training histories, OOF `res.json`, and
 `pc_stgr_oof/final_model.pt`. Candidate-ranking scores must use
 `pc_stgr_oof/res.json`; the final model is trained on all labeled cases only for
-later unseen-case inference. These rows do not constitute the
-propagation-reconstruction main table.
+later unseen-case inference. Use `run_full_experiment.sh` to feed those OOF
+predictions into propagation reconstruction and joint reporting.
 
 When `self_supervised` is selected, the corresponding directories are
-`pc_stgr_ssl_oof` and `pc_stgr_ssl_stage2`, and the checkpoint is stored as
+`pc_stgr_ssl_oof`, and the checkpoint is stored as
 `pc_stgr_ssl_oof/final_model.pt`. Self-supervised hyperparameters are configured
 through the `PINGMESH_NEURAL_PRETRAIN_*` variables in `scripts/common.sh`.
 
@@ -248,14 +289,14 @@ label-free inference:
 
 ```bash
 export PINGMESH_PROPAGATION_LABELS_ROOT=/path/to/propagation_labels
-bash scripts/run_stage2_edge_probability_ablation.sh \
-  "$PINGMESH_RESULTS/<paper_05_run>/pc_stgr_oof/res.json"
+bash scripts/run_dd_edge_ablation.sh \
+  --root-results "$PINGMESH_RESULTS/<root-run>/pc_stgr_oof/res.json"
 ```
 
 ## Baselines
 
 ```bash
-bash scripts/run_baselines.sh
+bash scripts/run_rca_baselines.sh
 ```
 
 TraceRCA and NetEventCause are local statistical runs. BiAn additionally needs
