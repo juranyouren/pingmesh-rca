@@ -6,7 +6,7 @@ import math
 import os
 import random
 from collections import Counter, defaultdict, deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from Sys.RootCauseAnalyze.stage1.alarm_topology_ranker import parse_endpoint_ips
@@ -89,6 +89,73 @@ class PathConditionedGraph:
     root_device_position: int | None
     diagnostics: Dict[str, Any]
     edge_feature_dim: int = EDGE_FEATURE_DIM
+
+
+def condition_graph_on_propagation_dag(
+    graph: PathConditionedGraph,
+    selected_edges: Iterable[Tuple[str, str]],
+    *,
+    candidate_root: str | None = None,
+) -> PathConditionedGraph:
+    """Replace soft propagation probabilities with a candidate-specific hard DAG mask.
+
+    A selected local direction is encoded as ``[1, 0, 0]`` and the reverse
+    message-passing edge observes ``[0, 1, 0]``.  Unselected physical edges and
+    all non-physical relations receive ``[0, 0, 0]``: this is an explicit mask,
+    not a synthetic No-Direct label.
+    """
+
+    selected = {
+        (str(source), str(target))
+        for source, target in selected_edges
+        if source and target and str(source) != str(target)
+    }
+    device_by_node = {
+        int(node_index): str(ip)
+        for node_index, ip in zip(graph.device_indices, graph.device_ips)
+    }
+    conditioned_features: List[List[float]] = []
+    matched: set[Tuple[str, str]] = set()
+    for source, target, relation, raw_features in zip(
+        graph.edge_sources,
+        graph.edge_targets,
+        graph.edge_types,
+        graph.edge_features,
+    ):
+        row = (list(raw_features) + [0.0] * PROPAGATION_EDGE_FEATURE_DIM)[
+            :PROPAGATION_EDGE_FEATURE_DIM
+        ]
+        row[2:] = [0.0, 0.0, 0.0]
+        source_ip = device_by_node.get(int(source))
+        target_ip = device_by_node.get(int(target))
+        if (
+            relation in {REL_PHYSICAL_FORWARD, REL_PHYSICAL_REVERSE}
+            and source_ip
+            and target_ip
+        ):
+            if (source_ip, target_ip) in selected:
+                row[2] = 1.0
+                matched.add((source_ip, target_ip))
+            elif (target_ip, source_ip) in selected:
+                row[3] = 1.0
+                matched.add((target_ip, source_ip))
+        conditioned_features.append(row)
+
+    diagnostics = {
+        **dict(graph.diagnostics),
+        "candidate_conditioned_propagation_graph": True,
+        "candidate_root": candidate_root,
+        "hard_selected_edge_count": len(selected),
+        "hard_matched_edge_count": len(matched),
+        "hard_unmatched_edge_count": len(selected - matched),
+        "hard_no_direct_channel_policy": "zero_mask",
+    }
+    return replace(
+        graph,
+        edge_features=conditioned_features,
+        diagnostics=diagnostics,
+        edge_feature_dim=PROPAGATION_EDGE_FEATURE_DIM,
+    )
 
 
 class EventVocabulary:

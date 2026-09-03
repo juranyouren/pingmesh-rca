@@ -204,6 +204,21 @@ x_edge_aug = [signed_lag, absolute_lag,
 掩码，不能写成 `p(No Direct)=1`。此增强由
 `--include-propagation-edge-probabilities` 显式启用，原两维 PC-STGR 仍是对照组。
 
+### 6.4 候选条件硬传播图输入
+
+在候选验证实验中，网络先使用 6.3 的软概率边产生 Top-K。对每个候选根恢复
+一张传播 DAG 后，复用同一个五维边接口，但后三维改为候选条件硬 mask：
+
+```text
+selected source→target : [1, 0, 0]
+selected target→source : [0, 1, 0]
+unselected / unknown   : [0, 0, 0]
+```
+
+第三个 No-Direct 通道在硬图阶段固定为零；未选中不能解释为负标签。每个候选
+硬图分别进入 PC-STGR，候选自身相对最强竞争设备的 logit margin 作为验证分数。
+该表示保持物理拓扑和节点/事件输入不变，只替换根条件传播方向通道。
+
 ## 7. 统一 24 维节点数值特征
 
 Device 和 Event 使用同一个 24 维数值空间，但占用不同区域：

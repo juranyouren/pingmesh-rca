@@ -12,6 +12,7 @@ from Sys.RootCauseAnalyze.stage1.neural_graph import (
     GraphBuildConfig,
     PathConditionedGraphBuilder,
     RawCase,
+    condition_graph_on_propagation_dag,
 )
 from Sys.RootCauseAnalyze.stage1.neural_pipeline import build_parser as stage1_parser
 from Sys.RootCauseAnalyze.propagation_pipeline import _rankings_from_record
@@ -115,6 +116,36 @@ def test_stage1_probability_feature_flag_preserves_original_contract():
     assert graph.edge_feature_dim == EDGE_FEATURE_DIM
     assert all(len(row) == EDGE_FEATURE_DIM for row in graph.edge_features)
     assert args.include_propagation_edge_probabilities is True
+
+
+def test_candidate_conditioned_graph_uses_hard_direction_mask():
+    case = _case()
+    vocabulary = EventVocabulary.fit([case], max_size=8)
+    base_graph = PathConditionedGraphBuilder(vocabulary).build(
+        case, include_labels=False
+    )
+
+    graph = condition_graph_on_propagation_dag(
+        base_graph,
+        [("D1", "D2")],
+        candidate_root="D1",
+    )
+
+    assert graph.edge_feature_dim == PROPAGATION_EDGE_FEATURE_DIM
+    assert _physical_features(graph, REL_PHYSICAL_FORWARD) == [
+        [0.0, 0.0, 1.0, 0.0, 0.0]
+    ]
+    assert _physical_features(graph, REL_PHYSICAL_REVERSE) == [
+        [0.0, 0.0, 0.0, 1.0, 0.0]
+    ]
+    assert all(
+        features[2:] == [0.0, 0.0, 0.0]
+        for relation, features in zip(graph.edge_types, graph.edge_features)
+        if relation not in {REL_PHYSICAL_FORWARD, REL_PHYSICAL_REVERSE}
+    )
+    assert graph.diagnostics["candidate_root"] == "D1"
+    assert graph.diagnostics["hard_selected_edge_count"] == 1
+    assert graph.diagnostics["hard_matched_edge_count"] == 1
 
 
 def test_propagation_pipeline_consumes_learned_reranking_first():
@@ -237,3 +268,59 @@ def test_statistical_reranker_extracts_candidate_graph_quality():
     )
     assert [row["ip"] for row in output] == ["D1", "D2"]
     assert all(math.isclose(row["reranker_delta"], 0.0, abs_tol=1e-7) for row in output)
+
+
+def test_candidate_graph_verifier_scores_candidate_self_consistency():
+    torch = pytest.importorskip("torch")
+    from Sys.RootCauseAnalyze.stage1.candidate_graph_verifier import (
+        CandidateConditionedGraphVerifier,
+        CandidateGraphExample,
+        CandidateGraphView,
+        VerifierModelConfig,
+        predict_example,
+        score_example,
+    )
+
+    case = _case()
+    vocabulary = EventVocabulary.fit([case], max_size=8)
+    base_graph = PathConditionedGraphBuilder(vocabulary).build(
+        case, include_labels=False
+    )
+    d1_graph = condition_graph_on_propagation_dag(
+        base_graph, [("D1", "D2")], candidate_root="D1"
+    )
+    # Deliberately give D2 the D1-rooted graph: the verifier should reject it.
+    d2_graph = condition_graph_on_propagation_dag(
+        base_graph, [("D1", "D2")], candidate_root="D2"
+    )
+
+    class SelectedSourceBackbone(torch.nn.Module):
+        def forward(self, batch):
+            logits = torch.zeros(
+                len(base_graph.device_ips),
+                dtype=batch["edge_features"].dtype,
+                device=batch["edge_features"].device,
+            )
+            selected = batch["edge_features"][:, 2]
+            logits.index_add_(0, batch["edge_sources"], selected)
+            return logits
+
+    model = CandidateConditionedGraphVerifier(
+        SelectedSourceBackbone(),
+        VerifierModelConfig(max_correction_scale=2.0, gate_init=1.0),
+    )
+    example = CandidateGraphExample(
+        dirpath=case.dirpath,
+        gt_ip="D1",
+        candidates=[
+            CandidateGraphView("D1", 1, 0.5, 0.0, d1_graph, 0),
+            CandidateGraphView("D2", 2, 0.5, 0.0, d2_graph, 1),
+        ],
+    )
+    outputs = score_example(model, example, torch.device("cpu"))
+    rankings = predict_example(model, example, torch.device("cpu"))
+
+    assert outputs["verification_margins"].tolist() == pytest.approx([1.0, -1.0])
+    assert rankings[0]["ip"] == "D1"
+    assert rankings[0]["verification_top1"] is True
+    assert rankings[1]["verification_top1"] is False

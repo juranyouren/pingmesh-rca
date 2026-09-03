@@ -216,6 +216,35 @@ the learned order and disables the legacy hand-weighted reranking for that case.
 This experiment remains separate from the approved deterministic P0 paper
 method until its grouped-OOF improvement is established.
 
+### Candidate-conditioned propagation-graph verifier
+
+`candidate_graph_verifier_pipeline.py` implements the stronger K-pass design.
+The probability-edge PC-STGR first produces Top-K candidates. For every
+candidate root, P0 recovers a root-conditioned propagation DAG and replaces the
+soft probability triplet with a hard directional mask: a selected direction is
+`[1,0,0]`, its reverse view is `[0,1,0]`, and every unselected edge is
+`[0,0,0]`. The PC-STGR verifier then runs once per candidate. Its verification
+score is the candidate device logit minus the strongest competing device logit.
+A learned bounded gate combines this margin with the original Stage-1 logit.
+
+To reuse the probability-edge results produced by the earlier ablation:
+
+```bash
+bash scripts/run_candidate_graph_verifier_ablation.sh \
+  --variant self_supervised \
+  --base-stage1-dir "$OLD_RUN/pc_stgr_base" \
+  --edge-stage1-dir "$OLD_RUN/pc_stgr_edge_prob"
+```
+
+Without the two reuse options, the script trains both Stage-1 controls first.
+It compares the base model, the probability-edge candidate generator, a frozen
+PC-STGR verifier, and a fully fine-tuned verifier. Outputs include
+`summary.json/csv`, fold checkpoints, `candidate_graph_audit.json`, self-Top-1
+rates for true and false candidate views, verification margins, corrections,
+and corruptions. OOF folds and Stage-1 fold checkpoints are checked for exact
+agreement. Runtime `infer` only reads raw case evidence, Stage-1 predictions,
+and the saved verifier checkpoint; it does not read root labels.
+
 ## Active root-conditioned graph-rebuild workflow
 
 The active implementation first builds one device-level,
