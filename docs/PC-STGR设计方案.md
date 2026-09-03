@@ -190,6 +190,20 @@ absolute_time_lag = min(|Δt| / 600,000, 1)
 
 反向时间边翻转第一维符号，第二维保持不变。物理边和 Event–Device 归属边使用 `[0,0]`，由关系 ID 区分语义。
 
+### 6.3 可选的根无关传播概率边特征
+
+传播增强消融在原两维之后追加 P0/M1 的根无关三状态概率：
+
+```text
+x_edge_aug = [signed_lag, absolute_lag,
+              p(source→target), p(target→source), p(No Direct)] ∈ R⁵
+```
+
+该三元组只添加到 Device–Device 物理边，并按当前有向边交换正反方向。
+其他关系后三维为零；不在 M1 候选图中的物理关系属于 `unknown`，同样使用全零
+掩码，不能写成 `p(No Direct)=1`。此增强由
+`--include-propagation-edge-probabilities` 显式启用，原两维 PC-STGR 仍是对照组。
+
 ## 7. 统一 24 维节点数值特征
 
 Device 和 Event 使用同一个 24 维数值空间，但占用不同区域：
@@ -359,7 +373,7 @@ flowchart TB
     end
 
     subgraph G["两层关系感知图编码"]
-        EDGE["边索引 E；关系ID E；边特征 E×2"] --> A1["注意力层1：4头×16维"]
+        EDGE["边索引 E；关系ID E；边特征 E×2 / 可选 E×5"] --> A1["注意力层1：4头×16维"]
         H0 --> A1
         A1 --> H1["H¹ ∈ R^(N×64)"]
         EDGE --> A2["注意力层2：4头×16维"]
@@ -409,7 +423,7 @@ flowchart TB
 | `edge_sources` | `E` | 边起点 |
 | `edge_targets` | `E` | 边终点 |
 | `edge_types` | `E` | 8 类关系 ID |
-| `edge_features` | `E×2` | 时间边数值特征 |
+| `edge_features` | `E×2` 或 `E×5` | 时间特征；增强消融追加根无关三状态概率 |
 | `device_indices` | `D` | Device 在节点数组中的位置 |
 | `root_position` | 标量 | 训练时唯一根因位置 `y` |
 
@@ -684,7 +698,7 @@ PC-STGR。
 
 1. 图节点类型为 Device、Event 两类；
 2. 关系类型为 8 类；
-3. 边数值特征为 2 维；
+3. 基线边数值特征为 2 维，传播概率增强消融为 5 维；
 4. 节点数值特征保持统一 24 维；
 5. 节点类型使用固定 2 维 one-hot；
 6. 事件名称 Embedding 默认 16 维；
@@ -697,7 +711,12 @@ PC-STGR。
 13. 论文实验脚本已切换到独立的 `pc_stgr_oof` 和 `pc_stgr_stage2` 目录；
 14. 训练标签读取和 `Score_N` 评测统一为每个 case 一个根因设备；
 15. 新增独立的 PC-STGR-SSL 模型与无泄漏 OOF 流水线，原网络及其默认入口保持不变；
-16. 兼容实验脚本可通过 `supervised` / `self_supervised` 选择候选排序变体。
+16. 兼容实验脚本可通过 `supervised` / `self_supervised` 选择候选排序变体；
+17. 新增根无关三状态边概率开关；
+18. 新增候选传播图统计特征的 residual listwise MLP，并保存 fold-local
+    Stage-1 训练侧预测，避免重排器外折评价读取验证事件的训练信息；
+19. `scripts/run_root_graph_ablation.sh` 统一比较原模型、边概率增强、仅分数
+    MLP 控制组、传播图 MLP 和组合模型。
 
 仍需在服务器 PyTorch/NPU 环境完成：
 
@@ -705,6 +724,8 @@ PC-STGR。
 2. 分别重新执行 PC-STGR 与 PC-STGR-SSL grouped 5-fold OOF；
 3. 生成两种方案各自的 Top-1/Top-3/Top-5/MRR；
 4. 将两种 PC-STGR 新结果与历史 IC-STGR 结果分开报告。
+5. 运行根无关概率与传播图统计 MLP 的五项 grouped-OOF 消融，并报告
+   correction、corruption、Top-K candidate recall、NLL 与 Brier。
 
 ## 18. 方法边界
 

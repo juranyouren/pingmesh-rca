@@ -31,7 +31,19 @@ RELATION_COUNT = 8
 
 NODE_FEATURE_DIM = 24
 NODE_TYPE_FEATURE_DIM = 2
+# The first two values retain the original temporal-lag contract.  The optional
+# final three values are root-independent propagation state probabilities in
+# the local edge orientation: source->target, target->source, and no-direct.
 EDGE_FEATURE_DIM = 2
+PROPAGATION_EDGE_FEATURE_DIM = 5
+
+
+def edge_feature_dim(include_propagation_probabilities: bool) -> int:
+    return (
+        PROPAGATION_EDGE_FEATURE_DIM
+        if include_propagation_probabilities
+        else EDGE_FEATURE_DIM
+    )
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,9 @@ class GraphBuildConfig:
     max_neighbor_lag_ms: int = 600_000
     corridor_slack_hops: int = 2
     max_event_vocab: int = 256
+    include_propagation_edge_probabilities: bool = False
+    propagation_probability_method: str = "deterministic_evidence_v1"
+    propagation_max_candidate_nodes: int = 80
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -73,6 +88,7 @@ class PathConditionedGraph:
     device_ips: List[str]
     root_device_position: int | None
     diagnostics: Dict[str, Any]
+    edge_feature_dim: int = EDGE_FEATURE_DIM
 
 
 class EventVocabulary:
@@ -396,6 +412,89 @@ def _distance_feature(distance: int | None) -> float:
     return 1.0 / (1.0 + distance) if distance is not None else 0.0
 
 
+_PROPAGATION_PROBABILITY_CACHE: Dict[
+    Tuple[str, str, int], Tuple[Dict[Tuple[str, str], List[float]], Dict[str, Any]]
+] = {}
+
+
+def _root_independent_edge_probabilities(
+    case: RawCase,
+    config: GraphBuildConfig,
+) -> Tuple[Dict[Tuple[str, str], List[float]], Dict[str, Any]]:
+    """Build orientation-aware M1 probabilities without consulting root labels."""
+
+    method = str(config.propagation_probability_method or "deterministic_evidence_v1")
+    if method not in {"deterministic_evidence_v1", "logit_softmax_v1"}:
+        raise ValueError(
+            "PC-STGR propagation edge features support deterministic_evidence_v1 "
+            "or logit_softmax_v1; supervised edge models require an explicit "
+            "fold-local model and are not accepted by this graph builder"
+        )
+    cache_key = (
+        case_fingerprint(case),
+        method,
+        max(1, int(config.propagation_max_candidate_nodes)),
+    )
+    cached = _PROPAGATION_PROBABILITY_CACHE.get(cache_key)
+    if cached is not None:
+        probabilities, diagnostics = cached
+        return dict(probabilities), dict(diagnostics)
+
+    # Lazy imports keep the deterministic Stage-1 baseline independent from
+    # the propagation package when the feature flag is disabled.
+    from Sys.RootCauseAnalyze.propagation.m1 import reconstruct_hypothesis_graph
+    from Sys.RootCauseAnalyze.propagation.schema import PropagationConfig
+    from Sys.RootCauseAnalyze.propagation.topology_context import load_topology_context
+
+    topology_context = load_topology_context(
+        case.dirpath,
+        node_list=case.nodes,
+        info=case.info,
+    )
+    hypothesis_graph = reconstruct_hypothesis_graph(
+        nodes=case.nodes,
+        info=case.info,
+        topology_context=topology_context,
+        config=PropagationConfig(
+            max_candidate_nodes=max(1, int(config.propagation_max_candidate_nodes)),
+            edge_probability_method=method,
+        ),
+    )
+    by_orientation: Dict[Tuple[str, str], List[float]] = {}
+    for raw_pair in hypothesis_graph.get("edge_hypotheses", []):
+        if not isinstance(raw_pair, Mapping):
+            continue
+        endpoint_a = str(raw_pair.get("endpoint_a", "") or "")
+        endpoint_b = str(raw_pair.get("endpoint_b", "") or "")
+        state = raw_pair.get("state_probabilities", {})
+        if not endpoint_a or not endpoint_b or not isinstance(state, Mapping):
+            continue
+        forward = max(0.0, min(1.0, _safe_float(state.get("endpoint_a_to_b"))))
+        reverse = max(0.0, min(1.0, _safe_float(state.get("endpoint_b_to_a"))))
+        no_direct = max(
+            0.0,
+            min(1.0, _safe_float(state.get("no_direct_propagation"))),
+        )
+        by_orientation[(endpoint_a, endpoint_b)] = [forward, reverse, no_direct]
+        by_orientation[(endpoint_b, endpoint_a)] = [reverse, forward, no_direct]
+
+    summary = hypothesis_graph.get("summary", {})
+    diagnostics = {
+        "propagation_probability_method": method,
+        "propagation_probability_pair_count": len(by_orientation) // 2,
+        "propagation_probability_raw_topology_available": bool(
+            summary.get("raw_topology_available", False)
+        )
+        if isinstance(summary, Mapping)
+        else False,
+    }
+    _PROPAGATION_PROBABILITY_CACHE[cache_key] = (
+        dict(by_orientation),
+        dict(diagnostics),
+    )
+    return by_orientation, diagnostics
+
+
 class PathConditionedGraphBuilder:
     def __init__(
         self,
@@ -412,6 +511,23 @@ class PathConditionedGraphBuilder:
         device_ips, node_by_ip, physical_edges = _resolve_topology(case.nodes)
         if not device_ips:
             raise ValueError(f"case has no device nodes: {case.dirpath}")
+
+        propagation_probabilities: Dict[Tuple[str, str], List[float]] = {}
+        propagation_diagnostics: Dict[str, Any] = {
+            "propagation_edge_probabilities_enabled": bool(
+                self.config.include_propagation_edge_probabilities
+            ),
+            "propagation_probability_pair_count": 0,
+        }
+        if self.config.include_propagation_edge_probabilities:
+            (
+                propagation_probabilities,
+                probability_diagnostics,
+            ) = _root_independent_edge_probabilities(case, self.config)
+            propagation_diagnostics.update(probability_diagnostics)
+        current_edge_feature_dim = edge_feature_dim(
+            self.config.include_propagation_edge_probabilities
+        )
 
         ip_to_position = {ip: index for index, ip in enumerate(device_ips)}
         adjacency: Dict[str, List[str]] = {ip: [] for ip in device_ips}
@@ -522,14 +638,30 @@ class PathConditionedGraphBuilder:
             edge_sources.append(source)
             edge_targets.append(target)
             edge_types.append(relation)
-            row = list(features or [0.0] * EDGE_FEATURE_DIM)
-            edge_features.append((row + [0.0] * EDGE_FEATURE_DIM)[:EDGE_FEATURE_DIM])
+            row = list(features or [0.0] * current_edge_feature_dim)
+            edge_features.append(
+                (row + [0.0] * current_edge_feature_dim)[:current_edge_feature_dim]
+            )
 
         for source_ip, target_ip in physical_edges:
             source = ip_to_position[source_ip]
             target = ip_to_position[target_ip]
-            add_edge(source, target, REL_PHYSICAL_FORWARD)
-            add_edge(target, source, REL_PHYSICAL_REVERSE)
+            forward_features = [0.0] * EDGE_FEATURE_DIM
+            reverse_features = [0.0] * EDGE_FEATURE_DIM
+            if self.config.include_propagation_edge_probabilities:
+                # A pair missing from the candidate hypothesis graph is unknown,
+                # not a negative example. All-zero is the explicit feature mask;
+                # an observed no-direct state is represented by its probability.
+                forward_state = propagation_probabilities.get(
+                    (source_ip, target_ip), [0.0, 0.0, 0.0]
+                )
+                reverse_state = propagation_probabilities.get(
+                    (target_ip, source_ip), [0.0, 0.0, 0.0]
+                )
+                forward_features.extend(forward_state)
+                reverse_features.extend(reverse_state)
+            add_edge(source, target, REL_PHYSICAL_FORWARD, forward_features)
+            add_edge(target, source, REL_PHYSICAL_REVERSE, reverse_features)
 
         for ip in device_ips:
             device_index = ip_to_position[ip]
@@ -599,7 +731,9 @@ class PathConditionedGraphBuilder:
                 "sink_anchor_count": len(sink_anchors),
                 "corridor_device_count": len(corridor),
                 "label_coverage": root_position is not None if include_labels else None,
+                **propagation_diagnostics,
             },
+            edge_feature_dim=current_edge_feature_dim,
         )
 
 

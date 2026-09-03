@@ -171,6 +171,51 @@ All supported result writers expose `ranked_ips`; Stage 1 also emits
 adds `final_root_rankings`. `Score_N.py` stores direct ranking metrics under
 `ranking_evaluation` and parsed response metrics under `response_evaluation`.
 
+### Propagation-augmented root-ranking ablation
+
+Two optional, independently switchable root-ranking additions are available:
+
+1. `--include-propagation-edge-probabilities` appends the root-independent
+   `A->B / B->A / No Direct` probability triplet to each oriented physical edge
+   in PC-STGR. Missing candidate relations are all-zero masked, not negatives.
+2. `propagation_reranker_pipeline.py` reconstructs one P0 DAG per Stage-1 Top-K
+   root, extracts auditable graph statistics, and trains a small residual MLP
+   with an incident-listwise softmax loss. Each outer reranker fold trains on
+   predictions from the corresponding Stage-1 outer-training model and evaluates
+   only its OOF Stage-1 validation predictions; epoch selection stays inside the
+   outer training partition.
+
+Run the five-way grouped-OOF ablation with identical folds and seeds:
+
+```bash
+source scripts/common.sh
+bash scripts/run_root_graph_ablation.sh --variant supervised
+```
+
+The run compares the original PC-STGR, edge-probability PC-STGR, a
+Stage-1-score-only MLP control, the full propagation-statistics MLP, and the
+combined model, then writes `summary.json/csv`. The score-only MLP separates
+ordinary score recalibration from incremental propagation-graph information.
+MLP directories also
+contain `candidate_features.json`, fold checkpoints, `final_model.pt`, and a
+training summary with candidate recall, correction/corruption counts, NLL, and
+Brier score. The MLP requires only root labels; propagation labels are not read.
+
+For later label-free inference:
+
+```bash
+python Sys/RootCauseAnalyze/stage1/propagation_reranker_pipeline.py infer \
+  --data-root "$PINGMESH_DATA" \
+  --root-results ROOT_RESULTS/res.json \
+  --checkpoint RERANKER/final_model.pt \
+  --output-dir RERANKED_ROOT_RESULTS
+```
+
+When `propagation_pipeline.py` consumes `reranked_root_rankings`, it preserves
+the learned order and disables the legacy hand-weighted reranking for that case.
+This experiment remains separate from the approved deterministic P0 paper
+method until its grouped-OOF improvement is established.
+
 ## Active root-conditioned graph-rebuild workflow
 
 The active implementation first builds one device-level,

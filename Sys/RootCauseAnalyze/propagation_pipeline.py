@@ -77,6 +77,11 @@ def _edge_model_for_case(manifest: Mapping[str, Any], dirpath: str) -> str | Non
 def _rankings_from_record(record: Mapping[str, Any] | None) -> List[Dict[str, Any]]:
     if not record:
         return []
+    reranked = record.get("reranked_root_rankings")
+    if isinstance(reranked, list):
+        canonical = [dict(item) for item in reranked if isinstance(item, Mapping)]
+        if canonical:
+            return canonical
     initial = record.get("initial_root_rankings")
     if isinstance(initial, list):
         canonical = [dict(item) for item in initial if isinstance(item, Mapping)]
@@ -165,6 +170,13 @@ def run_propagation_pipeline(
                     ]
             topology_context = load_topology_context(dirpath, node_list=nodes, info=info)
             case_config = cfg
+            if previous_record and isinstance(
+                previous_record.get("reranked_root_rankings"), list
+            ):
+                # The learned propagation-statistics network has already used
+                # all candidate DAGs. Preserve its calibrated order instead of
+                # applying the legacy hand-weighted graph reranker a second time.
+                case_config = replace(case_config, stage1_weight=1.0)
             if edge_manifest:
                 model_path = _edge_model_for_case(edge_manifest, dirpath)
                 if not model_path:

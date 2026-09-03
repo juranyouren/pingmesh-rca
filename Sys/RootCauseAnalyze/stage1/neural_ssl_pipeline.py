@@ -53,6 +53,9 @@ def _graph_config(args: argparse.Namespace) -> GraphBuildConfig:
         max_neighbor_lag_ms=args.max_neighbor_lag_ms,
         corridor_slack_hops=args.corridor_slack_hops,
         max_event_vocab=args.max_event_vocab,
+        include_propagation_edge_probabilities=args.include_propagation_edge_probabilities,
+        propagation_probability_method=args.propagation_probability_method,
+        propagation_max_candidate_nodes=args.propagation_max_candidate_nodes,
     )
 
 
@@ -64,6 +67,7 @@ def _model_config(args: argparse.Namespace):
         layers=args.layers,
         dropout=args.dropout,
         event_embedding_dim=args.event_embedding_dim,
+        use_propagation_edge_probabilities=args.include_propagation_edge_probabilities,
     )
 
 
@@ -190,6 +194,24 @@ def _without_labels(
     return result
 
 
+def _inner_case_split(
+    cases: Sequence[RawCase], *, seed: int
+) -> tuple[List[RawCase], List[RawCase]]:
+    """Select fine-tuning epochs without consulting the outer validation fold."""
+
+    if len(cases) < 3:
+        return list(cases), []
+    try:
+        validation = set(grouped_kfold_indices(cases, 5, seed)[0])
+    except ValueError:
+        return list(cases), []
+    training = [case for index, case in enumerate(cases) if index not in validation]
+    development = [case for index, case in enumerate(cases) if index in validation]
+    if not training or not development:
+        return list(cases), []
+    return training, development
+
+
 def _pretrain_and_finetune(
     *,
     backend: Any,
@@ -286,13 +308,51 @@ def run_cross_validation(args: argparse.Namespace) -> str:
         vocabulary = EventVocabulary.fit(
             pretraining_cases, max_size=graph_config.max_event_vocab
         )
-        pretraining_config = _pretraining_config(
-            args, seed=args.seed + fold_number
+        inner_training_cases, inner_validation_cases = _inner_case_split(
+            training_cases, seed=args.seed + fold_number
         )
+        pretraining_config = _pretraining_config(args, seed=args.seed + fold_number)
         training_config = _training_config(args, seed=args.seed + fold_number)
+        if inner_validation_cases:
+            (
+                selection_model,
+                best_epoch,
+                selection_pretraining_history,
+                selection_finetuning_history,
+                selection_training_graphs,
+                selection_validation_graphs,
+            ) = _pretrain_and_finetune(
+                backend=backend,
+                pretraining_cases=pretraining_cases,
+                training_cases=inner_training_cases,
+                validation_cases=inner_validation_cases,
+                vocabulary=vocabulary,
+                graph_config=graph_config,
+                model_config=model_config,
+                pretraining_config=pretraining_config,
+                training_config=training_config,
+                weight_file=args.weight_file,
+                device=device,
+            )
+            del (
+                selection_model,
+                selection_training_graphs,
+                selection_validation_graphs,
+            )
+            _release_accelerator(backend)
+        else:
+            best_epoch = max(1, int(args.epochs))
+            selection_pretraining_history = []
+            selection_finetuning_history = []
+        outer_pretraining_config = _pretraining_config(
+            args, seed=args.seed + 1_000 + fold_number
+        )
+        outer_training_config = _training_config(
+            args, seed=args.seed + 1_000 + fold_number
+        )
         (
             model,
-            best_epoch,
+            _outer_epoch,
             pretraining_history,
             finetuning_history,
             training_graphs,
@@ -305,10 +365,11 @@ def run_cross_validation(args: argparse.Namespace) -> str:
             vocabulary=vocabulary,
             graph_config=graph_config,
             model_config=model_config,
-            pretraining_config=pretraining_config,
-            training_config=training_config,
+            pretraining_config=outer_pretraining_config,
+            training_config=outer_training_config,
             weight_file=args.weight_file,
             device=device,
+            fixed_epochs=best_epoch,
         )
         missing_train_labels = sum(
             graph.root_device_position is None for graph in training_graphs
@@ -324,8 +385,8 @@ def run_cross_validation(args: argparse.Namespace) -> str:
             vocabulary=vocabulary.to_dict(),
             graph_config=graph_config.to_dict(),
             model_config=model_config,
-            training_config=training_config,
-            pretraining_config=pretraining_config,
+            training_config=outer_training_config,
+            pretraining_config=outer_pretraining_config,
             metadata={
                 "model_name": MODEL_NAME,
                 "model_version": MODEL_VERSION,
@@ -352,6 +413,24 @@ def run_cross_validation(args: argparse.Namespace) -> str:
                 evaluation_mode="out_of_fold",
                 fold=fold_number,
             )
+        fold_training_result_path = os.path.join(
+            fold_dir, f"fold_{fold_number}_train_res.json"
+        )
+        fold_training_records = []
+        for case, graph in zip(training_cases, training_graphs):
+            rankings, diagnostics = backend.predict_graph(
+                model, graph, device, top_k=args.top_k
+            )
+            fold_training_records.append(
+                result_record(
+                    case,
+                    rankings,
+                    diagnostics,
+                    evaluation_mode="outer_fold_training_prediction",
+                    fold=fold_number,
+                )
+            )
+        save_json(fold_training_records, fold_training_result_path, indent=2)
         fold_summary = {
             "fold": fold_number,
             "pretraining_cases": len(pretraining_cases),
@@ -364,11 +443,18 @@ def run_cross_validation(args: argparse.Namespace) -> str:
             "validation_labels_outside_graph": missing_validation_labels,
             "validation_metrics": validation_metrics,
             "checkpoint": checkpoint_path,
+            "training_predictions": fold_training_result_path,
         }
         fold_summaries.append(fold_summary)
         histories[str(fold_number)] = {
-            "pretraining": pretraining_history,
-            "finetuning": finetuning_history,
+            "epoch_selection": {
+                "pretraining": selection_pretraining_history,
+                "finetuning": selection_finetuning_history,
+            },
+            "outer_training": {
+                "pretraining": pretraining_history,
+                "finetuning": finetuning_history,
+            },
         }
         print(f"Fold {fold_number}/{len(folds)}: {json.dumps(fold_summary, ensure_ascii=False)}")
         del model, training_graphs, validation_graphs
@@ -431,6 +517,21 @@ def run_cross_validation(args: argparse.Namespace) -> str:
             "source": "median_best_epoch_from_oof_folds",
         },
     )
+    final_training_result_path = os.path.join(args.output_dir, "final_train_res.json")
+    final_training_records = []
+    for case, graph in zip(cases, final_graphs):
+        rankings, diagnostics = backend.predict_graph(
+            final_model, graph, device, top_k=args.top_k
+        )
+        final_training_records.append(
+            result_record(
+                case,
+                rankings,
+                diagnostics,
+                evaluation_mode="trained_on_all_labeled_cases",
+            )
+        )
+    save_json(final_training_records, final_training_result_path, indent=2)
     summary = {
         "model_name": MODEL_NAME,
         "model_version": MODEL_VERSION,
@@ -446,6 +547,7 @@ def run_cross_validation(args: argparse.Namespace) -> str:
         "training_config": _training_config(args).to_dict(),
         "folds": fold_summaries,
         "final_checkpoint": final_checkpoint,
+        "final_training_predictions": final_training_result_path,
         "final_training_epochs": selected_epochs,
         "final_pretraining_history": final_pretraining_history,
         "final_training_history": final_finetuning_history,
@@ -591,6 +693,20 @@ def _add_graph_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-neighbor-lag-ms", type=int, default=600_000)
     parser.add_argument("--corridor-slack-hops", type=int, default=2)
     parser.add_argument("--max-event-vocab", type=int, default=256)
+    parser.add_argument(
+        "--include-propagation-edge-probabilities",
+        action="store_true",
+        help=(
+            "Append root-independent A->B/B->A/No-Direct probabilities to "
+            "physical PC-STGR edge features."
+        ),
+    )
+    parser.add_argument(
+        "--propagation-probability-method",
+        choices=("deterministic_evidence_v1", "logit_softmax_v1"),
+        default="deterministic_evidence_v1",
+    )
+    parser.add_argument("--propagation-max-candidate-nodes", type=int, default=80)
 
 
 def _add_model_args(parser: argparse.ArgumentParser) -> None:

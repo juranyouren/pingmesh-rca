@@ -23,6 +23,7 @@ from Sys.RootCauseAnalyze.stage1.neural_graph import (
     NODE_TYPE_COUNT,
     RELATION_COUNT,
     PathConditionedGraph,
+    edge_feature_dim,
 )
 
 
@@ -33,6 +34,7 @@ class NeuralModelConfig:
     layers: int = 2
     dropout: float = 0.20
     event_embedding_dim: int = 16
+    use_propagation_edge_probabilities: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -95,7 +97,7 @@ def graph_to_tensors(graph: PathConditionedGraph, device: torch.device) -> Dict[
         "edge_types": torch.tensor(graph.edge_types, dtype=torch.long, device=device),
         "edge_features": torch.tensor(
             graph.edge_features, dtype=torch.float32, device=device
-        ).reshape(-1, EDGE_FEATURE_DIM),
+        ).reshape(-1, int(getattr(graph, "edge_feature_dim", EDGE_FEATURE_DIM))),
         "device_indices": torch.tensor(graph.device_indices, dtype=torch.long, device=device),
         "root_position": torch.tensor(root_position, dtype=torch.long, device=device),
     }
@@ -141,15 +143,18 @@ class RelationalTemporalAttention(nn.Module):
         self.hidden_dim = config.hidden_dim
         self.heads = config.heads
         self.head_dim = config.hidden_dim // config.heads
+        self.edge_feature_dim = edge_feature_dim(
+            config.use_propagation_edge_probabilities
+        )
         self.query = nn.Linear(config.hidden_dim, config.hidden_dim, bias=False)
         self.key = nn.Linear(config.hidden_dim, config.hidden_dim, bias=False)
         self.value = nn.Linear(config.hidden_dim, config.hidden_dim, bias=False)
         self.relation_key = nn.Embedding(RELATION_COUNT, config.hidden_dim)
         self.relation_value = nn.Embedding(RELATION_COUNT, config.hidden_dim)
         self.relation_bias = nn.Embedding(RELATION_COUNT, config.heads)
-        self.edge_key = nn.Linear(EDGE_FEATURE_DIM, config.hidden_dim, bias=False)
-        self.edge_value = nn.Linear(EDGE_FEATURE_DIM, config.hidden_dim, bias=False)
-        self.edge_bias = nn.Linear(EDGE_FEATURE_DIM, config.heads, bias=False)
+        self.edge_key = nn.Linear(self.edge_feature_dim, config.hidden_dim, bias=False)
+        self.edge_value = nn.Linear(self.edge_feature_dim, config.hidden_dim, bias=False)
+        self.edge_bias = nn.Linear(self.edge_feature_dim, config.heads, bias=False)
         self.output = nn.Linear(config.hidden_dim, config.hidden_dim)
         self.norm = nn.LayerNorm(config.hidden_dim)
         self.dropout = nn.Dropout(config.dropout)
@@ -164,6 +169,11 @@ class RelationalTemporalAttention(nn.Module):
     ) -> torch.Tensor:
         if sources.numel() == 0:
             return self.norm(hidden)
+        if edge_features.shape[-1] != self.edge_feature_dim:
+            raise ValueError(
+                "graph/model edge feature mismatch: "
+                f"graph={edge_features.shape[-1]}, model={self.edge_feature_dim}"
+            )
         node_count = hidden.shape[0]
         query = self.query(hidden)[targets].view(-1, self.heads, self.head_dim)
         key = (
