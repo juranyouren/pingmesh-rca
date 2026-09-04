@@ -2,6 +2,11 @@ import math
 
 import pytest
 
+from Sys.Score.diagnose_graph_reranking import (
+    evaluate_score_method,
+    graph_diversity,
+    score_candidate_graph,
+)
 from Sys.RootCauseAnalyze.stage1 import neural_graph
 from Sys.RootCauseAnalyze.stage1.neural_graph import (
     EDGE_FEATURE_DIM,
@@ -324,3 +329,119 @@ def test_candidate_graph_verifier_scores_candidate_self_consistency():
     assert rankings[0]["ip"] == "D1"
     assert rankings[0]["verification_top1"] is True
     assert rankings[1]["verification_top1"] is False
+
+
+def test_graph_rerank_diagnostic_scores_path_evidence_without_labels():
+    hypothesis_graph = {
+        "edge_hypotheses": [
+            {
+                "edge_hypothesis_id": "H1",
+                "endpoint_a": "D1",
+                "endpoint_b": "D2",
+                "state_probabilities": {
+                    "endpoint_a_to_b": 0.8,
+                    "endpoint_b_to_a": 0.0,
+                    "no_direct_propagation": 0.2,
+                },
+            }
+        ]
+    }
+    root_item = {
+        "root_hypothesis": {"root_devices": ["D1"]},
+        "explanation_score": 0.75,
+        "propagation_graph": {
+            "graph_score": 0.8,
+            "target_coverage": 1.0,
+            "covered_targets": ["D2"],
+            "nodes": [
+                {
+                    "device_id": "D1",
+                    "evidence_ids": ["E1"],
+                    "onset_interval_ms": [0, 1],
+                },
+                {
+                    "device_id": "D2",
+                    "evidence_ids": ["E2"],
+                    "onset_interval_ms": [2, 3],
+                },
+            ],
+            "edges": [
+                {
+                    "edge_hypothesis_id": "H1",
+                    "from": "D1",
+                    "to": "D2",
+                    "state_probability": 0.8,
+                    "support_level": "strong",
+                    "evidence_ids": ["E1", "E2"],
+                    "features": {
+                        "temporal_available": True,
+                        "temporal_order_support": 1.0,
+                        "contradiction": 0.0,
+                    },
+                }
+            ],
+            "diagnostics": {
+                "target_count": 1,
+                "reachable_target_count": 1,
+                "uncovered_targets": [],
+            },
+        },
+    }
+
+    scored = score_candidate_graph(
+        root_item=root_item,
+        hypothesis_graph=hypothesis_graph,
+        max_path_depth=8,
+    )
+
+    assert scored["components"]["edge_direction_preference"] == pytest.approx(0.8)
+    assert scored["components"]["target_path_support"] == pytest.approx(0.8)
+    assert scored["components"]["root_earliness"] == 1.0
+    assert scored["scores"]["structured_reasonableness"] > 0.7
+
+
+def test_graph_rerank_diagnostic_reports_correctable_and_corruption_risk():
+    def candidate(ip, rank, score, edges):
+        return {
+            "ip": ip,
+            "initial_rank": rank,
+            "scores": {"structured_reasonableness": score},
+            "selected_edges": [
+                {"from": source, "to": target} for source, target in edges
+            ],
+        }
+
+    cases = [
+        {
+            "gt_ip": "D1",
+            "candidates": [
+                candidate("D2", 1, 0.5, [("D2", "D3")]),
+                candidate("D1", 2, 0.8, [("D1", "D3")]),
+            ],
+        },
+        {
+            "gt_ip": "D1",
+            "candidates": [
+                candidate("D1", 1, 0.8, [("D1", "D3")]),
+                candidate("D2", 2, 0.7, [("D2", "D3")]),
+            ],
+        },
+    ]
+
+    metrics = evaluate_score_method(
+        cases,
+        "structured_reasonableness",
+        tie_epsilon=1e-6,
+        thresholds=[0.0, 0.2, 0.4],
+    )
+    diversity = graph_diversity(cases[0]["candidates"])
+
+    assert metrics["pairwise_win_rate"] == 1.0
+    assert metrics["gt_vs_strongest_false_win_rate"] == 1.0
+    assert metrics["fractional_graph_best_lift"]["ci95_low"] == 0.5
+    assert metrics["correctable_cases"] == 1
+    assert metrics["strict_graph_top1_correctable_cases"] == 1
+    assert metrics["wrong_preference_cases"] == 0
+    assert metrics["threshold_sweep"][0]["corrections"] == 1
+    assert metrics["threshold_sweep"][0]["corruptions"] == 0
+    assert diversity["mean_pairwise_jaccard_distance"] == 1.0

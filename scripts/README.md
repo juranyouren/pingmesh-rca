@@ -89,6 +89,7 @@ files whose `full_link.task_topo.value` corresponds to `PINGMESH_DATA` cases.
 | `run_full_experiment.sh` | Primary entrypoint: root OOF, P0 paper system, optimized P4 comparison, and unified root/graph metrics. |
 | `run_heterogeneous_v0.sh` | Historical root-input-free heterogeneous V0 prototype. |
 | `run_root_oof.sh` | Deterministic root baseline plus supervised or self-supervised PC-STGR grouped OOF training. |
+| `run_graph_rerank_diagnostic.sh` | Test whether candidate-conditioned P0 graphs contain root-ranking signal before training another reranker. |
 | `run_dd_edge_ablation.sh` | Compare the P0 paper method with leakage-safe P4 supervised optimization. |
 | `run_rca_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
@@ -244,6 +245,50 @@ rates for true and false candidate views, verification margins, corrections,
 and corruptions. OOF folds and Stage-1 fold checkpoints are checked for exact
 agreement. Runtime `infer` only reads raw case evidence, Stage-1 predictions,
 and the saved verifier checkpoint; it does not read root labels.
+
+### Propagation-graph reranking signal diagnostic
+
+Run this diagnostic before fitting another reranker. It freezes a Stage-1 OOF
+candidate list, constructs the shared M1 probability graph without labels, and
+recovers one P0 propagation DAG for each Top-K candidate root. Six label-free
+graph scores then test whether the true root's graph is more reasonable than
+the graphs of false candidates. Labels are joined only after every graph and
+score has been constructed.
+
+Diagnose the high-recall probability-edge Stage-1 candidates and, preferably,
+the original Stage-1 control using the same Top-K:
+
+```bash
+OLD_RUN=/path/to/root_graph_ablation_self_supervised_<run-id>
+
+bash scripts/run_graph_rerank_diagnostic.sh \
+  --stage1-dir "$OLD_RUN/pc_stgr_edge_prob" \
+  --output-dir "$OLD_RUN/graph_rerank_diagnostic_edge" \
+  --top-k 5 \
+  --skip-preprocess
+
+bash scripts/run_graph_rerank_diagnostic.sh \
+  --stage1-dir "$OLD_RUN/pc_stgr_base" \
+  --output-dir "$OLD_RUN/graph_rerank_diagnostic_base" \
+  --top-k 5 \
+  --skip-preprocess
+```
+
+Omit `--skip-preprocess` unless topology sidecars were already backfilled and
+verified. Each output directory contains:
+
+- `summary.json`: initial recall/ranking, graph diversity, per-score separation,
+  conservative promotion sweeps, and an automatic diagnostic verdict;
+- `method_summary.csv`: one row per graph-reasonableness score;
+- `candidate_scores.csv`: one row per incident/candidate for plotting;
+- `candidate_graph_diagnostics.json`: selected edges and auditable components.
+
+The main feasibility checks are `fractional_graph_best_lift.ci95_low > 0`, a
+positive `gt_vs_strongest_false_win_rate`, non-degenerate graph/score diversity,
+and positive net corrections at a nonzero threshold. A `strong` verdict only
+authorizes a later grouped-OOF calibration experiment. The best threshold in
+this diagnostic is selected on the diagnostic labels and must not be reported
+as held-out paper performance.
 
 ## Active root-conditioned graph-rebuild workflow
 
