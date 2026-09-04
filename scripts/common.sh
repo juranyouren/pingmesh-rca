@@ -41,6 +41,13 @@ export PINGMESH_TEMPERATURE="${PINGMESH_TEMPERATURE:-0.6}"
 export PINGMESH_MAX_TOKENS="${PINGMESH_MAX_TOKENS:-4096}"
 export PINGMESH_MAX_MODEL_LEN="${PINGMESH_MAX_MODEL_LEN:-16384}"
 
+# ── Local-Qwen Top-K propagation-graph reranker ──
+export PINGMESH_LLM_RERANK_TEMPERATURE="${PINGMESH_LLM_RERANK_TEMPERATURE:-0.0}"
+export PINGMESH_LLM_RERANK_MAX_TOKENS="${PINGMESH_LLM_RERANK_MAX_TOKENS:-1536}"
+export PINGMESH_LLM_RERANK_MAX_INPUT_TOKENS="${PINGMESH_LLM_RERANK_MAX_INPUT_TOKENS:-12000}"
+export PINGMESH_LLM_RERANK_MAX_EVIDENCE="${PINGMESH_LLM_RERANK_MAX_EVIDENCE:-80}"
+export PINGMESH_LLM_RERANK_CONSISTENCY_PASSES="${PINGMESH_LLM_RERANK_CONSISTENCY_PASSES:-3}"
+
 # ── PC-STGR Stage 1 (small path-conditioned graph ranker) ──
 # The paper experiment uses out-of-fold predictions for scoring and trains one
 # final checkpoint on all labeled cases for later label-free inference.

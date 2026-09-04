@@ -90,6 +90,7 @@ files whose `full_link.task_topo.value` corresponds to `PINGMESH_DATA` cases.
 | `run_heterogeneous_v0.sh` | Historical root-input-free heterogeneous V0 prototype. |
 | `run_root_oof.sh` | Deterministic root baseline plus supervised or self-supervised PC-STGR grouped OOF training. |
 | `run_graph_rerank_diagnostic.sh` | Test whether candidate-conditioned P0 graphs contain root-ranking signal before training another reranker. |
+| `run_llm_graph_reranker_ablation.sh` | Compare local-Qwen evidence, propagation-graph, Stage-1-prior, and conservative-consensus Top-K reranking. |
 | `run_dd_edge_ablation.sh` | Compare the P0 paper method with leakage-safe P4 supervised optimization. |
 | `run_rca_baselines.sh` | TraceRCA, NetEventCause, and BiAn Pipeline 1 baselines. |
 | `../Sys/RootCauseAnalyze/stage1/pipeline.py` | Deterministic topology + temporal Stage 1 baseline. |
@@ -289,6 +290,62 @@ and positive net corrections at a nonzero threshold. A `strong` verdict only
 authorizes a later grouped-OOF calibration experiment. The best threshold in
 this diagnostic is selected on the diagnostic labels and must not be reported
 as held-out paper performance.
+
+### Local-Qwen propagation-graph reranker
+
+This final experimental track asks the existing local
+`DeepSeek-R1-Distill-Qwen-32B` model to act as a listwise operations reviewer.
+For each incident it sees the same Stage-1 Top-5 candidate set and a globally
+deduplicated evidence dictionary. Depending on the ablation, it additionally
+sees all five root-conditioned P0 graphs and the Stage-1 rank/score prior.
+
+The prompt builder groups repeated alarms/logs into evidence episodes, retains
+counts and representative descriptions, shares evidence across candidate
+graphs, anonymizes device/candidate identities, and uses the model tokenizer to
+apply structural pruning before inference. It never slices an arbitrary JSON
+string. Graph-referenced evidence, candidate-root observations, early events,
+and destructive physical/control-plane events receive priority.
+
+Run all comparisons on the high-recall OOF candidate generator:
+
+```bash
+OLD_RUN=/path/to/root_graph_ablation_self_supervised_<run-id>
+
+bash scripts/run_llm_graph_reranker_ablation.sh \
+  --stage1-dir "$OLD_RUN/pc_stgr_edge_prob" \
+  --output-dir "$OLD_RUN/llm_graph_reranker" \
+  --top-k 5 \
+  --skip-preprocess
+```
+
+The local model, NPU cards, batch size, 16K model context, 12K input budget,
+and output budget come from `scripts/common.sh`. Inference defaults to
+temperature zero. Add `--save-prompts` only when full local prompt auditing is
+needed. Use `--mock` for a label-free end-to-end smoke run without loading
+vLLM.
+
+The experiment writes four result directories:
+
+- `llm_evidence_only`: compressed observation evidence without propagation
+  graphs or Stage-1 scores;
+- `llm_evidence_graph`: adds all five candidate-conditioned propagation graphs;
+- `llm_prior_evidence_graph`: also exposes Stage-1 rank/score as an explicit
+  prior;
+- `llm_prior_evidence_graph_consensus`: changes Top-1 only when repeated,
+  deterministically permuted candidate presentations unanimously select the
+  same challenger. Remaining candidates retain their Stage-1 relative order.
+
+Every invalid response, out-of-candidate choice, or abstention falls back to
+Stage-1. The model may select only an existing candidate graph; it cannot add a
+propagation edge. Each variant stores `res.json` and `llm_audit.json` with token
+counts, pruning statistics, candidate aliases, raw output, parsed decisions,
+unsupported evidence references, and fallback reasons. `summary.json/csv`
+reports ranking metrics, corrections, corruptions, net corrections, and the
+incremental effects of graphs, Stage-1 priors, and the consensus gate.
+
+The Python inference path loads cases with `require_labels=False`. Only after
+all LLM outputs are on disk does the wrapper invoke the separate scorers that
+read root labels. The OOF Stage-1 input remains mandatory for reported results.
 
 ## Active root-conditioned graph-rebuild workflow
 

@@ -1,4 +1,6 @@
+import json
 import math
+from argparse import Namespace
 
 import pytest
 
@@ -7,7 +9,25 @@ from Sys.Score.diagnose_graph_reranking import (
     graph_diversity,
     score_candidate_graph,
 )
+from Sys.Score.summarize_llm_graph_reranker import summarize as summarize_llm_reranker
 from Sys.RootCauseAnalyze.stage1 import neural_graph
+from Sys.RootCauseAnalyze.stage1.llm_graph_reranker import (
+    VARIANT_EVIDENCE_GRAPH,
+    VARIANT_PRIOR_EVIDENCE_GRAPH,
+    MockLLMBackend,
+    PromptBudget,
+    build_prompt_package,
+    consensus_ranking,
+    finalize_ranking,
+    parse_llm_decision,
+    prioritize_evidence,
+    sanitize_incident_info,
+)
+from Sys.RootCauseAnalyze.stage1.llm_graph_reranker_pipeline import (
+    CONSENSUS_METHOD,
+    run as run_llm_pipeline,
+    run_variant,
+)
 from Sys.RootCauseAnalyze.stage1.neural_graph import (
     EDGE_FEATURE_DIM,
     PROPAGATION_EDGE_FEATURE_DIM,
@@ -445,3 +465,303 @@ def test_graph_rerank_diagnostic_reports_correctable_and_corruption_risk():
     assert metrics["threshold_sweep"][0]["corrections"] == 1
     assert metrics["threshold_sweep"][0]["corruptions"] == 0
     assert diversity["mean_pairwise_jaccard_distance"] == 1.0
+
+
+def _llm_rerank_case():
+    ips = [f"10.0.0.{index}" for index in range(1, 6)]
+    candidates = []
+    evidence = []
+    for index, ip in enumerate(ips, 1):
+        evidence.append(
+            {
+                "evidence_id": f"E{index}",
+                "device": ip,
+                "event_type": "physical_link_down" if index == 2 else "generic_event",
+                "incident_relevance": 0.9,
+                "onset_interval_ms": [index * 1000, index * 1000 + 10],
+                "duplicate_count": index,
+                "event_name": "Interface down",
+                "sample": "untrusted log text " * 20,
+            }
+        )
+        candidates.append(
+            {
+                "candidate_ip": ip,
+                "initial_rank": index,
+                "stage1_score": 1.0 / index,
+                "graph_summary": {
+                    "target_coverage": 1.0,
+                    "selected_edge_count": 1,
+                },
+                "nodes": [
+                    {
+                        "device": ip,
+                        "role": "root",
+                        "evidence_ids": [f"E{index}"],
+                    },
+                    {
+                        "device": "10.0.1.1",
+                        "role": "affected",
+                        "evidence_ids": [],
+                    },
+                ],
+                "edges": [
+                    {
+                        "from": ip,
+                        "to": "10.0.1.1",
+                        "direction_probability": 0.8,
+                        "no_direct_probability": 0.1,
+                        "evidence_ids": [f"E{index}"],
+                    }
+                ],
+                "ranked_chains": [
+                    {
+                        "target": "10.0.1.1",
+                        "devices": [ip, "10.0.1.1"],
+                        "score": 0.8,
+                    }
+                ],
+            }
+        )
+    ranked_evidence = prioritize_evidence(
+        evidence, candidates, min_per_candidate=1
+    )
+    return {
+        "dir": "/data/case-1",
+        "incident": {
+            "source_ip": "10.0.0.1",
+            "root_cause": "must never reach prompt",
+        },
+        "initial_ips": ips,
+        "initial_rankings": [
+            {"rank": index, "ip": ip, "combined_score": 1.0 / index}
+            for index, ip in enumerate(ips, 1)
+        ],
+        "evidence": ranked_evidence,
+        "candidates": candidates,
+    }
+
+
+def test_llm_graph_prompt_is_anonymized_structurally_pruned_and_label_free():
+    case = _llm_rerank_case()
+    case["incident"] = sanitize_incident_info(case["incident"])
+    package = build_prompt_package(
+        case,
+        variant=VARIANT_EVIDENCE_GRAPH,
+        pass_index=0,
+        budget=PromptBudget(
+            max_input_tokens=3500,
+            max_evidence_records=5,
+            min_evidence_per_candidate=1,
+            max_edges_per_graph=1,
+            max_nodes_per_graph=2,
+            max_description_chars=40,
+            max_chains_per_graph=1,
+        ),
+        count_tokens=lambda text: math.ceil(len(text) / 3),
+    )
+    prior_package = build_prompt_package(
+        case,
+        variant=VARIANT_PRIOR_EVIDENCE_GRAPH,
+        pass_index=0,
+        budget=PromptBudget(max_input_tokens=3500, max_evidence_records=5),
+        count_tokens=lambda text: math.ceil(len(text) / 3),
+    )
+
+    assert package.token_count <= 3500
+    assert "must never reach prompt" not in package.prompt
+    assert "10.0.0.1" not in package.prompt
+    assert len(package.evidence_ids) == 5
+    assert set(package.initial_aliases) == {
+        package.ip_to_alias[ip] for ip in case["initial_ips"]
+    }
+    assert package.alias_to_ip == prior_package.alias_to_ip
+
+
+def test_llm_graph_decision_maps_aliases_and_rejects_unknown_evidence():
+    case = _llm_rerank_case()
+    case["incident"] = sanitize_incident_info(case["incident"])
+    package = build_prompt_package(
+        case,
+        variant=VARIANT_EVIDENCE_GRAPH,
+        pass_index=0,
+        budget=PromptBudget(max_input_tokens=12000),
+        count_tokens=lambda text: math.ceil(len(text) / 3),
+    )
+    selected_alias = package.ip_to_alias["10.0.0.2"]
+    ranking = [selected_alias] + [
+        alias for alias in package.presentation_aliases if alias != selected_alias
+    ]
+    response = json.dumps(
+        {
+            "decision": "select",
+            "selected_candidate": selected_alias,
+            "ranked_candidates": ranking,
+            "confidence": "high",
+            "decisive_evidence_ids": ["E2", "invented"],
+            "contradicting_evidence_ids": [],
+            "candidate_assessments": [],
+            "explanation": f"{selected_alias} is supported by E2",
+        }
+    )
+    parsed = parse_llm_decision(response, package)
+    final, reason = finalize_ranking(case["initial_ips"], parsed)
+
+    assert parsed["valid"] is True
+    assert parsed["selected_ip"] == "10.0.0.2"
+    assert parsed["unsupported_evidence_ids"] == ["invented"]
+    assert final[0] == "10.0.0.2"
+    assert reason == "llm_ranking"
+    assert "10.0.0.2" in parsed["explanation"]
+
+
+def test_llm_graph_consensus_only_promotes_unanimous_candidate():
+    initial = ["D1", "D2", "D3"]
+    unanimous, accepted = consensus_ranking(
+        initial,
+        [
+            {"valid": True, "selected_ip": "D2"},
+            {"valid": True, "selected_ip": "D2"},
+            {"valid": True, "selected_ip": "D2"},
+        ],
+    )
+    disagreement, rejected = consensus_ranking(
+        initial,
+        [
+            {"valid": True, "selected_ip": "D2"},
+            {"valid": True, "selected_ip": "D3"},
+            {"valid": True, "selected_ip": "D2"},
+        ],
+    )
+
+    assert unanimous == ["D2", "D1", "D3"]
+    assert accepted["status"] == "unanimous_promotion"
+    assert disagreement == initial
+    assert rejected["status"] == "fallback_no_consensus"
+
+
+def test_llm_graph_mock_variant_writes_label_free_results(tmp_path):
+    case = _llm_rerank_case()
+    case["case_id"] = "case-1"
+    case["incident"] = sanitize_incident_info(case["incident"])
+    records, audits, _packages, decisions = run_variant(
+        [case],
+        variant=VARIANT_PRIOR_EVIDENCE_GRAPH,
+        backend=MockLLMBackend(),
+        budget=PromptBudget(max_input_tokens=12000),
+        batch_size=1,
+        save_prompts=True,
+        output_dir=str(tmp_path),
+    )
+
+    assert records[0]["ranked_ips"] == case["initial_ips"]
+    assert records[0]["llm_reranking"]["valid"] is True
+    assert decisions[0]["input_tokens"] == audits[0]["input_tokens"]
+    assert (tmp_path / VARIANT_PRIOR_EVIDENCE_GRAPH / "res.json").is_file()
+    assert (tmp_path / VARIANT_PRIOR_EVIDENCE_GRAPH / "prompts.jsonl").is_file()
+
+
+def test_llm_graph_pipeline_mock_runs_without_any_label_file(tmp_path):
+    case_dir = tmp_path / "case-1"
+    case_dir.mkdir()
+    nodes = [
+        {
+            "mgmt_ip": f"10.0.0.{index}",
+            "role": "LEAF",
+            "linked_to": [],
+            "linked_from": [],
+            "alarms": [
+                {
+                    "alarm_name": "Interface down",
+                    "alarm_description": f"port GE0/0/{index} down",
+                    "alarm_time": index * 1000,
+                }
+            ],
+            "logs": [],
+        }
+        for index in range(1, 6)
+    ]
+    (case_dir / "nodes.json").write_text(
+        json.dumps(nodes), encoding="utf-8"
+    )
+    (case_dir / "info.json").write_text(
+        json.dumps({"alarm_time": 1000, "source_ip": ["10.0.0.1"]}),
+        encoding="utf-8",
+    )
+    rankings = [
+        {"rank": index, "ip": f"10.0.0.{index}", "combined_score": 1.0 / index}
+        for index in range(1, 6)
+    ]
+    root_results = tmp_path / "root_res.json"
+    root_results.write_text(
+        json.dumps(
+            [
+                {
+                    "dir": str(case_dir),
+                    "initial_root_rankings": rankings,
+                    "ranked_ips": [item["ip"] for item in rankings],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "llm-output"
+    run_llm_pipeline(
+        Namespace(
+            data_root=str(tmp_path),
+            root_results=str(root_results),
+            output_dir=str(output_dir),
+            model="mock",
+            npu="0",
+            variants=[
+                "llm_evidence_only",
+                "llm_evidence_graph",
+                VARIANT_PRIOR_EVIDENCE_GRAPH,
+            ],
+            top_k=5,
+            temperature=0.0,
+            max_tokens=256,
+            max_model_len=4096,
+            batch_size=2,
+            consistency_passes=3,
+            max_input_tokens=12000,
+            max_evidence_records=20,
+            min_evidence_per_candidate=1,
+            max_edges_per_graph=4,
+            max_nodes_per_graph=8,
+            max_description_chars=80,
+            max_chains_per_graph=2,
+            max_candidate_nodes=20,
+            max_path_depth=4,
+            edge_probability_method="deterministic_evidence_v1",
+            save_prompts=False,
+            mock=True,
+        )
+    )
+
+    assert not (case_dir / "label.json").exists()
+    assert (output_dir / "candidate_payloads.json").is_file()
+    assert (output_dir / CONSENSUS_METHOD / "res.json").is_file()
+    manifest = json.loads((output_dir / "run_manifest.json").read_text("utf-8"))
+    assert manifest["case_count"] == 1
+    assert "label-free inference" in manifest["evaluation_boundary"]
+
+    (case_dir / "label_v2.json").write_text(
+        json.dumps({"primary_root_cause": "10.0.0.1"}), encoding="utf-8"
+    )
+    summarize_llm_reranker(
+        Namespace(
+            baseline_res=str(root_results),
+            experiment_dir=str(output_dir),
+            methods=[
+                "llm_evidence_only",
+                "llm_evidence_graph",
+                VARIANT_PRIOR_EVIDENCE_GRAPH,
+                CONSENSUS_METHOD,
+            ],
+        )
+    )
+    summary = json.loads((output_dir / "summary.json").read_text("utf-8"))
+    by_name = {row["experiment"]: row for row in summary["results"]}
+    assert by_name["stage1"]["top1"] == 100.0
+    assert by_name[CONSENSUS_METHOD]["top1"] == 100.0
