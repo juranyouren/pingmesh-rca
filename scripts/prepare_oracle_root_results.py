@@ -38,18 +38,41 @@ def _ip(row: Mapping[str, Any]) -> str:
     return str(row.get("ip", row.get("device_id", "")) or "")
 
 
-def _promote(rows: List[Dict[str, Any]], truth: str, *, insert: bool) -> tuple[List[Dict[str, Any]], bool]:
-    matching = [row for row in rows if _ip(row) == truth]
+def _promote(
+    rows: List[Dict[str, Any]],
+    truth: str,
+    *,
+    insert: bool,
+    top_k: int,
+) -> tuple[List[Dict[str, Any]], bool]:
+    candidate_rows = rows[:top_k]
+    tail_rows = rows[top_k:]
+    matching = [row for row in candidate_rows if _ip(row) == truth]
     if not matching and not insert:
         return rows, False
-    selected = matching[0] if matching else {"ip": truth, "combined_score": 1.0}
-    ordered = [selected] + [row for row in rows if _ip(row) and _ip(row) != truth]
+    if matching:
+        selected = matching[0]
+        ordered_candidates = [selected] + [
+            row for row in candidate_rows if _ip(row) and _ip(row) != truth
+        ]
+        ordered = ordered_candidates + tail_rows
+    else:
+        # Direct-oracle mode may insert a root that was outside the supplied
+        # Top-K. Keep the original ranking after the inserted root.
+        selected = {"ip": truth, "combined_score": 1.0}
+        ordered = [selected] + [row for row in rows if _ip(row) and _ip(row) != truth]
     for index, row in enumerate(ordered, 1):
         row["rank"] = index
     return ordered, bool(matching)
 
 
-def build(input_path: str, output_path: str, *, insert_missing: bool) -> Dict[str, int]:
+def build(
+    input_path: str,
+    output_path: str,
+    *,
+    insert_missing: bool,
+    top_k: int,
+) -> Dict[str, int]:
     records = load_json(input_path, default=None)
     if not isinstance(records, list):
         raise ValueError(f"root result must be a JSON list: {input_path}")
@@ -67,7 +90,9 @@ def build(input_path: str, output_path: str, *, insert_missing: bool) -> Dict[st
         rows = _rankings(record)
         if truth:
             labeled += 1
-            reordered, was_in_candidates = _promote(rows, truth, insert=insert_missing)
+            reordered, was_in_candidates = _promote(
+                rows, truth, insert=insert_missing, top_k=top_k
+            )
             in_candidates += int(was_in_candidates)
             promoted += int(bool(reordered) and _ip(reordered[0]) == truth)
             record["initial_root_rankings"] = reordered
@@ -93,11 +118,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root-results", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--top-k", type=int, default=5)
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     for name, insert_missing in (("candidate_oracle", False), ("direct_oracle", True)):
         output = os.path.join(args.output_dir, f"{name}.json")
-        stats = build(args.root_results, output, insert_missing=insert_missing)
+        stats = build(
+            args.root_results,
+            output,
+            insert_missing=insert_missing,
+            top_k=max(1, args.top_k),
+        )
         print(name, stats)
 
 
