@@ -63,6 +63,12 @@ def _promote(
         ordered = [selected] + [row for row in rows if _ip(row) and _ip(row) != truth]
     for index, row in enumerate(ordered, 1):
         row["rank"] = index
+    # The propagation decoder consumes score fields, not only the display
+    # rank. Make the oracle root dominant so stage1_weight=1.0 really fixes
+    # the root for the conditional graph-reconstruction evaluation.
+    selected["combined_score"] = 1.0
+    selected["stage1_score"] = 1.0
+    selected["support_score"] = 1.0
     return ordered, bool(matching)
 
 
