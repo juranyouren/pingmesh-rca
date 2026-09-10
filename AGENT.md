@@ -19,7 +19,8 @@ The output is an evidence-grounded heterogeneous explanation graph containing:
 P0 deterministic evidence normalization is the approved paper method. P4 is a
 supervised optimization track and must be reported separately until it exceeds
 P0 on graph-reconstruction quality. P1 is retired from the active experiment
-matrix. Use `docs/论文方案.md` as the active source of truth and
+matrix. Use `docs/project_overview.md` for the implementation contract,
+`docs/conferences/WWW2027/README.md` for the current paper materials, and
 `docs/PC-STGR设计方案.md` as the Stage-1 implementation contract.
 
 ## Non-Negotiables
@@ -92,7 +93,8 @@ IC-STGR and deterministic root rankers are baselines.
 
 ## Figure Style
 
-Use `docs/论文流程图统一绘图风格与传播图重构提示词.md`. Figures must distinguish
+Use the figure specifications in
+`docs/conferences/WWW2027/Introduction_提纲_讨论稿.md` and its linked case design. Figures must distinguish
 physical/observation relations from inferred propagation relations and show the
 explicit Stage-1 ranking to Stage-2 graph-rebuild dependency.
 

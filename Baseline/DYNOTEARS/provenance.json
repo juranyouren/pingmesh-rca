@@ -1,0 +1,13 @@
+{
+  "source_url": "https://raw.githubusercontent.com/mckinsey/causalnex/develop/causalnex/structure/dynotears.py",
+  "retrieved": "2026-09-09",
+  "source_sha256": "a3ce3ce6dd10fcf6b6f4373ff66364838d6cfb8cda82945e399325f1ff40c4c2",
+  "extracted_functions": [
+    "_reshape_wa",
+    "_learn_dynamic_structure"
+  ],
+  "kernel_sha256": "3171d456da1a1c380dfefd77b01958bd8a9ce5c54bb79420c5354ad9f217f7b2",
+  "license": "Apache-2.0",
+  "changes": "Removed pandas/StructureModel wrappers; numerical functions unchanged.",
+  "kernel_hash_encoding": "SHA-256 of UTF-8 source with LF newlines, matching the committed Git blob."
+}

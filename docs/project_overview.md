@@ -15,8 +15,11 @@ The primary task is propagation-graph reconstruction. Root ranking is the
 required upstream stage that provides a small set of source hypotheses. P0 is
 the approved paper method. P4 is a supervised optimization track; P1 is retired.
 
-The authoritative design is [`论文方案.md`](./论文方案.md). The Stage-1 contract
-is [`PC-STGR设计方案.md`](./PC-STGR设计方案.md).
+This file is the implementation contract. Current paper materials are indexed
+in [WWW2027/README.md](./conferences/WWW2027/README.md); conceptual modules M1, M2,
+and M3 map to Stage 1 (M1) and Stage 2 (M2 + M3). The Stage-1 contract is
+[`PC-STGR设计方案.md`](./PC-STGR设计方案.md). The retired design document was
+removed intentionally and is not an active dependency.
 
 ## Output
 
@@ -70,6 +73,13 @@ The unified result separates but co-locates two metric groups:
 - **Graph Rebuild:** directed-edge P/R/F1, node P/R/F1, strict exact rate,
   topology validity, DAG validity, root reachability, coverage, and graph size.
 
+The current system evaluator still has legacy partial-label and node-scope
+semantics. Before reporting new comparative paper scores, follow the
+[metric protocol](./conferences/WWW2027/故障传播图指标调研与最终评价方案.md),
+align both evaluators, and re-score frozen predictions. The protocol requires
+raw-device and projected results side by side; the projection is not causal
+Markov equivalence. No historical number is silently reinterpreted.
+
 Predictions and labels are projected through the same evidence-free exact
 structural-equivalence map for the default metrics. Raw-device metrics can be
 requested separately.
@@ -96,8 +106,8 @@ requested separately.
 ## Maintenance Rules
 
 - Keep internal data, generated checkpoints, labels, and result artifacts out of Git.
-- Keep this file, `AGENT.md`, `CLAUDE.md`, and `论文方案.md` aligned.
+- Keep this file, `AGENT.md`, `CLAUDE.md`, and the current WWW2027 paper index aligned.
 - Runtime inference must not read root or propagation labels.
 - Unknown relations must never be converted to negative labels.
 - Hyperparameters and thresholds must be selected without held-out leakage.
-- Use `docs/论文流程图统一绘图风格与传播图重构提示词.md` for figures.
+- Use the current WWW2027 Chinese outline and linked illustrative case for figures.

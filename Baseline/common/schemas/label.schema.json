@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Explicit canonical incident label v1",
+  "type": "object", "required": ["case_id", "root_status"],
+  "$defs": {
+    "nodes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "edges": {"type": "array", "uniqueItems": true, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string", "minLength": 1}}}
+  },
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "root_status": {"enum": ["confirmed", "unknown", "ambiguous"]},
+    "root_device": {"type": ["string", "null"]},
+    "graph_complete": {"type": "boolean"},
+    "positive_nodes": {"$ref": "#/$defs/nodes"}, "known_node_mask": {"$ref": "#/$defs/nodes"},
+    "positive_edges": {"$ref": "#/$defs/edges"}, "known_edge_mask": {"$ref": "#/$defs/edges"}, "allowed_edges": {"$ref": "#/$defs/edges"},
+    "annotation_version": {"type": "string"}, "provenance": {"type": "string"}
+  },
+  "allOf": [
+    {"if": {"properties": {"root_status": {"const": "confirmed"}}}, "then": {"required": ["root_device"], "properties": {"root_device": {"type": "string", "minLength": 1}}}},
+    {"if": {"required": ["graph_complete"], "properties": {"graph_complete": {"const": true}}}, "then": {"required": ["positive_nodes", "positive_edges"]}}
+  ],
+  "additionalProperties": false
+}

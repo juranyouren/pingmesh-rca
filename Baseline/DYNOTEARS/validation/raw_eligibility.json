@@ -1,0 +1,58 @@
+[
+  {
+    "case_id": "anonymized-input-001",
+    "method": "DYNOTEARS-CausalNex-kernel-incident-graph-adapt",
+    "status": "input_ineligible",
+    "nodes": [],
+    "edges": [],
+    "root_ranking": [],
+    "diagnostics": {
+      "config": {
+        "bin_seconds": 10,
+        "mode": "log1p",
+        "min_bins": 30,
+        "max_variables": 30,
+        "p": 1,
+        "lambda_w": 0.05,
+        "lambda_a": 0.05,
+        "max_iter": 100,
+        "h_tol": 1e-08,
+        "w_threshold": 0.05,
+        "require_coverage": true
+      }
+    },
+    "reason": "collection_coverage_unknown",
+    "timing": {
+      "prediction_seconds": 0.00015630002599209547
+    },
+    "case_id_anonymized": true
+  },
+  {
+    "case_id": "anonymized-input-002",
+    "method": "DYNOTEARS-CausalNex-kernel-incident-graph-adapt",
+    "status": "input_ineligible",
+    "nodes": [],
+    "edges": [],
+    "root_ranking": [],
+    "diagnostics": {
+      "config": {
+        "bin_seconds": 10,
+        "mode": "log1p",
+        "min_bins": 30,
+        "max_variables": 30,
+        "p": 1,
+        "lambda_w": 0.05,
+        "lambda_a": 0.05,
+        "max_iter": 100,
+        "h_tol": 1e-08,
+        "w_threshold": 0.05,
+        "require_coverage": true
+      }
+    },
+    "reason": "collection_coverage_unknown",
+    "timing": {
+      "prediction_seconds": 0.00010229996405541897
+    },
+    "case_id_anonymized": true
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "hidden_size": 32,
+  "embedding_size": 16,
+  "time_unit_seconds": 60.0,
+  "ode_step": 0.25,
+  "max_ode_steps": 4096,
+  "epochs": 30,
+  "learning_rate": 0.001,
+  "regularization_weight": 1.0,
+  "gradient_clip": 5.0,
+  "rho": 0.1,
+  "root_threshold": 0.2,
+  "top_k_causes": 5,
+  "ig_steps": 32,
+  "seed": 2027,
+  "max_events": 2000,
+  "sources": ["alarm", "alert"]
+}

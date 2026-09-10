@@ -1,0 +1,263 @@
+{
+  "nodes": [
+    {
+      "id": "A",
+      "device_id": "A"
+    },
+    {
+      "id": "B",
+      "device_id": "B"
+    },
+    {
+      "id": "C",
+      "device_id": "C"
+    }
+  ],
+  "edges": [
+    {
+      "source": "B",
+      "target": "A",
+      "lag": 0,
+      "directed": true,
+      "score": 0.11360763812458602,
+      "coefficient": 0.11360763812458602,
+      "evidence_ids": [
+        "series:B",
+        "series:A"
+      ],
+      "score_semantics": "absolute standardized SVAR coefficient, not probability"
+    },
+    {
+      "source": "A",
+      "target": "A",
+      "lag": 1,
+      "directed": true,
+      "score": 0.1842305354242334,
+      "coefficient": 0.1842305354242334,
+      "evidence_ids": [
+        "series:A",
+        "series:A"
+      ],
+      "score_semantics": "absolute standardized SVAR coefficient, not probability"
+    },
+    {
+      "source": "A",
+      "target": "B",
+      "lag": 1,
+      "directed": true,
+      "score": 0.7377467820559833,
+      "coefficient": 0.7377467820559833,
+      "evidence_ids": [
+        "series:A",
+        "series:B"
+      ],
+      "score_semantics": "absolute standardized SVAR coefficient, not probability"
+    },
+    {
+      "source": "B",
+      "target": "B",
+      "lag": 1,
+      "directed": true,
+      "score": 0.16670231242650152,
+      "coefficient": 0.16670231242650152,
+      "evidence_ids": [
+        "series:B",
+        "series:B"
+      ],
+      "score_semantics": "absolute standardized SVAR coefficient, not probability"
+    },
+    {
+      "source": "B",
+      "target": "C",
+      "lag": 1,
+      "directed": true,
+      "score": 0.7913784348446843,
+      "coefficient": -0.7913784348446843,
+      "evidence_ids": [
+        "series:B",
+        "series:C"
+      ],
+      "score_semantics": "absolute standardized SVAR coefficient, not probability"
+    }
+  ],
+  "native_arrays": {
+    "W": [
+      [
+        0.0,
+        0.0005438676355763208,
+        0.0
+      ],
+      [
+        0.11360763812458602,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0
+      ]
+    ],
+    "A": [
+      [
+        0.1842305354242334,
+        0.7377467820559833,
+        0.0
+      ],
+      [
+        0.0,
+        0.16670231242650152,
+        -0.7913784348446843
+      ],
+      [
+        0.0,
+        0.0,
+        0.0
+      ]
+    ]
+  },
+  "diagnostics": {
+    "h_W": 3.817697269425935e-09,
+    "least_squares_loss": 0.7228593062691431,
+    "warnings": [],
+    "n_rows": 499,
+    "variables": 3,
+    "lagged_design_rank": 3,
+    "standardization": "within_current_incident_no_labels",
+    "solver": "unmodified CausalNex numerical kernel with call observation",
+    "optimizer_runs": [
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+        "iterations": 17,
+        "objective": 0.8225195832805533
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+        "iterations": 0,
+        "objective": 0.8225195832831604
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+        "iterations": 0,
+        "objective": 0.8225195832948925
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+        "iterations": 0,
+        "objective": 0.822519583412214
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+        "iterations": 0,
+        "objective": 0.8225195845854285
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+        "iterations": 0,
+        "objective": 0.8225195963175737
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 1,
+        "objective": 0.8225197128320564
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 4,
+        "objective": 0.8225207810731494
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 8,
+        "objective": 0.8225270633645985
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 11,
+        "objective": 0.8225414176110909
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 6,
+        "objective": 0.8225522132993704
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+        "iterations": 17,
+        "objective": 0.8225592347218148
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 6,
+        "objective": 0.8225643897075455
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 15,
+        "objective": 0.8225676916817325
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 2,
+        "objective": 0.8225700705627889
+      },
+      {
+        "success": true,
+        "status": 0,
+        "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+        "iterations": 9,
+        "objective": 0.8225716303092476
+      }
+    ],
+    "converged": true
+  },
+  "case_id": "synthetic-gaussian-lag-chain-seed-123",
+  "method": "DYNOTEARS-CausalNex-kernel-incident-graph-adapt",
+  "status": "ok",
+  "config": {
+    "bin_seconds": 10,
+    "mode": "log1p",
+    "min_bins": 30,
+    "max_variables": 30,
+    "p": 1,
+    "lambda_w": 0.05,
+    "lambda_a": 0.05,
+    "max_iter": 100,
+    "h_tol": 1e-08,
+    "w_threshold": 0.05,
+    "require_coverage": true
+  },
+  "validation_only": true,
+  "matrix_sha256": "9daa16c64a502f80916845420e2d9642ab42049d97a82bbed469a36dc69067c9",
+  "elapsed_seconds": 0.05439409997779876
+}

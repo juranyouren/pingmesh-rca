@@ -1,0 +1,10 @@
+{
+  "bin_seconds": 10,
+  "mode": "log1p",
+  "min_bins": 30,
+  "max_variables": 50,
+  "tau_max": 2,
+  "pc_alpha": 0.01,
+  "max_conds_dim": 3,
+  "require_coverage": true
+}

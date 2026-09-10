@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Unified runner prediction v1",
+  "type": "object",
+  "required": ["schema_version", "case_id", "method", "version", "seed", "fold", "input_hash", "task", "status", "root_ranking", "native_graph", "device_graph", "graph_condition", "adapter_version", "diagnostics", "timing"],
+  "properties": {
+    "schema_version": {"const": "baseline-prediction-v1"}, "case_id": {"type": "string", "minLength": 1},
+    "method": {"type": "string"}, "version": {"type": "string"}, "seed": {"type": ["integer", "null"]},
+    "fold": {"type": ["integer", "string", "null"]}, "input_hash": {"type": "string"},
+    "task": {"enum": ["root", "oracle", "full", "shared"]},
+    "status": {"enum": ["ok", "abstained", "input_ineligible", "runtime_failure", "unsupported_task"]},
+    "root_ranking": {"type": "array", "items": {"type": "object", "required": ["device_id"], "properties": {"device_id": {"type": "string"}, "score": {"type": ["number", "null"]}}}},
+    "native_graph": {"type": ["object", "null"]}, "device_graph": {"type": ["object", "null"]},
+    "graph_condition": {"enum": ["oracle", "own_prediction", "shared_prediction", null]},
+    "adapter_version": {"type": ["string", "null"]}, "diagnostics": {"type": "object"}, "timing": {"type": "object"}
+  }
+}

@@ -1,0 +1,235 @@
+{
+  "nodes": [
+    {
+      "id": "A",
+      "device_id": "A"
+    },
+    {
+      "id": "B",
+      "device_id": "B"
+    },
+    {
+      "id": "C",
+      "device_id": "C"
+    }
+  ],
+  "edges": [
+    {
+      "source": "A",
+      "target": "A",
+      "directed": true,
+      "lag": 1,
+      "score": 0.31230130417533086,
+      "signed_statistic": 0.31230130417533086,
+      "p_value": 1.0506641167638857e-12,
+      "orientation_mark": "-->",
+      "evidence_ids": [
+        "series:A",
+        "series:A"
+      ],
+      "score_semantics": "absolute ParCorr statistic, not probability"
+    },
+    {
+      "source": "A",
+      "target": "B",
+      "directed": true,
+      "lag": 1,
+      "score": 0.8213123528425565,
+      "signed_statistic": 0.8213123528425565,
+      "p_value": 1.6681343080332638e-122,
+      "orientation_mark": "-->",
+      "evidence_ids": [
+        "series:A",
+        "series:B"
+      ],
+      "score_semantics": "absolute ParCorr statistic, not probability"
+    },
+    {
+      "source": "B",
+      "target": "B",
+      "directed": true,
+      "lag": 1,
+      "score": 0.13807117622690868,
+      "signed_statistic": 0.13807117622690868,
+      "p_value": 0.0020777894239717557,
+      "orientation_mark": "-->",
+      "evidence_ids": [
+        "series:B",
+        "series:B"
+      ],
+      "score_semantics": "absolute ParCorr statistic, not probability"
+    },
+    {
+      "source": "B",
+      "target": "C",
+      "directed": true,
+      "lag": 1,
+      "score": 0.6253672463949499,
+      "signed_statistic": -0.6253672463949499,
+      "p_value": 3.491476989205399e-55,
+      "orientation_mark": "-->",
+      "evidence_ids": [
+        "series:B",
+        "series:C"
+      ],
+      "score_semantics": "absolute ParCorr statistic, not probability"
+    }
+  ],
+  "native_arrays": {
+    "graph": [
+      [
+        [
+          "",
+          "-->"
+        ],
+        [
+          "",
+          "-->"
+        ],
+        [
+          "",
+          ""
+        ]
+      ],
+      [
+        [
+          "",
+          ""
+        ],
+        [
+          "",
+          "-->"
+        ],
+        [
+          "",
+          "-->"
+        ]
+      ],
+      [
+        [
+          "",
+          ""
+        ],
+        [
+          "",
+          ""
+        ],
+        [
+          "",
+          ""
+        ]
+      ]
+    ],
+    "val_matrix": [
+      [
+        [
+          0.0,
+          0.31230130417533086
+        ],
+        [
+          0.09190219531064486,
+          0.8213123528425565
+        ],
+        [
+          -0.018522305763594683,
+          -0.013459035315839307
+        ]
+      ],
+      [
+        [
+          0.09190219531064486,
+          0.09281571473613102
+        ],
+        [
+          0.0,
+          0.13807117622690868
+        ],
+        [
+          0.014687704876800604,
+          -0.6253672463949499
+        ]
+      ],
+      [
+        [
+          -0.018522305763594683,
+          -0.06885216382397653
+        ],
+        [
+          0.014687704876800604,
+          0.009837821428300588
+        ],
+        [
+          0.0,
+          -0.0236532282484281
+        ]
+      ]
+    ],
+    "p_matrix": [
+      [
+        [
+          1.0,
+          1.0506641167638857e-12
+        ],
+        [
+          0.040763620534011634,
+          1.6681343080332638e-122
+        ],
+        [
+          0.6807016621495291,
+          0.7647058192285096
+        ]
+      ],
+      [
+        [
+          0.040763620534011634,
+          0.038402385546152204
+        ],
+        [
+          1.0,
+          0.0020777894239717557
+        ],
+        [
+          0.7441951247148988,
+          3.491476989205399e-55
+        ]
+      ],
+      [
+        [
+          0.6807016621495291,
+          0.1249167226350287
+        ],
+        [
+          0.7441951247148988,
+          0.8269996940157482
+        ],
+        [
+          1.0,
+          0.5988472183589303
+        ]
+      ]
+    ]
+  },
+  "diagnostics": {
+    "tigramite_version": "5.2.10.1",
+    "unoriented_edges": 0,
+    "rows": 500,
+    "variables": 3,
+    "ci_test": "ParCorr linear continuous approximation"
+  },
+  "case_id": "synthetic-gaussian-lag-chain-seed-123",
+  "method": "PCMCI+-ParCorr-incident-graph-adapt",
+  "status": "ok",
+  "config": {
+    "bin_seconds": 10,
+    "mode": "log1p",
+    "min_bins": 30,
+    "max_variables": 50,
+    "tau_max": 1,
+    "pc_alpha": 0.01,
+    "max_conds_dim": 3,
+    "require_coverage": true
+  },
+  "validation_only": true,
+  "matrix_sha256": "9daa16c64a502f80916845420e2d9642ab42049d97a82bbed469a36dc69067c9",
+  "elapsed_seconds": 0.9086171000963077
+}

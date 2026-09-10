@@ -11,7 +11,7 @@ Pingmesh context + raw task_topo + alarms/logs
   -> final root + device propagation DAG + evidence and alternatives
 ```
 
-P0 deterministic evidence normalization is the paper method. P4 is a supervised grouped-OOF optimization track with validation-selected conservative edge admission. P1 is retired. `docs/论文方案.md` is the authoritative design and `docs/PC-STGR设计方案.md` defines Stage 1.
+P0 deterministic evidence normalization is the paper method. P4 is a supervised grouped-OOF optimization track with validation-selected conservative edge admission. P1 is retired. `docs/project_overview.md` is the implementation contract; `docs/conferences/WWW2027/README.md` indexes current paper materials and `docs/PC-STGR设计方案.md` defines Stage 1.
 
 ## Non-Negotiables
 

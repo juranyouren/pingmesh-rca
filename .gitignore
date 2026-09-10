@@ -13,10 +13,13 @@ data/
 # Agent outputs
 agent/output/
 agent/ms_agent.log
+/.codex-tmp/
+/output/
 
 # Jupyter checkpoints
 *.ipynb_checkpoints/
 kernel_meta/
+.pytest_cache/
 
 # IDE / OS
 .vscode/
@@ -49,6 +52,12 @@ paper/
 /docs/ppt/
 /tests/*
 !/tests/test_neural_stage1_ssl.py
+!/tests/test_baseline_common.py
+!/tests/test_baseline_discovery.py
+!/tests/test_bian_adapt.py
+!/tests/test_nec_device.py
+!/tests/test_skynet_voting.py
+!/tests/test_summarize_llm_graph_reranker.py
 /archive/
 /archive/tests/legacy_scripts/
 /tmp/*
