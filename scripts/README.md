@@ -104,11 +104,19 @@ The Gate, Trust-Tree, Skill Pipeline, candidate-summary path, and their old
 paper-01 through paper-04 wrappers have been removed. They are not part of the
 runtime or supported comparison workflow.
 
+`Sys/Score/evaluate_propagation.py` still carries legacy scoring semantics
+(possible/allowed treated as positive, uncertain-root success, implicit nodes,
+exact-match scope). It must be reconciled with
+`docs/conferences/WWW2027/故障传播图指标调研与最终评价方案.md` before any comparative
+number is used in the paper. Oracle-root evaluation has already been run
+(2026-09-08); it needs re-scoring under the unified evaluator, not a first run.
+
 ## Stage 1 root-location model
 
 PC-STGR is the first stage of the active paper system. Its implementation
-contract is recorded in `docs/PC-STGR设计方案.md`; the complete paper plan is
-`docs/论文方案.md`. The current `stage1/neural_*` code and `run_root_oof.sh`
+contract is recorded in `docs/PC-STGR设计方案.md`; the current paper index is
+`docs/conferences/WWW2027/README.md` (the older `docs/论文方案.md` was deleted by
+the user and is not restored). The current `stage1/neural_*` code and `run_root_oof.sh`
 implement PC-STGR. A new
 grouped OOF run is still required for any candidate-quality claim; do not rename
 the historical IC-STGR 73.58/93.71/97.48 Top-1/Top-3/Top-5 result as PC-STGR or

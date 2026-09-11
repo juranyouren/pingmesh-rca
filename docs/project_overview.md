@@ -97,11 +97,20 @@ requested separately.
 
 ## Immediate Priorities
 
-1. Re-run the unified grouped-OOF experiment after P4 admission optimization.
-2. Compare P0 and P4 predicted/annotated edge-count ratios and exact matches.
-3. Add oracle-root evaluation to isolate Stage-2 performance.
-4. Audit P4 `No Direct` confusion and per-fold selected thresholds.
-5. Consider link-root and multi-root extensions after the single-root system is stable.
+This file is the implementation contract, not the task scheduler. The dated task
+order lives in
+[2026-09-10 execution record](./conferences/WWW2027/2026-09-10_后续任务执行记录.md)
+and in the local `.ai/STATUS.md` workspace, which governs over any list here.
+
+The five-item list previously in this section is **superseded**. In particular,
+oracle-root evaluation is no longer pending: Candidate and Direct Oracle were
+already run on 2026-09-08 and now need re-scoring under the unified evaluator,
+not a first run. P0 remains the paper method.
+
+Current order: freeze label and incident-group semantics, unify main-method and
+baseline scoring, re-score the frozen P0/P4 and Oracle predictions with a shared
+predicted-root control, then verify baseline inputs. Broad P4 tuning, additional
+LLM reranking, link-root, and multi-root work stay deferred.
 
 ## Maintenance Rules
 

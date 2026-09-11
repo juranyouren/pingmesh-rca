@@ -3,8 +3,9 @@
 > **状态更新（2026-09-02）：PC-STGR 已恢复为论文 Stage 1。**
 >
 > 当前论文以“PC-STGR 根因 Top-K 排序 → P0 根因条件传播图恢复”为主线，完整
-> 定位以 [`论文方案.md`](./论文方案.md) 为准。本文档定义 PC-STGR 的网络结构、
-> 训练目标、OOF 评价和输出接口。
+> 定位以 [WWW2027 论文索引](./conferences/WWW2027/README.md) 与
+> [项目概览](./project_overview.md) 为准；旧的 `论文方案.md` 已由用户删除，不恢复。
+> 本文档定义 PC-STGR 的网络结构、训练目标、OOF 评价和输出接口。
 >
 > 现有 IC-STGR 历史结果不能直接改名为 PC-STGR 结果；论文必须使用重新运行的
 > grouped OOF 指标。
