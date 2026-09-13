@@ -1,6 +1,37 @@
 # WWW 2027 论文与执行材料
 
-更新：2026-09-10。当前主线是从 Pingmesh 异常、原始拓扑与设备事件恢复 incident-specific 设备传播解释图。单设备起点假设不变；概念模块 M1/M2/M3 对应实现的 Stage 1（M1/PC-STGR）与 Stage 2（M2+M3/P0）。
+更新：2026-09-11。当前主线是从 Pingmesh 异常、原始拓扑与设备事件恢复 incident-specific 设备传播解释图。单设备起点假设不变；概念模块 M1/M2/M3 对应实现的 Stage 1（M1/PC-STGR）与 Stage 2（M2+M3/P0）。
+
+## T005 / T006 专题：Web relevance 原文调研与论证链复盘
+
+[web_relevance/](web_relevance/README.md) 专题把 WWW 2024–2026 网络相关论文的 PDF 取下、
+全文抽取、Introduction 单独定位，逐篇拆解其 Web relevance 论证结构。
+**T006（2026-09-12）已把工作重心从"分类定位方案"改为"逐篇还原作者的实际论证链"**，
+并对所选分析卡做了必要更正。
+
+**先读两份 T006 产物**：
+
+1. [argument_chains.md](web_relevance/argument_chains.md)——直接回答"作者怎样把 Web
+   与这个具体网络问题连起来"：6 篇的 4–7 节点论证链、关键句对照表、证据止点，
+   末尾横向归纳**六种桥接动作**（不再使用旧的"四类强弱"框架）。
+2. [rpg_recon_argument_transfer.md](web_relevance/rpg_recon_argument_transfer.md)——
+   3 条候选迁移链、中文草稿、最小补证表、最强反对意见、可写边界。
+
+**结论分层（2026-09-12 T006-R 更新）**：论文复盘**主体已交付、关键推理已按验收 R1–R8 修正**；
+证据**有限**（可完整复核的 DCN 论文只有 `www24-inart` 1 篇，它给出的是
+**"Web 动机驱动、但非 Web 专用"**的链——Web 进入了动机层与瓶颈前提，
+**未进入问题设定/方法/评价，也未验证具名 Web 服务与服务侧收益**）；
+正式定位**待讨论**，两份报告都不给推荐排序。
+`www26-starlink-cd` 的 Web 论证是本轮所见最承重的一篇，但它需要本项目不具备的
+平台级数据前提。另有 13 篇仅有 ACM 单一公开位置、因机器人拦截未取得全文，
+已如实记录、未绕过访问控制，补取结果见
+[paper_manifest.md](web_relevance/paper_manifest.md) §T006。
+
+注意：旧文件 [synthesis.md](web_relevance/synthesis.md) 与
+[positioning_options.md](web_relevance/positioning_options.md) **保留历史、结论已被取代**
+（顶部有被替代指针），仅用于追溯 T005 的原始推理。
+本专题**更正**了下方"四项任务"中第 1 项的部分结论（尤其 MULAN / MetaKube 的
+Web 关联强度）。
 
 ## 本轮四项任务
 
