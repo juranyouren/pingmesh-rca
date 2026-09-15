@@ -70,3 +70,7 @@ paper/
 /archive/ppt/**/*.gif
 /archive/ppt/**/*.ppt
 /archive/ppt/**/*.pptx
+
+
+# Crash / debug dumps
+*.stackdump

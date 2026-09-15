@@ -37,6 +37,11 @@
 - **[故障传播图指标调研与最终评价方案](conferences/WWW2027/故障传播图指标调研与最终评价方案.md)**
   — 现行 `graph-eval-v2` 协议：主指标、部分标注语义、raw/等价投影、失败分母、
   Oracle/共同预测根/端到端口径。**新评价工作以它为准，实现尚未完成。**
+- **[图评价指标的文献依据调研（T007）](conferences/WWW2027/graph_metrics_literature/report.md)**
+  — 为选指标提供可核验的一手文献依据：论文对照表、重点精读卡、指标比较与条件化候选；
+  配套 [来源与检索记录](conferences/WWW2027/graph_metrics_literature/sources.md)。
+  **2026-09-13 验收部分通过，需按 [R1–R7](../.ai/T007_acceptance.md) 返修**；
+  当前候选依据不能直接定案。结论不取代上一条协议，最终指标待用户精读后确定。
 - [后续任务执行记录（2026-09-10）](conferences/WWW2027/2026-09-10_后续任务执行记录.md)
   — 治理当前写作与任务顺序的日期化记录。
 - [Baseline 实现任务书](conferences/WWW2027/Baseline实现任务书_供独立智能体执行.md)、
@@ -48,19 +53,3 @@
   这些是服务器输出的**历史转述**，不含完整逐例可重放实验包，也不是本轮新结果。
 - 当前证据缺口与 UNKNOWN 清单见 [.ai/STATUS.md](../.ai/STATUS.md)（本地工作区，当前尚未入库）。
 
-## 历史与参考
-
-保留研究追溯价值，但与当前阅读路径分离。**不据此恢复已停用方案或已删除文档。**
-
-- [文献笔记](papers/) — 论文文本与综述：
-  [论文文本与综述笔记](papers/)（如 [Pingmesh](papers/Pingmesh_ A Large-Scale System for Data Center Network Latency Measurement and Analysis.txt)）、
-  [INFOCOM 2023–2025 根因定位调研](papers/INFOCOM_2023_2025_根因定位相关论文调研.md)、
-  [FSE 近三年工程现象映射](papers/FSE近三年_工程现象与相关工作映射.md)、
-  [相关工作：三类方法与缺口（INFOCOM 版）](papers/相关工作_三类方法与缺口_INFOCOM版.md)。
-  本地文献笔记不自动证明 novelty，也不取代当前投稿方向。
-- [历史演示图](f0.png) — `f0.png` / `f1.png` / `f2.png` / `fig1.png` 及 2026-09-09
-  生成图均为**旧示意素材**，不是观测、标签或本轮新版案例图；正式使用前需逐边对齐。
-- 更早的设计、诊断脚本、notebook 与演示材料在 [archive/](../archive/)，
-  其范围说明见 [archive/README.md](../archive/README.md)。
-
-用户已删除的过期方案与绘图文档不恢复；活跃入口已改指向现存材料。
