@@ -1,6 +1,31 @@
 # Project Status
 
-更新：2026-09-11。记录者：本轮初始化助手。基线 commit：`19fad0a`（2026-09-10）。状态来源是当前工作区文件与已有报告；本轮未运行训练、真实数据重评分或外部模型调用。
+更新：2026-09-15（第二次）。**T008 已由 Claude Code 执行并交付，待 Work / 用户验收。**
+交付物在 [related_work_catalog/](../docs/conferences/WWW2027/related_work_catalog/)：
+身份已核实 **306** 条、待核实 13 条、阅读卡 16 张；9 项产物齐全，`check.py` 29 项全 PASS。
+见 [CURRENT_TASK](CURRENT_TASK.md)、[交接](HANDOFF.md)、[证据](EVIDENCE.md)。
+**本轮未运行项目测试、训练、评分或数据审计；未改动算法/标签/评分协议/实验数字；
+未改动 T007 的两份正文（其 R1–R7 返修仍属 T007-R）；未提交、未推送。**
+**已知缺口**：APGNN 全文不可得；259/306 条仅核验元数据未读正文；
+OpenAlex source 级逐年统计因配额未完成；中文期刊系统性检索未做。
+详见 [覆盖报告](../docs/conferences/WWW2027/related_work_catalog/coverage_report.md) §4。
+
+历史（当日第一次写入）：任务书发布，尚未执行检索。
+见 [T008 发布任务书](T008_research_task.md)。
+T007-R / T006-R 保留待办；T007-R 原活动任务已保存为 [任务快照](T007_R_task_snapshot.md)。
+**T007 独立验收仍为部分通过，关键事实与指标推理需返修**。
+见 [验收 R1–R7](T007_acceptance.md) 与 [T007 交接](HANDOFF.md)。产物
+[report.md](../docs/conferences/WWW2027/graph_metrics_literature/report.md)、
+[sources.md](../docs/conferences/WWW2027/graph_metrics_literature/sources.md)。
+**资料交付、验收通过与指标定案分别记录**：当前报告仍需修正，最终主指标由用户精读后确定。
+T006-R 仍为部分通过；R5/R8 已关闭，[二次验收 U1–U5](T006_R_acceptance.md) 保留待办，
+不作为 T007 前置；[原 T006 任务](T006_research_task.md) 已完整留档，
+T006 交接与证据快照另存为 [T006_handoff](T006_handoff.md)、[T006_evidence](T006_evidence.md)。
+历史见 [T006 验收](T006_acceptance.md)、
+[T006-R 逐项应答](../docs/conferences/WWW2027/web_relevance/T006_R_response.md)。
+历史初始化基线 commit：`19fad0a`（2026-09-10）。
+状态来源是当前工作区文件与已有报告；本轮未运行训练、真实数据重评分或外部模型调用，
+未运行项目测试，未改动算法/标签/评分协议/实验数字。
 
 ## Completed Work
 
@@ -13,13 +38,21 @@
   纯缓存目录（约 10 MB，可自动再生，零跟踪文件受影响）；修复 3 处失效引用并同步 2 处过时待办。
   验证通过：206 + 22 测试、`Baseline.common --help` 退出 0、60 个 Markdown 文件 0 失效链接。
   未改动算法、评分语义、标签与实验数字。处置依据与待定项见 [HANDOFF.md](HANDOFF.md)。
+- 2026-09-11 Codex 独立验收：T004 主体交付通过，交接记录待补正，详见 HANDOFF 验收补记。
+  实际复验主测试 206 passed、labeler 22 项成功、baseline CLI 退出 0；不属于真实性能实验。
+- 2026-09-13 T007 已交付两份产物、5 篇重点卡和候选组合；**独立验收部分通过，T007-R 待执行**。
+  关键更正：NEC 已有局部原因关系恢复评价；CausIL 有真实数据代理图结构分数；
+  A4 不支持所称“未观测边不计错”；SHD 对照混入 ArrowConfusion，零边 raw SHD 有定义。
+  ErrorPrism 比例/定位及部分文献身份亦需修正，见 [R1–R7](T007_acceptance.md)。
+  不沿用“网络侧全不评图”“反向边 SHD=0/1/2”等原交付概括。
+  原任务及 T006 交接/证据存档保留。本次只核验和维护文档，未改两份核心报告正文或运行研究实验。
 
 ## Repository Map
 
 | 路径 | 职责与审计结论 |
 |---|---|
 | 根 `README.md` | 2026-09-11 新增：项目、两阶段方法、目录表、文档入口与运行入口（80 行）。 |
-| 根 `AGENT.md` / `CLAUDE.md` | 2026-09-11 当前合同，含未提交修改；T004 只补了 README/docs 索引入口 2 行。 |
+| 根 `AGENT.md` / `CLAUDE.md` | 2026-09-12 起改为精简入口：`AGENT.md` 供 ChatGPT Work 加载上下文，`CLAUDE.md` 供 Claude Code 执行；项目事实与协作规则移至 `.ai/PROJECT.md`、`.ai/WORKFLOW.md`。 |
 | `docs/README.md` | 2026-09-11 新增：按当前论文/方法实现/实验与评价/历史与参考分类的文档索引（66 行）。 |
 | `Sys/Preprocess/` | 原始观测预处理、raw 拓扑 sidecar、标签无关结构等价映射。输入源字段需检查标签污染。 |
 | `Sys/RootCauseAnalyze/stage1/` | 确定性排序、PC-STGR/SSL、图特征 MLP、verifier、历史 LLM 重排；后几项不是默认论文增益模块。 |
@@ -38,9 +71,49 @@
 
 ## Ongoing Work
 
+**当前任务：T008 — 已交付，待验收。** 交付物与缺口见上文与 [交接](HANDOFF.md)。
+`related_work_catalog/` 下 `README.md`、`catalog.xlsx`（Papers/Pending/Coverage/Venues）、
+`catalog.csv`、`index.md`、`search_log.md`、`coverage_report.md`、`evidence.md`、
+`screening.csv`、`papers/*.md` 共 16 张卡。本轮**未运行项目测试**（只做产物检查）。
+
+以下为 T008 发布时的任务描述，保留以便对照：
+
+**T008 — 建设长期可维护的相关文献总目录；已执行。**
+三层覆盖，2015 年至实际检索截止日并回溯经典；CCF 等级/版本核验，不按等级筛文献。
+交付 Excel/CSV 总表、Markdown 分类索引、检索日志、覆盖报告及核心近邻卡；按覆盖与证据质量验收。
+完整要求见 [任务书](T008_research_task.md)。HANDOFF/EVIDENCE 仍属 T007，不代表 T008 已交付。
+
+**保留待办：T007-R — 按 [独立验收 R1–R7](T007_acceptance.md) 修订文献事实及指标依据，尚未执行。**
+已交付的论文对照、精读卡和候选组合有可用材料，但不能直接用于指标定案。
+NEC 的事件级局部关系评价与设备整图指标须区别；CausIL 真实数据使用代理参考图；
+A4 的未观测依赖降低召回，不能据此声称作者使用 mask；SHD 与 ArrowConfusion 分开。
+APGNN 只有摘要，其全文是否报告图指标为 UNKNOWN；其他未核到细则的工作保持待核实。
+**最终主指标未定案**。完整图标签、mask 资格仍 UNKNOWN，不能把理论可定义写成当前已可执行。
+旧[指标协议](../docs/conferences/WWW2027/故障传播图指标调研与最终评价方案.md)
+**正文未改**，只是不再被当作本轮结论依据。
+
+**保留待办：T006-R 收尾 — 二次验收已完成，U1–U5 尚未执行。**
+交付：[argument_chains.md](../docs/conferences/WWW2027/web_relevance/argument_chains.md)、
+[rpg_recon_argument_transfer.md](../docs/conferences/WWW2027/web_relevance/rpg_recon_argument_transfer.md)
+（**已重写**：2 条正式候选 + 1 条条件性补充，撤销"首选"排序）、
+[T006_R_response.md](../docs/conferences/WWW2027/web_relevance/T006_R_response.md)（R1–R8 逐项应答）。
+**结论分层：多数原文纠错通过、迁移推理及摘要同步待收尾 / 证据有限 / 定位未定（不给推荐排序）。**
+用户确认华为云 DCN 的具体承载业务仍未知；该缺口不阻塞文献阅读，正式定位未选定。
+
+**本轮更正的主要判断**：InArt 的依赖链是**连续写的**（P3 再点 web applications），
+不是"断裂"；JitterSketch 有"缓冲后果 → 实时监测 → 缓冲策略调整"的桥；
+Starlink 的"用户离 PoP 近"是旧稿的分析者概括（原文是 CDN 到 PoP 的邻近度），
+"换成地面 ISP 问题消失"被原文自身否定；MULAN/GAMMA 的效果不能说成"与 Web 无关"；
+ODNS 的"自证"判断已撤回，改为"验证边界待查"。
+**二次验收残留**：迁移稿仍把双指标报告当作效度质疑的答案，并错误要求先排除共同原因才能保留
+“多症状不证明多传播”的限制；草稿中未知覆盖/标注状态与 root-only 范围未完全同步。
+两卡旧结论、InArt 问题前提归纳、README 统一缺文归因，以及少量地理/页段错误见 U3–U5。
+DCN/云内部网络可完整复核的样例仍只有 `www24-inart` 1 篇。
+候选补取结果与逐篇失败点见 [manifest](../docs/conferences/WWW2027/web_relevance/paper_manifest.md) §T006。
+
 当前是“实现原型和历史结果已有，评价证据待整理、论文主张待验证”的阶段。没有已核实的活动训练任务；远端运行状态 **UNKNOWN**。本地静态盘点不能证明服务器空闲。
 
-当前科学议题：C1 的起点—图结构耦合是否产生超出普通 RCA 的价值；图恢复在固定根下是否有增益；P0 的距离约束是否过强。用户于 2026-09-11 将当前任务调整为 [CURRENT_TASK.md](CURRENT_TASK.md)：**T004，清理仓库与建立文档索引 — 已完成（DONE）**，实际处置与验证见 [HANDOFF.md](HANDOFF.md)。T001 证据审计恢复为下一步研究待办；真实证据冻结仍受数据与人审条件阻塞。
+保留的科学议题：C1 的起点—图结构耦合是否产生超出普通 RCA 的价值；图恢复在固定根下是否有增益；P0 的距离约束是否过强。T001–T003 继续待办，本轮不运行这些实验。T005 的资料和失败记录见 [web_relevance 专题](../docs/conferences/WWW2027/web_relevance/README.md)、[原交接](HANDOFF.md) 与 [原任务书](T005_research_task.md)，其中失败原因和综合结论须结合验收更正阅读。T004 主体通过、交接记录见 [T004_handoff.md](T004_handoff.md)。
 
 ## Blocked Issues
 
@@ -82,6 +155,25 @@ E001–E005 是历史服务器聚合结果；E006/E007 是已留存功能验收�
 
 ## Next Actions
 
+**T008 / Claude Code — 当前优先：执行 [相关工作目录任务书](T008_research_task.md)。**
+先整理种子与覆盖矩阵，再多源检索/引文扩展，核实身份与等级，生成目录和核心阅读卡，最后完成覆盖审计。
+用户已确认写入任务书；无需重新确认常规检索策略。发布不等于检索已经启动。
+
+**T007-R / Claude Code — 保留待办：按 [验收 R1–R7](T007_acceptance.md) 定点返修。**
+先修 NEC/CausIL/A4 的评价对象与参考图口径，再修 SHD、公式、比例及文献身份；
+同步 report/sources/入口/交接，交付逐项响应。保留已核实材料，不全量重搜，不运行实验。
+验收通过后供用户选择精读论文及最终指标；不把用户定案或 T001 标签审计作为文献返修前置。
+
+**T006-R 收尾 / Claude Code — 保留待办：按 [二次验收 U1–U5](T006_R_acceptance.md) 定点修正，尚未执行。**
+先修双指标效度和共同原因的逻辑条件，再同步草稿中的事实标签、root-only 范围、标注未知状态，
+最后清除卡片/入口旧结论并校正少量地理事实、页段与顺序归属。
+R5/R8 关闭，已修好的来源、实验定义和用户研究控制不要求重做。
+**正式定位未选定**；补齐业务映射或全部 DCN 缺文不作为本轮返修前置。
+**未完成（已在文档中如实标注）**：逐页视觉 QA（本机无 `pdftoppm`，按要求在服务器执行）、
+最近邻 N1–N5 的实际核实、`graph-eval-v2` 统一实现与独立关系标注下的重评、使用者实验。
+二次验收写入前独立检查：**71 个 Markdown、409 条相对文件链接（含 URL 解码）、0 失效**。
+文档增加后计数会变化；检查口径和版本见二次验收。未运行项目测试或研究实验。
+
 **T004 / Claude Code — 清理仓库并建立文档索引：已完成（2026-09-11）。** 删除 53 个纯缓存
 目录（约 10 MB，全部可自动再生），新增根 `README.md` 与 `docs/README.md`，修复 3 处失效的
 `论文方案.md` 引用并同步 2 处过时待办。**零个被跟踪文件被删除或移动。** 验证：206 + 22
@@ -89,7 +181,10 @@ E001–E005 是历史服务器聚合结果；E006/E007 是已留存功能验收�
 `graphrebuild`（未推送）。待用户决定的待定项（`.codex-tmp/`、`RCAcopilot/`、
 `/tests/*` 忽略规则）见 [HANDOFF.md](HANDOFF.md)。
 
-以下研究任务排在清理之后，状态仍为待办：
+以下研究任务继续保留待办，本次 T008 不自动启动：
+
+用户最新执行约束（2026-09-11）：后续审计、重评分与实验在服务器执行，不在本地电脑执行。
+T001 后续可拆出“服务器只读证据清点与待签认审计包”；该建议未启动，当前优先 T008 文献目录。
 
 1. **T001 / Claude + 工程师：证据冻结准备。** 完成全量清单审计工具；缺源显式报告；工程师确认根/边语义和真实分组后再冻结。交付：审计摘要、缺口、版本指纹及待签认 manifest。
 2. **T002 / Claude，Work 审核协议：统一评价。** 同一规范评价入口覆盖主方法和 baseline；先用可手算的合成例验证语义，再接真实标签。此项代码可与人审并行准备，真实主表依赖 T001。
@@ -102,4 +197,3 @@ E001–E005 是历史服务器聚合结果；E006/E007 是已留存功能验收�
 重大进展更新本文件日期、状态和依赖；同次更新 HANDOFF 与相关实验 ID。实验“计划/已执行/报告已收到/已复现/可进论文”分别标记。未提交用户修改和无关文件不归入 Agent 的完成项。
 
 来源优先读：[根 README](../README.md)、[docs 索引](../docs/README.md)、[最新合同](../AGENT.md)、[9/10 执行记录](../docs/conferences/WWW2027/2026-09-10_后续任务执行记录.md)、[图评价协议](../docs/conferences/WWW2027/故障传播图指标调研与最终评价方案.md)、[WWW 索引](../docs/conferences/WWW2027/README.md)。9/8 文档前段 Oracle 待办已过时；项目概览的旧 Immediate Priorities 已于 T004 替换为指向本文件的说明，不据此恢复已暂停任务或已删除文档。
-

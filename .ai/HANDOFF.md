@@ -1,92 +1,141 @@
-# Handoff — T004 仓库清理与文档索引
+# HANDOFF — T008 相关工作全面检索与可核验文献目录
 
-From：Claude Code（执行）。To：下一轮 Agent / 工程师。
+任务：[T008](CURRENT_TASK.md)　执行：Claude Code　日期：**2026-09-15**
+状态：**主要交付已完成**；覆盖缺口已在产物中如实标注（见 §6、§7），**未标为全部完成**。
+分支：`graphrebuild`（未提交、未推送）
 
-任务书 [CURRENT_TASK.md](CURRENT_TASK.md)（T004）已执行完毕。本轮只做文档与缓存处置；
-没有改动算法、评分语义、标签或实验数字，没有运行训练，没有提交或推送。
+> T007 的 HANDOFF / EVIDENCE 已按要求**原样存为**
+> [T007_handoff.md](T007_handoff.md)、[T007_evidence.md](T007_evidence.md)，本文件为 T008 版本。
 
-## 实际删除（53 个目录，约 10 MB，全部可自动再生）
+---
 
-| 类别 | 数量 | 依据 | 恢复路径 |
-|---|---|---|---|
-| `__pycache__/` | 51 | 仅含 `.pyc`；`.gitignore` 第 2 行 | 下次 import 自动重建 |
-| `.pytest_cache/`（根 + labeler） | 2 | 仅含 pytest 记账（`lastfailed`/`nodeids`） | 下次 `pytest` 自动重建 |
+## 1. 交付物
 
-依据与安全校验：每个目录都经过解析，确认 (a) 绝对路径位于本仓库内，(b) 未被 Git 跟踪，
-(c) 内容只有 `.pyc` 或 pytest 自身文件。删除使用 PowerShell `Remove-Item -LiteralPath`，
-逐项复核。`tmp/baselines-venv/` 内的 878 个缓存目录**未处理**（现有虚拟环境不属于清理目标）。
+全部位于 `docs/conferences/WWW2027/related_work_catalog/`：
 
-一次性辅助脚本保留在忽略目录：`tmp/t004_verify_cache_dirs.py`（枚举 + 校验，写清单）、
-`tmp/t004_delete_caches.ps1`（复核后 `Remove-Item -LiteralPath`）。`tmp/t004_del.txt` 是
-辅助脚本每次运行重新生成的清单，当前保存的是**最后一批**的路径。
+| 文件 | 内容 | 状态 |
+|---|---|---|
+| `README.md` | 入口、三层范围、字段与状态说明、维护方式 | ✅ |
+| `catalog.xlsx` | `Papers`(306) / `Pending`(13) / `Coverage`(204) / `Venues`(204)；冻结表头、自动筛选、可点击链接 | ✅ |
+| `catalog.csv` | 与 Papers 一致的 UTF-8(BOM) 主表，29 列 | ✅ |
+| `index.md` | 按层次→主题组织的索引，306 条 | ✅ |
+| `search_log.md` | 实际执行的通道、查询、引文轮次、更正记录 | ✅ |
+| `coverage_report.md` | 分层/年份/等级统计、覆盖矩阵、缺口 G1–G11、停止依据 | ✅ |
+| `evidence.md` | 逐条身份来源、等级出处、19 条题名更正 | ✅ |
+| `screening.csv` | 13 条待核实线索及具体理由 | ✅ |
+| `papers/*.md` | **16 张**核心近邻阅读卡 | ✅ |
 
-上述 53 个目录是首批处置。随后为验证清理未破坏代码，执行了测试套件，测试运行按预期重建了
-25 个缓存目录；这 25 个已用同一校验流程再次清除（当前工作区缓存目录数为 0）。
-合计处置 78 个目录，全部为可自动再生的缓存。
+## 2. 结果摘要
 
-## 实际保留（有明确依据，未删）
-
-- 所有被跟踪文件：264 个 tracked 文件中**零删除、零移动**。全库内容去重扫描
-  （MD5）显示没有内容重复的跟踪文件。
-- `docs/f0.png`、`f1.png`、`f2.png`、`fig1.png` 及 2026-09-09 生成图：WWW 索引明确
-  记录「本次保留并提交」，属旧示意素材，继续保留并从当前阅读路径分离。
-- `Baseline/BiAn/`、`NetEventCause/`、`TraceRCA/`：`Baseline/README.md` 声明「保持原用途」，
-  且被 `scripts/run_rca_baselines.sh` 引用。
-- `pingmesh-propagation-labeler/.local/`：含 QA 截图与重建案例，唯一证据。
-- `.ai/`、`data/`、`tmp/`、`output/`、`archive/`、未跟踪个人工作簿：全部保留。
-
-## 新增索引
-
-- **根 `README.md`（80 行）**：项目与两阶段方法、输入输出边界、主要目录表、
-  文档入口表、Windows/Linux 运行入口、重要边界。关键资料至多两级可达。
-- **`docs/README.md`（66 行）**：按「当前论文 / 方法实现 / 实验与评价 / 历史与参考」
-  分类，链接到已有 WWW 索引与权威原文，不枚举单篇论文、不复制正文。
-
-## 修复的失效引用
-
-1. `docs/PC-STGR设计方案.md` — 指向已删除 `./论文方案.md` 的链接改为 WWW 索引 + 项目概览。
-2. `docs/papers/相关工作_三类方法与缺口_INFOCOM版.md` — `../论文方案.md` 改为 WWW 索引。
-3. `scripts/README.md` — 正文提到的 `docs/论文方案.md` 改为 WWW 索引。
-4. `docs/project_overview.md` — 过时的 5 条 Immediate Priorities 替换为指向
-   2026-09-10 执行记录的说明，并明确 **Oracle 已在 2026-09-08 运行过**，下一步是重评不是首跑。
-5. `scripts/README.md` — 补充旧 evaluator（`evaluate_propagation.py`）语义尚未与新协议统一的提示。
-6. `AGENT.md`、`CLAUDE.md` — 仅最小增量：补根 README / docs 索引入口，修正
-   「项目概览仍含历史优先级」的表述。用户原有未提交修改完整保留。
-
-`docs/论文方案.md` 是用户已删除文件，**未恢复**；相关入口已改指现存材料。
-
-## 验证命令与结果
-
-| 命令 | 结果 |
+| 指标 | 数值 |
 |---|---|
-| `git diff --check` | 退出 0，无空白错误 |
-| 本地链接检查（60 个 Markdown，含 `.ai/`） | **0 条失效** |
-| `python -m pytest tests -q` | **206 passed**（与既有记录一致） |
-| `python -m pytest pingmesh-propagation-labeler/tests -q` | **22 passed** |
-| `python -m Baseline.common --help` | 退出 0 |
+| 候选线索 | 319 |
+| **身份已核实** | **306** |
+| 待核实 | 13 |
+| 含 DOI | 241 |
+| 取得摘要 | 47 |
+| 题名与旧线索冲突并更正 | **19** |
+| 分层 | L1 195 / L2 64 / L3 47 |
+| CCF | A 108 / B 40 / C 11 / 预印本 36 / 非正式轨道 11 / 未收录 91 / 待核实 9 |
 
-`git status --short` 显示 6 个已修改跟踪文件（本轮 4 个 + 用户原有 2 个）、3 个新增
-未跟踪项（`README.md`、`docs/README.md`、`.ai/`）与个人工作簿。测试运行会重建
-`__pycache__`/`.pytest_cache`，属预期。
+## 3. 做法（可复现）
 
-## 待定文件（本轮保留，需用户决定）
+解析流水线（脚本在 `tmp/t008/`，`tmp/` 已被忽略）：
 
-1. **`.codex-tmp/`（22 MB）** 与 **`output/codex_intro_revision_tmp/node_modules`**：
-   PPT 制作临时目录与依赖缓存。两者都没有 `package.json`/`package-lock.json`，
-   无法保证可重建，因此**未删除**。若确认不再需要，可整体移除。
-2. **`Baseline/RCAcopilot/`**：完整的 baseline 实现与自测，但不出现在
-   `Baseline/README.md` 方法表、也不被任何 runner 引用。未确认冗余，保留。
-3. **`.gitignore` 的 `/tests/*` 规则**：16 个真实测试文件（如
-   `test_evaluate_propagation.py`、`test_stage2_m1_hypothesis_graph.py`）因此处于
-   未跟踪状态，干净 checkout 无法复现本机 206 项测试集合。CLAUDE.md 已记录该现象。
-   修复需要语义决策（是否全部纳入版本控制），本轮未改动。
-4. **`.gitignore` 中 `agent/` 相关条目**：对应目录不存在，属无害的陈旧规则。
+1. `merge.py` — 合并 8 个并行检索主题的 TSV + 既有种子 → `candidates_all.tsv`（327 条）
+2. `resolve.py` — DOI 直取 / Crossref 题名检索 / OpenAlex 检索
+3. `verify_url.py` — 出版方页面 `citation_*` 元数据
+4. `resolve2.py` — arXiv ID 恢复 + Crossref `query.title`
+5. `resolve3.py` — 改用 curl（Python SSL 在 usenix/arxiv 上失败）+ 短题名前缀匹配
+6. `adjudicate.py` — 8 条具名论文人工裁定
+7. `abstracts.py` / `abstracts2.py` — 摘要获取（严格题名匹配）
+8. `ccf_map.py` — CCF 第七版等级映射（解析自官方 PDF，597 条）
+9. `build.py` → `emit.py` → `check.py`
 
-（`.ai/` 已于本次提交纳入版本控制，跟踪前已扫描确认无内部路径、主机名或 IP；
-根 README 与本文档对它的链接因此在干净 checkout 下同样有效。）
+**关键设计**：所有元数据由提供方记录产生，**不手抄**。系统名与正式题名混淆、
+短题名存缴、轨道继承等问题均由流水线显式处理并记录，而不是静默覆盖。
 
-## Recommendation
+## 4. 命令
 
-T004 的交付目标（简洁入口 + 已核实的冗余清理 + 引用修复）已达成，变更已提交到
-`graphrebuild`（未推送）。研究侧证据缺口与 UNKNOWN 清单**不因本次清理而改变**：
-T001 证据审计仍是下一步，按 STATUS 顺序推进。`/tests/*` 忽略规则建议由用户决定。
+```powershell
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/merge.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/resolve.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/verify_url.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/resolve2.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/resolve3.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/adjudicate.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/abstracts.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/abstracts2.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/ccf_lookup.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/coverage.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/build.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/emit.py
+& tmp/baselines-venv/Scripts/python.exe tmp/t008/check.py
+```
+
+## 5. 验证
+
+`check.py` **29 项全部 PASS**，0 失败：
+
+- 8 个顶层文件 + 16 张阅读卡存在
+- 全部 Markdown/CSV 严格 UTF-8 解码通过
+- `catalog.csv` 306 行；`paper_id` 唯一且非空；241 个 DOI **无重复**
+- 必填字段（题名/venue/年份/等级/链接/层次/主题）无静默缺失（venue 空 6 条，已标待核实）
+- 每行都有身份核验来源
+- `screening.csv` 13 行，全部标「待核实」且有处置理由；与 Papers 的 ID **不相交**
+- `catalog.xlsx` 四表齐全；Papers 306 行、冻结 `A2`、自动筛选生效、链接列 306 条可点击
+- **xlsx / csv / index.md / evidence.md 的 paper_id 集合完全一致**
+- 目录内 Markdown 本地相对链接 **0 失效**
+- 阅读卡 paper_id 与题名均能对上 catalog
+
+**未运行项目测试**（按任务要求只做产物检查）；未运行训练/实验/评分/数据审计。
+
+## 6. 重要事实性发现（需 Work 决策是否采纳）
+
+1. **必须撤回的旧概括**：「网络侧没有传播关系评价」。
+   NetEventCause 已有事件级局部原因关系的 ACC@k 与参考关系对照（T007 R1 已认定），
+   APGNN 的题名本身就是「告警传播图」。
+   正确表述：未查到与本项目**同粒度、同输出对象**的完整设备 DAG 指标先例。
+   **这不自动构成 novelty。**
+2. **最强的直接近邻是两篇 2026 预印本**，不在数据库老论文中：
+   - **PropLLM**（arXiv:2606.00582）逐跳回溯传播路径 + 拓扑因果先验 —— 输出是链不是图
+   - **EvoCause**（arXiv:2607.27290）LLM 演化因果图，用 **Node F1 / Case EM / Graph F1 / nSHD**
+     评价，并发布 **TeleRCA**（485,681 告警事件，专家标注）
+3. **三处系统名 ≠ 正式题名**（旧材料误作题名）：COLA、REASON、CORAL。
+   其中 REASON 与 CORAL 的正式题名与旧记录**完全不同**；
+   COLA 与另存条目**实为同一篇**，已合并。
+4. **跨领域已有可对照的图评价实践**：CausIL(WWW'23) 报 Adj/AH/SHD；
+   ProAlert(PACMSE'25) 用传播路径做告警摘要；ErrorPrism(ASE'25) 以路径 exact-match 评价。
+   本文图指标应引用这些**同类输出**的工作。
+5. **一条对我方评测设计有利的独立依据**：*Complexity at Scale*（arXiv:2504.13141）
+   用阿里生产追踪数据证明**调用图高度时变、依赖长尾**，直接挑战「依赖图固定」的假设。
+
+## 7. 问题与风险
+
+| ID | 问题 | 影响 |
+|---|---|---|
+| P01 | **APGNN 全文未取得**（`is_oa: false`，无任何 OA 副本）。该文题名与本文最接近 | 无法判断其是否评价图结构；只能说 UNKNOWN |
+| P02 | 259/306 条仅核验元数据，**未读正文** | `论文自身输出对象` 与 `与本文关系` 是检索线索，已在列名与 README 中明确标注 |
+| P03 | `coverage.py` 的 Crossref 探测是**相关性排序而非精确过滤**，`n_records` 不是出版量 | 已在 `Coverage` 表与覆盖报告中标注局限，**不据此做覆盖率声明** |
+| P04 | OpenAlex source 级逐年统计**未完成**（配额耗尽） | 真实逐年覆盖仍缺；缺口 G4 |
+| P05 | NSDI 在 Crossref 探测中 12 年零命中，**实为来源未收录**而非无结果 | 已在覆盖报告中纠正该失真 |
+| P06 | ACM Computing Surveys 未在官方目录解析结果中定位 | 3 条记「待核实」；缺口 G3 |
+| P07 | 中文期刊系统性检索未完成（无可自动化通道） | 仅 4 条，其中 1 条置信度低；缺口 G5 |
+| P08 | 本地全文缓存 `docs/papers/*.txt`（48 个）已从工作区删除，**按任务要求未恢复** | 本轮内容核验只能依赖一手页面；T007 轮次的定位已按验收更正后带入阅读卡 |
+| P09 | **既有失效链接（非本轮引入）**：`docs/PC-STGR设计方案.md` 已被删除（未提交的工作区删除），但 **7 个文件**仍链接到它，包括 `docs/conferences/WWW2027/README.md`、`.ai/PROJECT.md`、根 `README.md`、`docs/README.md` 等 | 本目录内链接 0 失效；该失效在 `HEAD` 中已存在。**未擅自改指向**——如何处置属用户/Work 决定 |
+
+## 8. 未修改的内容
+
+- **未改动** T007 的 `graph_metrics_literature/report.md` 与 `sources.md`（其 R1–R7 返修仍属 T007-R）
+- **未改动** 任何算法、标签、评分协议、实验数字、baseline 选型结论
+- **未改动** 正式论文 related work；只在 WWW2027 索引添加入口
+
+## 9. 建议的下一步
+
+1. **Work 验收 T008**：重点看 `coverage_report.md` §4 缺口与 §6 发现，
+   判断「撤回旧概括」与「两篇 2026 预印本构成直接威胁」是否成立。
+2. **最高优先补全文**：APGNN（缺口 G1）与 PropLLM / EvoCause 全文。
+   后者直接决定本文 novelty 的表述边界。
+3. **恢复 T007-R**：其指标返修与本目录**不冲突**，可并行；本目录已把 T007 的更正带入阅读卡。
+4. **配额重置后**重跑 `coverage2.py` 补 OpenAlex source 级逐年覆盖（缺口 G4）。
+5. 本任务未提交、未推送；是否提交由用户决定。

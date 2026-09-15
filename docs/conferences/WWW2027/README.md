@@ -33,6 +33,63 @@
 本专题**更正**了下方"四项任务"中第 1 项的部分结论（尤其 MULAN / MetaKube 的
 Web 关联强度）。
 
+## T007 专题：图评价指标的文献依据调研（2026-09-13）
+
+[graph_metrics_literature/](graph_metrics_literature/report.md) 专题为**给论文选图评价指标**提供可核验的
+一手文献依据：核查每篇代表论文**实验里到底评价了什么**（图结构 / 根因排名 / 下游任务）、
+指标定义、真值来源与发表级别。
+
+**先读两份 T007 产物**：
+
+1. [report.md](graph_metrics_literature/report.md)——开头一页给出**最值得读的 5 篇论文与理由**、
+   候选指标及待确认前提；随后为论文对照表（A/B/C 分类）、重点精读卡、指标比较、
+   两套条件化候选组合与选择理由草稿。
+2. [sources.md](graph_metrics_literature/sources.md)——论文身份/正式链接/全文版本与位置、
+   指标证据定位、CCF 目录版本与核查方法、检索日期与查询、入选/排除/缺文记录。
+
+**验收状态（2026-09-13）：部分通过，T007-R 待返修。**
+见 [独立验收 R1–R7](../../../.ai/T007_acceptance.md)。NEC 已有局部原因关系恢复评价，
+CausIL 有真实数据代理图结构分数；原报告关于 A4 掩码及 SHD 的若干判断需更正。
+不沿用“网络侧都不评图”“SHD 反向边计 0/1/2”的交付概括。
+报告正文保留供返修对账，当前候选组合尚不能直接用于论文指标定案。
+
+APGNN 仅读到摘要，其全文图指标为 UNKNOWN；部分文献细则尚待定点核实。
+**最终指标待用户精读后决定**；修订后的文献包可给阅读建议，也不取代
+[现行图评价协议](./故障传播图指标调研与最终评价方案.md)。
+
+## T008 专题：相关工作全面检索与可核验文献目录（2026-09-15）
+
+[related_work_catalog/](related_work_catalog/README.md) 是**长期文献对照表**，
+供添加参考文献、挑选精读论文和检查相关工作遗漏使用。检索截止日 2026-09-15，
+三层覆盖（L1 核心近邻 / L2 相邻场景 / L3 方法基础），2015 年起并回溯经典。
+
+**规模**：身份已核实 **306** 条 + 待核实 **13** 条；含 DOI 241 条；阅读卡 **16** 张。
+
+| 入口 | 用途 |
+|---|---|
+| [catalog.xlsx](related_work_catalog/catalog.xlsx) | 按题名/venue/等级/时间/链接筛选（`Papers`/`Pending`/`Coverage`/`Venues`） |
+| [catalog.csv](related_work_catalog/catalog.csv) | 机器可读主表 |
+| [index.md](related_work_catalog/index.md) | 按层次与主题的简明索引 |
+| [coverage_report.md](related_work_catalog/coverage_report.md) | 覆盖矩阵、缺口 G1–G11、停止依据 |
+| [search_log.md](related_work_catalog/search_log.md) | 实际执行的检索通道与更正记录 |
+| [papers/](related_work_catalog/papers/) | 核心近邻阅读卡 |
+
+> **阅读时务必先看 `内容阅读深度` 列**：306 条中只有 **47** 条读到摘要，
+> **259 条仅核验了身份与著录、未读正文**。`论文自身输出对象` 与 `与本文关系`
+> 两列是**检索线索**，列名已标注「未逐篇核实」，不能当作原文事实引用。
+
+**本轮发现的三项要点**（详见覆盖报告 §6）：
+
+1. 「网络侧没有传播关系评价」这一旧概括**必须撤回**——NetEventCause 已有事件级局部
+   原因关系的 ACC@k 与参考关系对照，APGNN 的题名本身就是「告警传播图」。
+2. 最接近本文的**直接挑战者是两篇 2026 预印本**：PropLLM（逐跳回溯传播路径）与
+   EvoCause（LLM 演化因果图，用 Node F1 / Case EM / Graph F1 / nSHD 评价，附 TeleRCA benchmark）。
+3. 旧材料把 **COLA / REASON / CORAL 三个系统名当作正式题名**；其中 REASON 与 CORAL
+   的正式题名与旧记录完全不同，COLA 与另存条目实为同一篇。
+
+本目录**未改动** T007 的 `report.md` / `sources.md`（其 R1–R7 返修仍属 T007-R），
+也**未改动**正式论文的 related work 与主指标决定。
+
 ## 本轮四项任务
 
 建议按以下顺序阅读；执行依赖与验收记录见[后续任务执行记录](./2026-09-10_后续任务执行记录.md)。
