@@ -9,18 +9,18 @@ import hashlib
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import importlib.metadata
+import os
 from pathlib import Path
 import platform
 import subprocess
 import time
 
-from Baseline.common.evaluation import load_labels
 from Baseline.common.io import dump_json, load_incidents, read_json
 from Baseline.common.schema import input_fingerprint, stable_hash, STATUSES
-from Baseline.common.splits import validate_manifest
 from .graph import device_graph
 from .metrics import METRICS, aggregate, evaluate, label_sets
 from .models import InputIneligible, Ours, PCMCI, THP, TimeOrder
+from .prepare import labels_from_path, prepare_manifest
 
 METHODS = ("timeorder", "nec", "pcmci", "thp", "ours")
 NAMES = dict(zip(METHODS, ("TimeOrder", "NetEventCause", "PCMCI", "THP", "Ours")))
@@ -99,9 +99,11 @@ def predict(model, method, case, fold, condition, root):
 
 def check_inputs(args):
     cases = load_incidents(args.inputs, before_seconds=args.before_seconds, after_seconds=args.after_seconds)
-    manifest = validate_manifest(read_json(args.manifest), cases)
-    cases = [{**c, "group_id": manifest["groups"][c["case_id"]], "group_verified": True} for c in cases]
-    labels = load_labels(args.labels)
+    manifest = prepare_manifest(cases, manifest_path=args.manifest, groups_path=args.groups,
+                                folds=args.folds, seed=args.seed)
+    cases = [{**c, "group_id": manifest["groups"][c["case_id"]],
+              "group_verified": manifest.get("groups_verified", False)} for c in cases]
+    labels = labels_from_path(args.labels, cases)
     if set(labels) != {c["case_id"] for c in cases}:
         raise ValueError("Canonical labels must cover the frozen inventory exactly; include unlabeled cases explicitly")
     for case in cases:
@@ -172,7 +174,9 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
                                        (cohort == "all" or r["group_id"] not in bad_groups)],
                                       bootstrap_samples=bootstrap_samples)
                     for method in methods}
-    return {"schema_version": "rq1-summary-v1", "aggregation": "window mean within verified incident, then incident macro",
+    return {"schema_version": "rq1-summary-v1", "aggregation": "window mean within declared group, then group macro",
+            "groups_verified": manifest.get("groups_verified", True),
+            "evaluation_status": manifest.get("evaluation_status", "reviewed_grouping"),
             "failure_policy": "PRF=0 for failed cases; SHD withheld if any included prediction failed",
             "shd_rule": "add/delete/reorient relation each costs 1; undecided/two-arrow relation replacement costs 1",
             "tables": tables, "rows": rows,
@@ -182,6 +186,7 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
 def write_report(path, summary, view):
     dump_json(path / "summary.json", summary)
     markdown = ["# RQ1", "", f"Primary graph view: **{view}**. Scores are incident macro averages in [0,1].", "",
+                f"Grouping: **{summary.get('evaluation_status', 'reviewed_grouping')}**. Unverified automatic groups are exploratory; CIs are disabled.", "",
                 "NetEventCause is a mechanism reproduction + device adapter. THP uses gCastle TTPM + device adapter.",
                 "Ours is current deterministic P0 on common observations and a fixed root.", "",
                 "Failed cases score zero for P/R/F1. SHD is N/A when failures are present or labels are partial.",
@@ -208,16 +213,24 @@ def write_report(path, summary, view):
 
 
 def main(argv=None):
+    project = Path(os.environ.get("PINGMESH_PROJECT_ROOT", Path(__file__).resolve().parents[2]))
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("run", "evaluate"))
-    parser.add_argument("--inputs", required=True, help="Raw/processed directory or canonical incidents JSON/JSONL")
-    parser.add_argument("--labels", required=True, help="Canonical labels, loaded only by wrapper/evaluator")
-    parser.add_argument("--manifest", required=True, help="Verified incident-group OOF manifest")
-    parser.add_argument("--output", required=True, help="New output directory; existing paths are never overwritten")
+    parser.add_argument("command", choices=("run", "evaluate"), nargs="?", default="run")
+    parser.add_argument("--inputs", default=os.environ.get("PINGMESH_DATA", str(project / "data/node/nodes_max_labeled")),
+                        help="Defaults to PINGMESH_DATA from common.sh")
+    parser.add_argument("--labels", default=os.environ.get("PINGMESH_PROPAGATION_LABELS_ROOT", str(project / "data/propagation_labels")),
+                        help="GT directory or canonical JSON; defaults to PINGMESH_PROPAGATION_LABELS_ROOT")
+    parser.add_argument("--manifest", default=os.environ.get("PINGMESH_RQ1_MANIFEST") or None, help="Optional frozen manifest")
+    parser.add_argument("--groups", default=os.environ.get("PINGMESH_RQ1_GROUPS") or None, help="Optional reviewed case->incident mapping")
+    parser.add_argument("--folds", type=int, default=int(os.environ.get("PINGMESH_RQ1_FOLDS", "5")))
+    parser.add_argument("--seed", type=int, default=int(os.environ.get("PINGMESH_RQ1_SEED", "20260920")))
+    parser.add_argument("--output", help="New output directory; auto-named under PINGMESH_RESULTS when omitted")
     parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
-    parser.add_argument("--condition", choices=("shared", "oracle"), default="shared")
-    parser.add_argument("--roots", help="Frozen common OOF roots with manifest_hash and source")
-    parser.add_argument("--config", help="JSON keyed by timeorder/nec/pcmci/thp/ours")
+    parser.add_argument("--condition", choices=("shared", "oracle"), help="Default common.sh condition; --roots implies shared")
+    parser.add_argument("--roots", default=os.environ.get("PINGMESH_RQ1_ROOTS") or None,
+                        help="Frozen common OOF roots with manifest_hash and source")
+    parser.add_argument("--config", default=os.environ.get("PINGMESH_RQ1_CONFIG", str(project / "configs/baselines/rq1.json")),
+                        help="JSON keyed by methods; defaults to common.sh RQ1 config")
     parser.add_argument("--device", default="cpu", help="NEC torch device; PCMCI/THP use CPU")
     parser.add_argument("--before-seconds", type=float, default=300)
     parser.add_argument("--after-seconds", type=float, default=300)
@@ -225,9 +238,25 @@ def main(argv=None):
     parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--predictions", help="RQ1 predictions.json for evaluate")
     parser.add_argument("--dry-run", action="store_true", help="Check inventory/labels/folds/roots; do not fit or write")
+    parser.add_argument("--check-inputs", action="store_true", help="Read-only observation checks; no GT, model, or training required")
     args = parser.parse_args(argv)
+    args.condition = args.condition or ("shared" if args.roots else os.environ.get("PINGMESH_RQ1_CONDITION", "oracle"))
+    if args.condition not in {"shared", "oracle"}:
+        parser.error("PINGMESH_RQ1_CONDITION must be shared or oracle")
+    if not args.output:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        args.output = str(Path(os.environ.get("PINGMESH_RESULTS", str(project / "data/res"))) / f"rq1_{args.condition}_{stamp}")
     if len(set(args.methods)) != len(args.methods) or args.bootstrap_samples < 0:
         parser.error("Methods must be unique and bootstrap-samples nonnegative")
+    if args.check_inputs:
+        import json
+        cases = load_incidents(args.inputs, before_seconds=args.before_seconds, after_seconds=args.after_seconds)
+        print(json.dumps({"inputs": str(Path(args.inputs).resolve()), "gt_path": str(Path(args.labels).resolve()),
+                          "gt_path_exists": Path(args.labels).exists(), "gt_read": False, "n_cases": len(cases),
+                          "cases": [{"case_id": c["case_id"], "devices": len(c["devices"]),
+                                     "physical_links": len(c["physical_links"]), "events": len(c["events"])} for c in cases],
+                          "output": args.output, "models_executed": False}, ensure_ascii=False, indent=2))
+        return
     cases, manifest, labels = check_inputs(args)
     roots = roots_for(args, cases, manifest, labels)
     config = read_json(args.config) if args.config else {}
@@ -240,6 +269,8 @@ def main(argv=None):
         import json
         print(json.dumps({"cases": len(cases), "groups": len(set(manifest["groups"].values())),
                           "methods": args.methods, "condition": args.condition, "runtime": versions(),
+                          "inputs": args.inputs, "gt": args.labels, "output": args.output,
+                          "groups_verified": manifest.get("groups_verified", False),
                           "labels": dict(Counter("complete" if l.get("graph_complete") else "partial_or_unavailable" for l in labels.values())),
                           "dry_run": "inventory only; numerical backends are not executed"}, ensure_ascii=False, indent=2))
         return
@@ -263,6 +294,12 @@ def main(argv=None):
                "manifest_hash": manifest["manifest_hash"], "input_hashes": manifest["input_hashes"],
                "labels_hash": stable_hash(labels), "roots_hash": stable_hash(roots), "status": "running"}
         dump_json(output / "run.json", run)
+        dump_json(output / "folds.json", manifest)
+        dump_json(output / "labels.canonical.json", {"labels": list(labels.values())})
+        dump_json(output / "roots.json", {"manifest_hash": manifest["manifest_hash"], "roots": roots,
+                  "source": str(args.roots) if args.roots else "explicit Oracle roots from propagation GT"})
+        if not manifest.get("groups_verified", False):
+            print("[RQ1] Automatic groups are unverified. NEC training and group CIs require --groups or --manifest.", flush=True)
         predictions, training = [], []
         by_id = {c["case_id"]: c for c in cases}
         for method in args.methods:
@@ -270,6 +307,8 @@ def main(argv=None):
                 fold = split["fold"]
                 print(f"[{method}] fold={fold} test_cases={len(split['test'])}", flush=True)
                 try:
+                    if method == "nec" and (not manifest.get("groups_verified", False) or not split["train"]):
+                        raise InputIneligible("NEC requires verified independent training groups; configure PINGMESH_RQ1_GROUPS or PINGMESH_RQ1_MANIFEST")
                     model = make_model(method, config.get(method), args.device)
                     if method == "nec":
                         model.fit([deepcopy(by_id[c]) for c in split["train"]],
@@ -281,8 +320,9 @@ def main(argv=None):
                                          "checkpoint": str(checkpoint), "report": model.training_report})
                 except Exception as exc:
                     reason = f"initialization_or_fit: {type(exc).__name__}: {exc}"
-                    training.append({"method": method, "fold": fold, "status": "runtime_failure", "reason": reason})
-                    fold_predictions = [failure(by_id[c], method, fold, condition, roots[c], reason) for c in split["test"]]
+                    status = "input_ineligible" if isinstance(exc, InputIneligible) else "runtime_failure"
+                    training.append({"method": method, "fold": fold, "status": status, "reason": reason})
+                    fold_predictions = [failure(by_id[c], method, fold, condition, roots[c], reason, status=status) for c in split["test"]]
                 else:
                     fold_predictions = []
                     for cid in split["test"]:
@@ -294,7 +334,8 @@ def main(argv=None):
                 predictions.extend(fold_predictions)
                 dump_json(output / "predictions.json", {"manifest_hash": manifest["manifest_hash"],
                           "roots_hash": stable_hash(roots), "predictions": predictions, "training": training})
-    summary = summarize_predictions(cases, labels, predictions, args.methods, manifest, args.bootstrap_samples)
+    summary = summarize_predictions(cases, labels, predictions, args.methods, manifest,
+                                    args.bootstrap_samples if manifest.get("groups_verified", False) else 0)
     output.mkdir(parents=True, exist_ok=True)
     write_report(output, summary, args.graph_view)
     if args.command == "run":

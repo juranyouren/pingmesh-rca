@@ -4,6 +4,59 @@
 默认方法：TimeOrder、NetEventCause、PCMCI、THP、Ours；THP 已加入七指标表。
 本次交付脚本与服务器验证用例，**未执行服务器实验，也未生成真实结果**。
 
+## 直接运行（2026-09-21 更新）
+
+在服务器项目目录执行：
+
+```bash
+bash scripts/run_rq1.sh
+```
+
+脚本 source `scripts/common.sh`，不再要求手填输入、GT、输出路径：
+
+| 项目 | common.sh 配置 | 默认位置 |
+|---|---|---|
+| 节点观测 | `PINGMESH_DATA` | `data/node/nodes_max_labeled` |
+| 传播图 GT | `PINGMESH_PROPAGATION_LABELS_ROOT` | `data/propagation_labels/<case_id>/propagation_label.json` |
+| 输出根目录 | `PINGMESH_RESULTS` | `data/res`，自动建立 rq1_oracle 时间戳目录 |
+| 方法参数 | `PINGMESH_RQ1_CONFIG` | `configs/baselines/rq1.json` |
+| 根条件 | `PINGMESH_RQ1_CONDITION` | `oracle`，使用传播 GT 中确认的单根 |
+
+本地和服务器使用相同相对路径。本地只有两个示例、没有传播 GT，使用只读检查：
+
+```bash
+bash scripts/run_rq1.sh --check-inputs
+# Windows 无 Bash 时（使用上述相同相对路径默认值）：
+python -m Baseline.RQ1 --check-inputs
+```
+
+检查只读取节点观测，不读取 `label.json` 或传播 GT、不运行模型、不写实验目录。
+正式运行缺 GT 会说明应在服务器执行，不伪造标签或改用根标签生成传播真值。
+`--dry-run` 是包含 GT/根/分折的严格预检，需在有 GT 的服务器运行。
+
+GT 可直接使用现有目录格式 `edges` / `dd_edges`，无需手工转换：
+`definite` 为确认正边，`explicit_no_direct` 为确认无直接关系，`possible` 及其余状态保持未判定。
+只有显式 `graph_complete=true` 且没有未决关系时才计算完整 SHD；不默认把旧标签视为完整图。
+多根／未知根、冲突标注、acceptable_hypotheses 会明确报错，不取首根或自行解释。
+仍兼容 `--labels canonical.json`。
+
+无需事先准备分折文件：脚本自动冻结端点／告警上下文分组及清单到输出目录的 `folds.json`。
+**自动分组未经人工核实，仅用于探索性推断；不输出事故独立性 CI，NEC 不在这种分组上训练。**
+其余四方法继续运行，NEC 记为 `input_ineligible`，退出码为 2，表格和预测仍保留。
+要运行完整五方法，在 common.sh 中配置已有的核实分组或 manifest：
+
+```bash
+export PINGMESH_RQ1_GROUPS=/server/path/reviewed_groups.json
+# 或 export PINGMESH_RQ1_MANIFEST=/server/path/folds.json
+bash scripts/run_rq1.sh
+```
+
+`reviewed_groups.json` 是 `case_id -> 真实事故ID`；脚本自动分折，不需要手工生成 folds。
+少于两个独立组时不能训练 NEC，不会用测试组补训练样本。
+若采用 Shared，需要在 common.sh 配置 `PINGMESH_RQ1_ROOTS`（冻结 OOF 起点文件），
+或使用 `--condition shared --roots ...`。传入 roots 且没有显式 `--condition` 时自动选 Shared。
+已配置路径还可用原有 `--inputs/--labels/--output/--manifest/--config` 参数覆盖。
+
 ## 1. 方法与适配边界
 
 | 表中名称 | 实际实现 | 训练／拟合协议 |
@@ -103,7 +156,7 @@ python -m Baseline.common manifest \
 
 ## 4. 正式运行
 
-**Shared（默认）**：使用同一份冻结 OOF 预测起点。`roots.json`：
+**Shared（可选；零参数入口默认 Oracle）**：使用同一份冻结 OOF 预测起点。`roots.json`：
 
 ```json
 {
@@ -152,6 +205,7 @@ bash scripts/run_rq1.sh run \
 - `cases/<method>/*.json`：逐案例持久化，文件名为 case_id 哈希。
 - `checkpoints/nec-fold-*.pt`：每折 NEC checkpoint，只用于对应测试折。
 - `run.json`：输入／标签／配置／起点指纹、源码 SHA-256、Git 状态、运行环境和状态。
+- `folds.json` / `labels.canonical.json` / `roots.json`：本次使用的冻结分折、规范化 GT 和起点。
 
 每个条件同时给两种图：
 
@@ -172,7 +226,7 @@ SHD 只用于完整参考。简单 DAG 增边、删边、反向各计 1；topolo
 若一个待汇总子集存在失败，主表 SHD 为 N/A，成功样本 SHD 仅在 JSON 诊断中保留。
 PRF 中成功的双方空图为 1，失败始终为 0；无可判定关系不产生该项指标。
 
-完整和部分参考分别成表。默认先对同事故窗口取均值，再对事故取宏平均。
+完整和部分参考分别成表。先对同组窗口取均值，再对组取宏平均；自动组不声称为核实事故。
 `all` 保留所有失败；`common_success` 使用所有方法均成功的整事故组共同子集，
 一组中任一方法任一窗口失败，整组退出共同成功表，不制造方法间不同分母。
 共同成功表仅是诊断，不能代替 all 表或事前共同适用性审计。
@@ -193,6 +247,9 @@ python -m Baseline.RQ1 evaluate \
 ## 6. 服务器验证
 
 ```bash
+# 无第三方依赖的目录、GT 转换、默认路径、轻量端到端与重评分测试。
+python -m unittest Baseline.RQ1.tests.test_prepare -v
+
 # 单元测试、实际 Ours 入口、轻量端到端、标签隔离、分折隔离和失败记账。
 python -m pytest Baseline/RQ1/tests -q
 
@@ -200,5 +257,6 @@ python -m pytest Baseline/RQ1/tests -q
 RQ1_NUMERICAL_SMOKE=1 python -m pytest Baseline/RQ1/tests -q
 ```
 
-测试数据是合成接口样例，不是论文精度证据。Python 与 JSON 已通过静态语法检查，当前未在本地或服务器执行上述测试；
+2026-09-21：8 项 unittest 全通过，本地两个示例只读加载通过；未运行真实数据推断或评分。
+完整 pytest 与数值后端测试仍待服务器执行。测试数据是合成接口样例，不是论文精度证据；
 正式实验前请在目标环境先跑验证，依赖／数值错误会保留为失败，不回退到替代算法。
