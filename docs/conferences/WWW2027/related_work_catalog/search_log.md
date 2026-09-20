@@ -164,7 +164,7 @@ NeurIPS、JMLR、IJCAI。因此「Crossref 查无」**不能**作为该文献不
 | **Pingmesh** | — | Crossref 存缴题名为短题名 *Pingmesh*；本表采用完整题名并记录差异 |
 | **DeathStarBench** | 记作 SOSP | 实为 **ASPLOS 2019** |
 | **GraN-DAG / CUTS** | 记作 AISTATS 2020 / AISTATS 2023 | 实为 **ICLR 2020 / ICLR 2023** |
-| **B8（JMLR 2013）** | *A Comparison of the Ladder and Max-Min Hill-Climbing…*，作者 S. Mahdi, C. Meek | T007 R7 已更正为 *Sub-Local Constraint-Based Learning of Bayesian Networks Using A Joint Dependence Criterion*，JMLR 14(49)，作者 Rami Mahdi, Jason Mezey。本轮沿用该更正（RW0262） |
+| **B8（JMLR 2013）** | *A Comparison of the Ladder and Max-Min Hill-Climbing…*，作者 S. Mahdi, C. Meek | T007 R7 已更正为 *Sub-Local Constraint-Based Learning of Bayesian Networks Using A Joint Dependence Criterion*，JMLR 14(49)，作者 Rami Mahdi, Jason Mezey。本轮沿用该更正（**RW0260**） |
 | **RCD 的 DOI** | — | Crossref 记录为 `10.52202/068431-2259`（NeurIPS 35 的 Proceedings.com 著录），**非 ACM/IEEE 常规 DOI**，引用时需注意 |
 
 ### 5.4 重名消歧（本轮实际处理）

@@ -1,31 +1,45 @@
 # Project Status
 
-更新：2026-09-15（第二次）。**T008 已由 Claude Code 执行并交付，待 Work / 用户验收。**
-交付物在 [related_work_catalog/](../docs/conferences/WWW2027/related_work_catalog/)：
-身份已核实 **306** 条、待核实 13 条、阅读卡 16 张；9 项产物齐全，`check.py` 29 项全 PASS。
-见 [CURRENT_TASK](CURRENT_TASK.md)、[交接](HANDOFF.md)、[证据](EVIDENCE.md)。
-**本轮未运行项目测试、训练、评分或数据审计；未改动算法/标签/评分协议/实验数字；
-未改动 T007 的两份正文（其 R1–R7 返修仍属 T007-R）；未提交、未推送。**
-**已知缺口**：APGNN 全文不可得；259/306 条仅核验元数据未读正文；
-OpenAlex source 级逐年统计因配额未完成；中文期刊系统性检索未做。
-详见 [覆盖报告](../docs/conferences/WWW2027/related_work_catalog/coverage_report.md) §4。
+## 当前优先级（2026-09-16）
 
-历史（当日第一次写入）：任务书发布，尚未执行检索。
-见 [T008 发布任务书](T008_research_task.md)。
-T007-R / T006-R 保留待办；T007-R 原活动任务已保存为 [任务快照](T007_R_task_snapshot.md)。
-**T007 独立验收仍为部分通过，关键事实与指标推理需返修**。
-见 [验收 R1–R7](T007_acceptance.md) 与 [T007 交接](HANDOFF.md)。产物
-[report.md](../docs/conferences/WWW2027/graph_metrics_literature/report.md)、
-[sources.md](../docs/conferences/WWW2027/graph_metrics_literature/sources.md)。
-**资料交付、验收通过与指标定案分别记录**：当前报告仍需修正，最终主指标由用户精读后确定。
-T006-R 仍为部分通过；R5/R8 已关闭，[二次验收 U1–U5](T006_R_acceptance.md) 保留待办，
-不作为 T007 前置；[原 T006 任务](T006_research_task.md) 已完整留档，
-T006 交接与证据快照另存为 [T006_handoff](T006_handoff.md)、[T006_evidence](T006_evidence.md)。
-历史见 [T006 验收](T006_acceptance.md)、
-[T006-R 逐项应答](../docs/conferences/WWW2027/web_relevance/T006_R_response.md)。
-历史初始化基线 commit：`19fad0a`（2026-09-10）。
-状态来源是当前工作区文件与已有报告；本轮未运行训练、真实数据重评分或外部模型调用，
-未运行项目测试，未改动算法/标签/评分协议/实验数字。
+**T010 / EXECUTED / REVIEW_PENDING：按最新 PPT 同步研究文档。** [任务与对账](CURRENT_TASK.md) 已更新。
+已读 5 页正文及 4 张嵌入图，已完成方案说明、双语 Introduction、Challenge、案例、项目入口和共享状态同步；未修改代码、标签、评分协议或实验。
+新概念为两挑战（局部歧义、全局一致性）、三模块（事故证据图、局部关系、锚点引导重建）。
+PPT 案例的恢复机制、状态语义与动作成本仍需澄清，计划要求条件化处理，不编造收益。
+旧 CURRENT_TASK 逐字存于 [T010_before_CURRENT_TASK](T010_before_CURRENT_TASK.md)。本轮改写待独立复核。
+既有代码、结果和标签未变；未运行研究实验或项目测试，未提交/推送。
+T009 待验收及 T008/T006-R/T001–T003 状态保留。以下为此前执行记录。
+
+更新：2026-09-15（T009 执行）。**T009 已交付，待独立验收**。
+[阅读包应答](../docs/conferences/WWW2027/graph_metrics_literature/T009_response.md)；
+[T007-R 纠错对账](../docs/conferences/WWW2027/graph_metrics_literature/T007_R_response.md)。
+report/sources 正文已修，新增指标矩阵、排查设计和逐篇限制；RW0100/RW0106 已同步。
+建议有向边 F1（附 P/R），完整参考合格再加 raw SHD-1；未冻结指标或验证标签资格。
+PropLLM 有 RC@1/RC@3/1-CCED，定义仍未知；NEC 完整式细则复核未完成。
+无真实排查反馈/成本，模拟设计仅条件化。未运行研究实验/模拟器/目录生成器，未改算法或标签。
+T008 U1/U2/U4、目录覆盖/著录仍待收尾；U3 清单已纠正、CCED 实质定义 OPEN。
+T006-R、T001–T003 未启动。此前状态存于 [T009_before_STATUS](T009_before_STATUS.md)。
+
+## 历史状态（截至 T008-R 复验；以下未完成/未修改描述属于当时）
+更新：2026-09-15（Work 复验）。**T008-R 已执行，复验部分通过；当前下一任务为 T009。**
+见 [复验 U1–U4](T008_R_acceptance.md) 和 [T009 任务书](T009_research_task.md)。
+本轮已交付[图指标、排查收益与相关工作缺陷结论](../docs/conferences/WWW2027/指标与相关工作缺陷_验收结论.md)。
+新发现：稳定性测试直接改写主目录且无异常恢复、Magpie OSDI 新版本未在索引交付、
+PropLLM 漏 RC@3/CCED、旧状态与覆盖正文不同步。T007 两份正文哈希未变，返修仍未完成。
+本轮只读核验与文档维护，未重跑目录测试/生成器或任何研究实验；未独立全验 Excel/CSV/CCF。
+
+以下为执行者返修摘要，其「已修」与 PASS 表示自检报告，不覆盖上述复验结论：
+
+依据 [验收 R1–R7](T008_acceptance.md) 逐项修改；应答见
+[related_work_catalog/T008_R_response.md](../docs/conferences/WWW2027/related_work_catalog/T008_R_response.md)。
+**已修**：CCF 映射（软件工程 FSE 应为 conf/sigsoft(A)，conf/fse 是密码学 Fast Software Encryption(B)）、网页身份冒充题名、
+稳定 ID 注册表与唯一可编辑主数据、核心近邻全文核验与过度推断撤回、引用字段补齐、交付同步。
+**验证**：`check.py` 21 项全 PASS（已改为校验取值而非字段非空）；`test_id_stability.py` PASS。
+**未关闭**：R4 部分完成（OpenAlex source 逐年筛选与 ToN/TNSM/TMC/TPDS 期刊逐年未做，并已
+撤回原「可访问范围已完成」的判断）；L1 中 170 条未读摘要；`论文自身输出对象` 大量空缺；
+CCF 官网分类页与第七版 PDF 版本冲突已记录、未解决。
+**本轮未运行项目测试、训练、评分或数据审计；未改动算法/标签/评分协议/实验数字；
+未改动 T007 的两份正文；未提交、未推送。**
 
 ## Completed Work
 
@@ -71,7 +85,8 @@ T006 交接与证据快照另存为 [T006_handoff](T006_handoff.md)、[T006_evid
 
 ## Ongoing Work
 
-**当前任务：T008 — 已交付，待验收。** 交付物与缺口见上文与 [交接](HANDOFF.md)。
+**当前任务：T008-R — 按 [独立验收 R1–R7](T008_acceptance.md) 返修，尚未执行。**
+保留目录成果；先修等级/身份/稳定 ID，再补检索覆盖、核心全文与字段。交接旧结论以验收更正为准。
 `related_work_catalog/` 下 `README.md`、`catalog.xlsx`（Papers/Pending/Coverage/Venues）、
 `catalog.csv`、`index.md`、`search_log.md`、`coverage_report.md`、`evidence.md`、
 `screening.csv`、`papers/*.md` 共 16 张卡。本轮**未运行项目测试**（只做产物检查）。
@@ -81,7 +96,7 @@ T006 交接与证据快照另存为 [T006_handoff](T006_handoff.md)、[T006_evid
 **T008 — 建设长期可维护的相关文献总目录；已执行。**
 三层覆盖，2015 年至实际检索截止日并回溯经典；CCF 等级/版本核验，不按等级筛文献。
 交付 Excel/CSV 总表、Markdown 分类索引、检索日志、覆盖报告及核心近邻卡；按覆盖与证据质量验收。
-完整要求见 [任务书](T008_research_task.md)。HANDOFF/EVIDENCE 仍属 T007，不代表 T008 已交付。
+完整要求见 [任务书](T008_research_task.md)。发布当时 HANDOFF/EVIDENCE 属 T007；目前已交接为 T008。
 
 **保留待办：T007-R — 按 [独立验收 R1–R7](T007_acceptance.md) 修订文献事实及指标依据，尚未执行。**
 已交付的论文对照、精读卡和候选组合有可用材料，但不能直接用于指标定案。
@@ -155,7 +170,10 @@ E001–E005 是历史服务器聚合结果；E006/E007 是已留存功能验收�
 
 ## Next Actions
 
-**T008 / Claude Code — 当前优先：执行 [相关工作目录任务书](T008_research_task.md)。**
+**T010 后续复核 — 独立检查活跃文档术语、链接和案例边界；完成后再按既有优先级处理 T008-R。**
+T010 已完成文档改写，当前不启动 T008-R、T006-R 或实验；以下保留历史待办说明。
+先纠正系统性错误，保留原目录和来源证据；返修响应逐项列修复与未完成项，不把原始条数视为验收目标。
+以下为原检索任务流程，按返修需要复用：
 先整理种子与覆盖矩阵，再多源检索/引文扩展，核实身份与等级，生成目录和核心阅读卡，最后完成覆盖审计。
 用户已确认写入任务书；无需重新确认常规检索策略。发布不等于检索已经启动。
 

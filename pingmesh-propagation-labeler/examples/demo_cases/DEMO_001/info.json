@@ -1,8 +1,0 @@
-{
-  "alarm_name": "Synthetic Pingmesh packet loss",
-  "alarm_time": 1760000000000,
-  "source_ip": "[\"10.0.0.5\"]",
-  "sink_ip": "[\"10.0.0.6\"]",
-  "scenario_code": "DEMO_ONLY",
-  "alarm_description": "Synthetic demonstration incident. No production data is included."
-}

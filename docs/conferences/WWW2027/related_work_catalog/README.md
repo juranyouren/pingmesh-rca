@@ -10,6 +10,12 @@
 
 ---
 
+## T009 最新研究入口（2026-09-16）
+
+[阅读包](../graph_metrics_literature/README.md) 已交付，待独立验收。RW0100/RW0106 正文已修订；
+CSV/Excel/生成器未同步重建，目录全量验收仍以 T008-R 未关闭项为准。
+PropLLM 已核 RC@1/RC@3 与 1-CCED，定义仍未知；旧目录概括不能覆盖最新卡片与阅读包。
+
 ## 1. 先看哪个文件
 
 | 你想做什么 | 打开 |
@@ -100,7 +106,7 @@
 3. **本文 novelty 表述前**，先读 `coverage_report.md` §6：
    其中列出了三篇**直接挑战本文贡献**的工作（PropLLM、EvoCause、NetEventCause）
    与两条必须撤回的旧概括。
-4. **优先精读**：[papers/](papers/) 下的 12 张阅读卡，每张注明了证据深度，
+4. **优先精读**：[papers/](papers/) 下的 **16** 张阅读卡，每张注明了证据深度，
    并区分「已核实的原文事实」与「研究者判断」。
 
 ---
@@ -118,13 +124,47 @@
 
 ---
 
-## 7. 维护方式
+## 7. 维护方式（T008-R 后的数据流）
 
-1. 新条目追加到 `catalog.csv`（分配新的 `RW` 号），同步更新 `index.md`、`evidence.md`。
-2. `catalog.xlsx` 由脚本重建，**不手工编辑**（否则下次重建会覆盖）。
-3. 补到全文后，更新对应 `内容阅读深度` 与 `papers/<paper_id>.md`。
-4. 发现旧记录错误时，在 `evidence.md` 的「题名差异与旧材料更正」一节追加记录，
-   保留原位置与新来源。
+**唯一可编辑主数据是 `catalog.csv` 与 `screening.csv`。** 其余产物全部由脚本派生，
+手工改派生文件会在下次重建时被覆盖。
+
+```
+catalog.csv / screening.csv   ← 唯一可编辑主数据（在目录内、随 Git 提交）
+        │
+        ├── paper_id_registry.csv   追加式 ID 注册表（DOI/题名 → paper_id）
+        ├── corrections.csv         声明式更正表（原值/新值/依据）
+        ├── data/ccf7_web.tsv       官方目录表（由 ccf_web.py 抓取，630 条）
+        │
+        └─ enrich.py ─→ 回写主数据（应用更正、CCF 等级、字段补全、ID 分配）
+           render.py ─→ catalog.xlsx / index.md / evidence.md
+           check.py  ─→ 产物与取值检查
+           test_id_stability.py ─→ ID 稳定性回归测试
+```
+
+维护脚本在 **`scripts/related_work_catalog/`（随 Git 提交）**，不在 `tmp/` 下——
+`tmp/` 会被清理，脚本放那里等于丢失（这是 T008-R 修正的问题之一）。
+
+### 7.1 新增一条文献
+
+1. 把记录追加到 `catalog.csv`，`paper_id` **留空**。
+2. 运行 `enrich.py`：它会按 DOI（无 DOI 用规范题名）查 `paper_id_registry.csv`，
+   **只给未见过的新键分配新号**，既有条目的 ID 与摘要不受影响。
+3. 运行 `render.py` 刷新 Excel 与索引。
+
+> **ID 稳定性**由 `test_id_stability.py` 回归保护：它会插入一条排序最靠前的记录
+> 并修改一条既有记录的分类，断言其余条目的 ID、题名与摘要**全部不变**。
+
+### 7.2 改一条既有记录
+
+- **改分类/主题**：直接改 `catalog.csv` 再重建，ID 不变。
+- **改题名/DOI 等身份字段**：写进 `corrections.py` 的更正表（附依据与来源 URL），
+  由 `enrich.py` 应用——这样更正可复核、可重放，也不会因为改 DOI 而丢掉原 ID。
+- **补到全文后**：更新该条的 `内容阅读深度`，并写 `papers/<paper_id>.md`。
+
+### 7.3 不手工编辑的文件
+
+`catalog.xlsx`、`index.md`、`evidence.md`、`papers/*.md` 之外的派生文件。
 
 ---
 
@@ -140,4 +180,7 @@
 | `coverage_report.md` | 覆盖矩阵、分层/年份/会刊统计、缺口、停止依据 |
 | `evidence.md` | 逐条身份来源、等级出处、题名差异与旧材料更正 |
 | `screening.csv` | 未纳入 / 待核实线索及具体理由 |
-| `papers/<paper_id>.md` | 核心近邻阅读卡（12 张） |
+| `paper_id_registry.csv` | **paper_id 注册表**（追加式，DOI/题名 → ID），保证 ID 不随重建变化 |
+| `corrections.csv` | 已应用的书目更正记录（原值/新值/依据/来源） |
+| `papers/<paper_id>.md` | 核心近邻阅读卡（**16** 张） |
+| `T008_R_response.md` | 对 T008 独立验收 R1–R7 的逐项应答 |

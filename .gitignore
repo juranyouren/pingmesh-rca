@@ -42,7 +42,7 @@ docs/papers/*.pdf
 docs/CCF Conference Deadlines.html
 docs/CCF Conference Deadlines_files/
 docs/毕业论文/
-
+docs/conferences/WWW2027
 # Local manuscript/build artifacts
 paper/
 
@@ -74,3 +74,5 @@ paper/
 
 # Crash / debug dumps
 *.stackdump
+
+scripts/related_work_catalog/

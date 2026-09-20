@@ -1,23 +1,27 @@
 # RPG-Recon — Pingmesh 故障传播图恢复
 
+最新论文方案（2026-09-16）采用两个挑战——Local Ambiguity 与 Global Consistency——和三个概念模块：M1 事故证据图构建、M2 局部传播关系建模、M3 锚点引导全局传播图重建。方案与现有实现的映射、PPT 案例限制及验证设计见[最新方案与文档同步说明](docs/conferences/WWW2027/2026-09-16_最新方案与文档同步说明.md)。
+
 面向 WWW 2027 的研究项目：在**单设备起点**假设下，从 Pingmesh 异常、原始设备拓扑
 （`task_topo`）与告警/日志中，恢复 incident-specific 的**设备传播解释图**。主输出是
 设备影响关系的解释 DAG；根排序为其提供候选起点，本身不是最终产物。本系统不声称
 恢复真实 ECMP 报文路径，也不是已识别的干预模型。
 
-## 当前方法（两阶段）
+## 当前方法（概念三模块，代码两阶段）
 
 ```text
 Pingmesh context + raw task_topo + alarms/logs
-  -> Stage 1  PC-STGR 分组 OOF 根候选 Top-K 排序     (概念模块 M1)
-  -> Stage 2  P0 根条件传播 DAG 重建                  (概念模块 M2 + M3)
+  -> M1 事故证据图构建
+  -> M2 局部传播关系建模
+  -> M3 锚点引导全局传播图重建
+  -> Stage 1 PC-STGR 锚点候选 + Stage 2 P0 条件 DAG（现有代码）
   -> 最终根 + 设备传播 DAG + 证据与候选替代
 ```
 
 - **P0** 是论文方法：确定性证据归一化 + 根条件路径选择与 DAG 组装。
 - **P4** 是独立的监督优化轨道，与 P0 共用解码器，结果需分开报告。
 - **P1 已停用**，不再运行或报告。
-- 单设备根范围不变；Top-K 指相互竞争的起点，不是同时存在的多个根。
+- 单设备根范围不变；Top-K 指相互竞争的锚点，不是同时存在的多个根。
   多根与链路根扩展延后。
 
 ## 输入与输出边界
@@ -48,9 +52,9 @@ Pingmesh context + raw task_topo + alarms/logs
 | 想了解 | 从这里开始 |
 | --- | --- |
 | 研究合同与不可协商项 | [AGENT.md](AGENT.md)、[CLAUDE.md](CLAUDE.md) |
-| 全部文档分类索引 | [docs/README.md](docs/README.md) |
+| 实验统一规范（唯一入口） | [docs/EXPERIMENT_PROTOCOL.md](docs/EXPERIMENT_PROTOCOL.md) |
 | 当前论文与执行材料 | [docs/conferences/WWW2027/README.md](docs/conferences/WWW2027/README.md) |
-| 系统实现契约 | [docs/project_overview.md](docs/project_overview.md)、[docs/PC-STGR设计方案.md](docs/PC-STGR设计方案.md) |
+| 系统实现契约 | [docs/project_overview.md](docs/project_overview.md)；Stage 1 细节以代码和运行入口为准 |
 | 图评价协议 | [故障传播图指标调研与最终评价方案.md](docs/conferences/WWW2027/故障传播图指标调研与最终评价方案.md) |
 | 当前任务与状态 | [.ai/CURRENT_TASK.md](.ai/CURRENT_TASK.md)、[.ai/STATUS.md](.ai/STATUS.md)（本地工作区，当前尚未入库） |
 
