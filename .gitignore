@@ -35,21 +35,12 @@ combined_all_code.txt
 Baseline/NetEventCause/NetEventCause-main/
 Baseline/NetEventCause/NetEventCause-main.zip
 
-# PDF papers (large binaries, keep code only)
-docs/papers/*.pdf
-
-# Local web snapshots / obsolete manuscript tree
-docs/CCF Conference Deadlines.html
-docs/CCF Conference Deadlines_files/
-docs/毕业论文/
-docs/conferences/WWW2027
+/docs/
 # Local manuscript/build artifacts
 paper/
 
 # Local RCA work products
 /.superpowers/
-/docs/superpowers/
-/docs/ppt/
 /tests/*
 !/tests/test_neural_stage1_ssl.py
 !/tests/test_baseline_common.py
