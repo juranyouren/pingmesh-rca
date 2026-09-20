@@ -1,0 +1,315 @@
+"""One-command RQ1 execution and reproducible offline re-evaluation."""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from copy import deepcopy
+import csv
+import hashlib
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
+import importlib.metadata
+from pathlib import Path
+import platform
+import subprocess
+import time
+
+from Baseline.common.evaluation import load_labels
+from Baseline.common.io import dump_json, load_incidents, read_json
+from Baseline.common.schema import input_fingerprint, stable_hash, STATUSES
+from Baseline.common.splits import validate_manifest
+from .graph import device_graph
+from .metrics import METRICS, aggregate, evaluate, label_sets
+from .models import InputIneligible, Ours, PCMCI, THP, TimeOrder
+
+METHODS = ("timeorder", "nec", "pcmci", "thp", "ours")
+NAMES = dict(zip(METHODS, ("TimeOrder", "NetEventCause", "PCMCI", "THP", "Ours")))
+
+
+def versions():
+    out = {"python": platform.python_version()}
+    for name in ("numpy", "scipy", "pandas", "torch", "tigramite", "gcastle", "networkx"):
+        try:
+            out[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            out[name] = None
+    return out
+
+
+def git_state():
+    root = Path(__file__).resolve().parents[2]
+    def query(*args):
+        try:
+            return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.DEVNULL).decode().strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+    status = query("status", "--porcelain", "--untracked-files=normal")
+    return {"commit": query("rev-parse", "HEAD"), "dirty": bool(status) if status is not None else None}
+
+
+def source_hashes():
+    root = Path(__file__).resolve().parents[2]
+    paths = set()
+    for folder in ("Baseline/RQ1", "Baseline/common", "Baseline/NetEventCauseDevice",
+                   "Sys/RootCauseAnalyze/propagation", "Sys/utils"):
+        paths.update((root / folder).rglob("*.py"))
+    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}
+
+
+def make_model(method, config, device):
+    if method == "nec":
+        from Baseline.NetEventCauseDevice import NetEventCauseDevice
+        return NetEventCauseDevice(config, device=device)
+    return {"timeorder": TimeOrder, "pcmci": PCMCI, "thp": THP, "ours": Ours}[method](config)
+
+
+def frozen_config(model):
+    c = model.config
+    return asdict(c) if is_dataclass(c) else c
+
+
+def failure(case, method, fold, condition, root, reason, status="runtime_failure"):
+    return {"schema_version": "rq1-prediction-v1", "case_id": case["case_id"], "method": method,
+            "fold": fold, "input_hash": input_fingerprint(case), "root": root,
+            "condition": condition, "status": status, "reason": reason,
+            "native_graph": None, "graphs": {}, "timing_seconds": 0.0}
+
+
+def predict(model, method, case, fold, condition, root):
+    started = time.perf_counter()
+    record = failure(case, method, fold, condition, root, "")
+    try:
+        native = model.predict_raw_graph(deepcopy(case), root) if method == "ours" else model.predict_raw_graph(deepcopy(case))
+        record.update(status=native["status"], native_graph=native,
+                      reason=native.get("reason", native.get("diagnostics", {}).get("reason", "")),
+                      model_name=getattr(model, "method", method), config=frozen_config(model))
+        if record["status"] not in STATUSES:
+            raise ValueError("Unknown method status")
+        if native["status"] == "ok":
+            record["graphs"] = {v: device_graph(native, case, root, condition, v) for v in ("topology", "rooted")}
+            if any(g["status"] != "ok" for g in record["graphs"].values()):
+                raise ValueError("Device graph adapter rejected the root/graph")
+        stable_hash(record)  # Fail visibly on NaN, tensors, or non-JSON artifacts.
+    except Exception as exc:
+        record.update(status="input_ineligible" if isinstance(exc, InputIneligible) else "runtime_failure",
+                      reason=f"{type(exc).__name__}: {exc}", native_graph=None, graphs={})
+    record["timing_seconds"] = time.perf_counter() - started
+    return record
+
+
+def check_inputs(args):
+    cases = load_incidents(args.inputs, before_seconds=args.before_seconds, after_seconds=args.after_seconds)
+    manifest = validate_manifest(read_json(args.manifest), cases)
+    cases = [{**c, "group_id": manifest["groups"][c["case_id"]], "group_verified": True} for c in cases]
+    labels = load_labels(args.labels)
+    if set(labels) != {c["case_id"] for c in cases}:
+        raise ValueError("Canonical labels must cover the frozen inventory exactly; include unlabeled cases explicitly")
+    for case in cases:
+        label_sets(labels[case["case_id"]], case)
+    return cases, manifest, labels
+
+
+def roots_for(args, cases, manifest, labels):
+    if args.condition == "oracle":
+        if args.roots:
+            raise ValueError("Oracle uses only explicitly confirmed roots, not --roots")
+        if any(l.get("root_status") != "confirmed" for l in labels.values()):
+            raise ValueError("Oracle requires one confirmed root for every case; no label-based case dropping")
+        roots = {cid: l["root_device"] for cid, l in labels.items()}
+    else:
+        if not args.roots:
+            raise ValueError("Shared condition requires frozen OOF --roots; see README")
+        payload = read_json(args.roots)
+        if payload.get("manifest_hash") != manifest["manifest_hash"] or not payload.get("source"):
+            raise ValueError("Shared roots need matching manifest_hash and a nonempty source/provenance")
+        roots = payload["roots"]
+    if set(roots) != {c["case_id"] for c in cases}:
+        raise ValueError("Roots must cover each case exactly once")
+    for case in cases:
+        if roots[case["case_id"]] not in {d["id"] for d in case["devices"]}:
+            raise ValueError(f"Root is outside fixed candidate domain: {case['case_id']}")
+    return roots
+
+
+def summarize_predictions(cases, labels, predictions, methods, manifest, bootstrap_samples):
+    expected = {(m, c["case_id"]) for m in methods for c in cases}
+    keys = [(p["method"], p["case_id"]) for p in predictions]
+    if len(keys) != len(set(keys)) or set(keys) != expected:
+        raise ValueError("Predictions must contain every method/case exactly once, including failures")
+    by_id = {c["case_id"]: c for c in cases}
+    folds = {cid: split["fold"] for split in manifest["folds"] for cid in split["test"]}
+    rows = {view: {m: [] for m in methods} for view in ("rooted", "topology")}
+    for pred in predictions:
+        case = by_id[pred["case_id"]]
+        if pred.get("input_hash") != input_fingerprint(case) or pred.get("fold") != folds[case["case_id"]]:
+            raise ValueError("Prediction input/fold differs from frozen inventory")
+        if pred.get("status") not in STATUSES:
+            raise ValueError("Unknown prediction status")
+        for view in rows:
+            graph = pred.get("graphs", {}).get(view)
+            if pred["status"] == "ok":
+                if not graph or graph.get("status") != "ok":
+                    raise ValueError("Successful prediction is missing a device graph")
+                ids = {d["id"] for d in case["devices"]}
+                physical = {frozenset((e["u"], e["v"])) for e in case["physical_links"]}
+                for edge in graph.get("edges", []):
+                    u, v = edge["source"], edge["target"]
+                    if u not in ids or v not in ids or u == v or frozenset((u, v)) not in physical:
+                        raise ValueError("Device graph violates fixed domain/raw topology")
+                    if not isinstance(edge.get("directed", True), bool):
+                        raise ValueError("Graph edge directed marker must be boolean")
+            row = evaluate({**pred, "device_graph": graph}, labels[case["case_id"]], case)
+            rows[view][pred["method"]].append(row)
+    # Keep entire groups in the paired successful subset, not a method-specific denominator.
+    bad_groups = {by_id[p["case_id"]]["group_id"] for p in predictions if p["status"] != "ok"}
+    tables = {}
+    for view in rows:
+        tables[view] = {}
+        for scope in ("complete", "partial"):
+            for cohort in ("all", "common_success"):
+                tables[view][f"{scope}_{cohort}"] = {
+                    method: aggregate([r for r in rows[view][method] if r["label_scope"] == scope and
+                                       (cohort == "all" or r["group_id"] not in bad_groups)],
+                                      bootstrap_samples=bootstrap_samples)
+                    for method in methods}
+    return {"schema_version": "rq1-summary-v1", "aggregation": "window mean within verified incident, then incident macro",
+            "failure_policy": "PRF=0 for failed cases; SHD withheld if any included prediction failed",
+            "shd_rule": "add/delete/reorient relation each costs 1; undecided/two-arrow relation replacement costs 1",
+            "tables": tables, "rows": rows,
+            "statuses": {m: dict(Counter(p["status"] for p in predictions if p["method"] == m)) for m in methods}}
+
+
+def write_report(path, summary, view):
+    dump_json(path / "summary.json", summary)
+    markdown = ["# RQ1", "", f"Primary graph view: **{view}**. Scores are incident macro averages in [0,1].", "",
+                "NetEventCause is a mechanism reproduction + device adapter. THP uses gCastle TTPM + device adapter.",
+                "Ours is current deterministic P0 on common observations and a fixed root.", "",
+                "Failed cases score zero for P/R/F1. SHD is N/A when failures are present or labels are partial.",
+                "See summary.json for metric-specific denominators, group bootstrap CIs and case-level diagnostics.", ""]
+    csv_rows = []
+    for graph_view in (view, "topology" if view == "rooted" else "rooted"):
+        for cohort, table in summary["tables"][graph_view].items():
+            markdown += [f"## {graph_view} / {cohort}", "",
+                         "| Method | Adj-P ↑ | Adj-R ↑ | Adj-F1 ↑ | AH-P ↑ | AH-R ↑ | AH-F1 ↑ | SHD ↓ | Cases | Failed |",
+                         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+            for method, data in table.items():
+                numbers = {k: data["metrics"][k]["mean"] for k in METRICS}
+                failed = data["n_cases"] - data["statuses"].get("ok", 0)
+                values = ["N/A" if numbers[k] is None else f"{numbers[k]:.4f}" for k in METRICS]
+                markdown.append("| " + " | ".join([NAMES[method], *values, str(data["n_cases"]), str(failed)]) + " |")
+                csv_rows.append({"graph_view": graph_view, "cohort": cohort, "method": NAMES[method],
+                                 **numbers, "n_cases": data["n_cases"], "n_groups": data["n_groups"], "failed": failed})
+            markdown.append("")
+    (path / "table.md").write_text("\n".join(markdown), encoding="utf-8")
+    with (path / "table.csv").open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["graph_view", "cohort", "method", *METRICS, "n_cases", "n_groups", "failed"])
+        writer.writeheader()
+        writer.writerows(csv_rows)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("run", "evaluate"))
+    parser.add_argument("--inputs", required=True, help="Raw/processed directory or canonical incidents JSON/JSONL")
+    parser.add_argument("--labels", required=True, help="Canonical labels, loaded only by wrapper/evaluator")
+    parser.add_argument("--manifest", required=True, help="Verified incident-group OOF manifest")
+    parser.add_argument("--output", required=True, help="New output directory; existing paths are never overwritten")
+    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
+    parser.add_argument("--condition", choices=("shared", "oracle"), default="shared")
+    parser.add_argument("--roots", help="Frozen common OOF roots with manifest_hash and source")
+    parser.add_argument("--config", help="JSON keyed by timeorder/nec/pcmci/thp/ours")
+    parser.add_argument("--device", default="cpu", help="NEC torch device; PCMCI/THP use CPU")
+    parser.add_argument("--before-seconds", type=float, default=300)
+    parser.add_argument("--after-seconds", type=float, default=300)
+    parser.add_argument("--graph-view", choices=("rooted", "topology"), default="rooted")
+    parser.add_argument("--bootstrap-samples", type=int, default=1000)
+    parser.add_argument("--predictions", help="RQ1 predictions.json for evaluate")
+    parser.add_argument("--dry-run", action="store_true", help="Check inventory/labels/folds/roots; do not fit or write")
+    args = parser.parse_args(argv)
+    if len(set(args.methods)) != len(args.methods) or args.bootstrap_samples < 0:
+        parser.error("Methods must be unique and bootstrap-samples nonnegative")
+    cases, manifest, labels = check_inputs(args)
+    roots = roots_for(args, cases, manifest, labels)
+    config = read_json(args.config) if args.config else {}
+    if not isinstance(config, dict) or set(config) - set(METHODS):
+        raise ValueError("Config must be an object keyed by known method names")
+    output = Path(args.output)
+    if output.exists():
+        raise ValueError("Output already exists; choose a fresh directory")
+    if args.dry_run:
+        import json
+        print(json.dumps({"cases": len(cases), "groups": len(set(manifest["groups"].values())),
+                          "methods": args.methods, "condition": args.condition, "runtime": versions(),
+                          "labels": dict(Counter("complete" if l.get("graph_complete") else "partial_or_unavailable" for l in labels.values())),
+                          "dry_run": "inventory only; numerical backends are not executed"}, ensure_ascii=False, indent=2))
+        return
+    condition = "oracle" if args.condition == "oracle" else "shared_prediction"
+    if args.command == "evaluate":
+        if not args.predictions:
+            parser.error("evaluate requires --predictions")
+        payload = read_json(args.predictions)
+        if payload.get("manifest_hash") != manifest["manifest_hash"] or payload.get("roots_hash") != stable_hash(roots):
+            raise ValueError("Prediction manifest/roots differ from evaluation")
+        predictions = payload["predictions"]
+        if any(p.get("condition") != condition or p.get("root") != roots.get(p["case_id"]) for p in predictions):
+            raise ValueError("Prediction root condition differs from evaluation")
+    else:
+        if args.predictions:
+            parser.error("run does not accept --predictions")
+        output.mkdir(parents=True)
+        run = {"created_utc": datetime.now(timezone.utc).isoformat(), "git": git_state(), "runtime": versions(),
+               "source_hashes": source_hashes(),
+               "arguments": vars(args), "config": config, "config_hash": stable_hash(config),
+               "manifest_hash": manifest["manifest_hash"], "input_hashes": manifest["input_hashes"],
+               "labels_hash": stable_hash(labels), "roots_hash": stable_hash(roots), "status": "running"}
+        dump_json(output / "run.json", run)
+        predictions, training = [], []
+        by_id = {c["case_id"]: c for c in cases}
+        for method in args.methods:
+            for split in manifest["folds"]:
+                fold = split["fold"]
+                print(f"[{method}] fold={fold} test_cases={len(split['test'])}", flush=True)
+                try:
+                    model = make_model(method, config.get(method), args.device)
+                    if method == "nec":
+                        model.fit([deepcopy(by_id[c]) for c in split["train"]],
+                                  validation_cases=[deepcopy(by_id[c]) for c in split["validation"]])
+                        checkpoint = output / "checkpoints" / f"nec-fold-{fold}.pt"
+                        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                        model.save(checkpoint)
+                        training.append({"method": method, "fold": fold, "status": "ok",
+                                         "checkpoint": str(checkpoint), "report": model.training_report})
+                except Exception as exc:
+                    reason = f"initialization_or_fit: {type(exc).__name__}: {exc}"
+                    training.append({"method": method, "fold": fold, "status": "runtime_failure", "reason": reason})
+                    fold_predictions = [failure(by_id[c], method, fold, condition, roots[c], reason) for c in split["test"]]
+                else:
+                    fold_predictions = []
+                    for cid in split["test"]:
+                        pred = predict(model, method, by_id[cid], fold, condition, roots[cid])
+                        fold_predictions.append(pred)
+                        # Save each case immediately, so a server interruption leaves useful evidence.
+                        dump_json(output / "cases" / method / (stable_hash(cid)[:20] + ".json"), pred)
+                        print(f"  {cid}: {pred['status']} {pred.get('reason', '')}", flush=True)
+                predictions.extend(fold_predictions)
+                dump_json(output / "predictions.json", {"manifest_hash": manifest["manifest_hash"],
+                          "roots_hash": stable_hash(roots), "predictions": predictions, "training": training})
+    summary = summarize_predictions(cases, labels, predictions, args.methods, manifest, args.bootstrap_samples)
+    output.mkdir(parents=True, exist_ok=True)
+    write_report(output, summary, args.graph_view)
+    if args.command == "run":
+        run.update(status="finished" if all(p["status"] == "ok" for p in predictions) else "finished_with_failures",
+                   runtime=versions(), completed_utc=datetime.now(timezone.utc).isoformat())
+        dump_json(output / "run.json", run)
+    else:
+        dump_json(output / "evaluation.json", {"arguments": vars(args), "git": git_state(),
+                  "source_hashes": source_hashes(), "runtime": versions(),
+                  "labels_hash": stable_hash(labels), "predictions_hash": stable_hash(payload),
+                  "manifest_hash": manifest["manifest_hash"], "roots_hash": stable_hash(roots)})
+    print(f"RQ1 tables: {output / 'table.md'}", flush=True)
+    if any(p["status"] != "ok" for p in predictions):
+        raise SystemExit(2)  # Artifacts are preserved; do not misreport a partial run as success.
+
+
+if __name__ == "__main__":
+    main()
