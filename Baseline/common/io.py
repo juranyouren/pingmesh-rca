@@ -138,6 +138,7 @@ def _build(case_id, info, nodes, links, event_rows, *, before_seconds=300, after
     excluded = Counter()
     time_diagnostics = Counter()
     events = {}
+    alarm_id_variants = {}
     for source, owner, row in event_rows:
         if not isinstance(row, dict):
             excluded["invalid_record"] += 1
@@ -180,11 +181,25 @@ def _build(case_id, info, nodes, links, event_rows, *, before_seconds=300, after
             event["related_device_ids"].append(aliases.get(str(peer), str(peer)))
         event["related_device_ids"] = sorted(set(event["related_device_ids"]))
         explicit_id = row.get("event_id")
-        event["event_id"] = str(explicit_id) if explicit_id else f"{source}:{identifier}:" + str(row.get("alarm_id") or stable_hash(event)[:20])
+        if explicit_id:
+            # Canonical event IDs are authoritative. Conflicting payloads still
+            # fail below, rather than silently invalidating evidence references.
+            event["event_id"] = str(explicit_id)
+        else:
+            # Exported alarm_id can identify a type or a reused alarm record,
+            # not a unique observation. Hash only the whitelisted observations
+            # (including time/content), never labels or arbitrary raw fields.
+            digest = stable_hash(event)
+            base = f"{event['source']}:{identifier}"
+            alarm_id = row.get("alarm_id")
+            if alarm_id not in (None, ""):
+                base += f":{alarm_id}"
+                alarm_id_variants.setdefault(base, set()).add(digest)
+            event["event_id"] = f"{base}:{digest}"
         key = event["event_id"]
         if key in events:
             if events[key] != event:
-                raise ValueError(f"Conflicting records share event_id {key}; resolve source identity")
+                raise ValueError(f"Conflicting records share event_id {key} in case {case_id}; explicit event_id must identify one observation")
             excluded["exact_duplicate"] += 1
         events[key] = event
     context = {key: _observation_value(info[key]) for key in CONTEXT_FIELDS if key in info}
@@ -196,6 +211,8 @@ def _build(case_id, info, nodes, links, event_rows, *, before_seconds=300, after
               "endpoint_context": context, "observation_coverage": _coverage(coverage, timezone),
               "input_diagnostics": {"excluded_events": dict(excluded), "window_policy": "fixed_trigger_window" if not info.get("_normalized") else "explicit_window",
                                     "time_fields": dict(time_diagnostics),
+                                    "event_id_policy": "explicit_preserved_else_observation_sha256_v2",
+                                    "reused_alarm_id_groups": sum(len(values) > 1 for values in alarm_id_variants.values()),
                                     "event_time_priority": ["event_time", "alarm_time", "occur_time", "time", "confirm_time", "timestamp"],
                                     "raw_alarm_time_semantics": "exported alarm_time preferred; verify source semantics before temporal performance claims"}}
     validate_incident(result)

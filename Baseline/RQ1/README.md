@@ -34,6 +34,13 @@ python -m Baseline.RQ1 --check-inputs
 正式运行缺 GT 会说明应在服务器执行，不伪造标签或改用根标签生成传播真值。
 `--dry-run` 是包含 GT/根/分折的严格预检，需在有 GT 的服务器运行。
 
+事件标识：原始 `alarm_id` 可能重复，生成的事件 ID 使用来源、设备、原始告警 ID 和
+白名单观测内容的 SHA-256。时间／内容不同的记录分别保留，相同观测重复导出去重；
+这表示不同观测记录，不代表已证明是独立故障。显式 `event_id` 保持原值，其内容冲突仍报错。
+`input_diagnostics.reused_alarm_id_groups` 记录复用情况。
+2026-09-21 修复更改了原始观测生成 ID 的规则；重新读取原始节点后输入指纹会变化，
+若手动使用旧 manifest，需要从相同核实分组重新生成；默认入口会自动生成新 manifest。
+
 GT 可直接使用现有目录格式 `edges` / `dd_edges`，无需手工转换：
 `definite` 为确认正边，`explicit_no_direct` 为确认无直接关系，`possible` 及其余状态保持未判定。
 只有显式 `graph_complete=true` 且没有未决关系时才计算完整 SHD；不默认把旧标签视为完整图。
@@ -249,6 +256,7 @@ python -m Baseline.RQ1 evaluate \
 ```bash
 # 无第三方依赖的目录、GT 转换、默认路径、轻量端到端与重评分测试。
 python -m unittest Baseline.RQ1.tests.test_prepare -v
+python -m unittest Baseline.RQ1.tests.test_event_identity -v
 
 # 单元测试、实际 Ours 入口、轻量端到端、标签隔离、分折隔离和失败记账。
 python -m pytest Baseline/RQ1/tests -q
@@ -257,6 +265,6 @@ python -m pytest Baseline/RQ1/tests -q
 RQ1_NUMERICAL_SMOKE=1 python -m pytest Baseline/RQ1/tests -q
 ```
 
-2026-09-21：8 项 unittest 全通过，本地两个示例只读加载通过；未运行真实数据推断或评分。
+2026-09-21：17 项 unittest 全通过（含 9 项重复告警 ID 回归测试），本地两个示例只读加载通过；未运行真实数据推断或评分。
 完整 pytest 与数值后端测试仍待服务器执行。测试数据是合成接口样例，不是论文精度证据；
 正式实验前请在目标环境先跑验证，依赖／数值错误会保留为失败，不回退到替代算法。
