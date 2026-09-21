@@ -79,6 +79,7 @@ def predict(model, method, case, fold, condition, root):
     started = time.perf_counter()
     record = failure(case, method, fold, condition, root, "")
     try:
+        record.update(config=frozen_config(model), model_name=getattr(model, "method", method))
         native = model.predict_raw_graph(deepcopy(case), root) if method == "ours" else model.predict_raw_graph(deepcopy(case))
         record.update(status=native["status"], native_graph=native,
                       reason=native.get("reason", native.get("diagnostics", {}).get("reason", "")),
@@ -175,6 +176,8 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
                                       bootstrap_samples=bootstrap_samples)
                     for method in methods}
     return {"schema_version": "rq1-summary-v1", "aggregation": "window mean within declared group, then group macro",
+            "pcmci_coverage_policies": sorted({"strict" if p["config"]["require_coverage"] else "record-count"
+                for p in predictions if p["method"] == "pcmci" and "require_coverage" in p.get("config", {})}),
             "groups_verified": manifest.get("groups_verified", True),
             "evaluation_status": manifest.get("evaluation_status", "reviewed_grouping"),
             "failure_policy": "PRF=0 for failed cases; SHD withheld if any included prediction failed",
@@ -187,6 +190,8 @@ def write_report(path, summary, view):
     dump_json(path / "summary.json", summary)
     markdown = ["# RQ1", "", f"Primary graph view: **{view}**. Scores are incident macro averages in [0,1].", "",
                 f"Grouping: **{summary.get('evaluation_status', 'reviewed_grouping')}**. Unverified automatic groups are exploratory; CIs are disabled.", "",
+                "PCMCI input policy: " + ", ".join(summary.get("pcmci_coverage_policies", [])),
+                "In record-count mode, zero means no exported event record, not verified healthy or complete collection.", "",
                 "NetEventCause is a mechanism reproduction + device adapter. THP uses gCastle TTPM + device adapter.",
                 "Ours is current deterministic P0 on common observations and a fixed root.", "",
                 "Failed cases score zero for P/R/F1. SHD is N/A when failures are present or labels are partial.",
@@ -232,6 +237,9 @@ def main(argv=None):
     parser.add_argument("--config", default=os.environ.get("PINGMESH_RQ1_CONFIG", str(project / "configs/baselines/rq1.json")),
                         help="JSON keyed by methods; defaults to common.sh RQ1 config")
     parser.add_argument("--device", default="cpu", help="NEC torch device; PCMCI/THP use CPU")
+    parser.add_argument("--pcmci-coverage", choices=("config", "strict", "record-count"),
+                        default=os.environ.get("PINGMESH_RQ1_PCMCI_COVERAGE", "config"),
+                        help="strict: require coverage; record-count: no exported records = zero counts; config: retain JSON setting")
     parser.add_argument("--before-seconds", type=float, default=300)
     parser.add_argument("--after-seconds", type=float, default=300)
     parser.add_argument("--graph-view", choices=("rooted", "topology"), default="rooted")
@@ -262,6 +270,10 @@ def main(argv=None):
     config = read_json(args.config) if args.config else {}
     if not isinstance(config, dict) or set(config) - set(METHODS):
         raise ValueError("Config must be an object keyed by known method names")
+    if args.pcmci_coverage not in {"config", "strict", "record-count"}:
+        parser.error("PINGMESH_RQ1_PCMCI_COVERAGE must be config, strict or record-count")
+    if args.pcmci_coverage != "config":
+        config.setdefault("pcmci", {})["require_coverage"] = args.pcmci_coverage == "strict"
     output = Path(args.output)
     if output.exists():
         raise ValueError("Output already exists; choose a fresh directory")

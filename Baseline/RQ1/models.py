@@ -74,6 +74,10 @@ class PCMCI:
         if set(self.config) != allowed:
             raise ValueError("Unknown PCMCI configuration")
         c = self.config
+        if not isinstance(c["require_coverage"], bool):
+            raise ValueError("PCMCI require_coverage must be a boolean")
+        if not c["require_coverage"]:
+            self.method = "PCMCI-ParCorr-lagged-record-count-device-adapt"
         if c["tau_max"] < 1 or not 0 < c["pc_alpha"] < 1 or not 0 < c["alpha_level"] < 1 or c["max_conds_dim"] < 0:
             raise ValueError("Invalid PCMCI lag/threshold/conditioning size")
 
@@ -89,6 +93,11 @@ class PCMCI:
             matrix, ids, audit = dense_input(case, **{k: c[k] for k in
                 ("bin_seconds", "mode", "min_bins", "max_variables", "require_coverage")})
         except ValueError as exc:
+            if str(exc) == "collection_coverage_unknown":
+                raise InputIneligible(
+                    "collection_coverage_unknown: exported events have no collection coverage metadata. "
+                    "To analyze recorded-event counts (zero means no exported record, not healthy), "
+                    "run with --pcmci-coverage record-count. Do not fabricate observation_coverage.") from exc
             raise InputIneligible(str(exc)) from exc
         if len(matrix) <= 2 * c["tau_max"] + 4:
             raise InputIneligible("Too few time bins for configured lag")

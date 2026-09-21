@@ -34,6 +34,22 @@ python -m Baseline.RQ1 --check-inputs
 正式运行缺 GT 会说明应在服务器执行，不伪造标签或改用根标签生成传播真值。
 `--dry-run` 是包含 GT/根/分折的严格预检，需在有 GT 的服务器运行。
 
+若 PCMCI 返回 `input_ineligible: collection_coverage_unknown`，含义是导出未附带完整采集证明，
+不是缺包或 GT 缺失。当前节点导出可以显式选择**已导出事件计数**实验：
+
+```bash
+bash scripts/run_rq1.sh --pcmci-coverage record-count
+# 或在 common.sh / 当前会话设置后，继续使用零参数入口：
+export PINGMESH_RQ1_PCMCI_COVERAGE=record-count
+bash scripts/run_rq1.sh
+```
+
+该模式仅在没有覆盖元数据时将“无导出记录”计为 0，不代表设备健康或真实采集完整。
+输入本身不被改为 complete，已有明确采集缺口仍保留掩码，不用补零绕过；
+有效设备不足、序列太短等检查仍然生效。结果表、配置和方法名会标记 record-count 模式，
+不能把它与严格采集覆盖结果混为一类。默认 `config` 沿用 JSON 中 require_coverage，
+可用 `--pcmci-coverage strict` 强制严格模式。
+
 事件标识：原始 `alarm_id` 可能重复，生成的事件 ID 使用来源、设备、原始告警 ID 和
 白名单观测内容的 SHA-256。时间／内容不同的记录分别保留，相同观测重复导出去重；
 这表示不同观测记录，不代表已证明是独立故障。显式 `event_id` 保持原值，其内容冲突仍报错。
@@ -262,6 +278,7 @@ python -m Baseline.RQ1 evaluate \
 # 无第三方依赖的目录、GT 转换、默认路径、轻量端到端与重评分测试。
 python -m unittest Baseline.RQ1.tests.test_prepare -v
 python -m unittest Baseline.RQ1.tests.test_event_identity -v
+python -m unittest Baseline.RQ1.tests.test_coverage -v
 
 # 单元测试、实际 Ours 入口、轻量端到端、标签隔离、分折隔离和失败记账。
 python -m pytest Baseline/RQ1/tests -q
@@ -270,6 +287,6 @@ python -m pytest Baseline/RQ1/tests -q
 RQ1_NUMERICAL_SMOKE=1 python -m pytest Baseline/RQ1/tests -q
 ```
 
-2026-09-21：17 项 unittest 全通过（含 9 项重复告警 ID 回归测试），本地两个示例只读加载通过；未运行真实数据推断或评分。
+2026-09-21：23 项 unittest 全通过（含 9 项重复告警 ID、6 项覆盖策略回归测试），本地两个示例只读加载通过；未运行真实数据推断或评分。
 完整 pytest 与数值后端测试仍待服务器执行。测试数据是合成接口样例，不是论文精度证据；
 正式实验前请在目标环境先跑验证，依赖／数值错误会保留为失败，不回退到替代算法。
