@@ -9,6 +9,20 @@ from Baseline.common.io import read_json
 from Baseline.common.schema import input_fingerprint, stable_hash
 from Baseline.common.splits import build_manifest, validate_manifest
 
+# 'possible-positive' keeps RQ1 comparable with the historical scorer
+# (Sys/Score/evaluate_propagation.py), which already counts 'possible' as positive.
+# 'strict' preserves the older RQ1 behaviour of deferring 'possible' to human review.
+LABEL_POLICIES = ("possible-positive", "strict")
+DEFAULT_LABEL_POLICY = "possible-positive"
+
+# 'as-declared' honours graph_complete from the label file (absent means partial).
+# 'all-complete' asserts every converted label is a complete reference, which makes
+# SHD-1 computable but also declares every unannotated device pair a confirmed
+# negative. That is a strong assumption, not an observation; it is recorded per
+# label and in the run artifacts so it can never be mistaken for a declared one.
+LABEL_COMPLETENESS = ("as-declared", "all-complete")
+DEFAULT_LABEL_COMPLETENESS = "as-declared"
+
 
 def auto_groups(cases):
     """Conservative endpoint/alarm-context grouping; NOT reviewed incident IDs.
@@ -78,8 +92,25 @@ def prepare_manifest(cases, *, manifest_path=None, groups_path=None, folds=5, se
     return result
 
 
-def convert_label(raw, case_id):
-    """Translate the repository propagation_label format without guessing possible."""
+def convert_label(raw, case_id, *, policy=DEFAULT_LABEL_POLICY,
+                  completeness=DEFAULT_LABEL_COMPLETENESS):
+    """Translate the repository propagation_label format.
+
+    ``possible-positive`` (default) materialises a ``possible`` edge as a
+    confirmed directed positive edge, matching the historical scorer in
+    ``Sys/Score/evaluate_propagation.py``; ``direction_status`` is not consulted.
+    ``strict`` leaves ``possible`` undetermined for human review.
+
+    ``completeness`` defaults to ``as-declared``. ``all-complete`` asserts the
+    reference is complete, enabling SHD-1 at the cost of treating every
+    unannotated pair as a confirmed negative; the assumption is recorded in the
+    ``conversion`` block rather than written back to the annotation.
+    """
+    if policy not in LABEL_POLICIES:
+        raise ValueError(f"{case_id}: unknown label policy {policy!r}; expected one of {LABEL_POLICIES}")
+    if completeness not in LABEL_COMPLETENESS:
+        raise ValueError(f"{case_id}: unknown label completeness {completeness!r}; "
+                         f"expected one of {LABEL_COMPLETENESS}")
     if not isinstance(raw, dict):
         raise ValueError(f"{case_id}: propagation label must be an object")
     if raw.get("case_id") not in (None, case_id):
@@ -87,15 +118,20 @@ def convert_label(raw, case_id):
     if "graph_complete" in raw and not isinstance(raw["graph_complete"], bool):
         raise ValueError(f"{case_id}: graph_complete must be boolean")
     if "positive_edges" in raw or "root_status" in raw:
+        # Already-canonical labels carry resolved relations; the policy is a no-op.
         if raw.get("graph_complete") and ("positive_nodes" not in raw or "positive_edges" not in raw):
             raise ValueError(f"{case_id}: complete canonical labels need explicit positive_nodes/positive_edges")
         return {**raw, "case_id": case_id}
     roots = raw.get("root_devices", [])
     confirmed = raw.get("root_scope") == "device" and isinstance(roots, list) and len(roots) == 1 and isinstance(roots[0], str) and bool(roots[0])
+    declared = raw.get("graph_complete") is True
     label = {"case_id": case_id, "root_status": "confirmed" if confirmed else "unknown",
-             "graph_complete": raw.get("graph_complete") is True,
+             "graph_complete": declared or completeness == "all-complete",
              "positive_nodes": [], "known_node_mask": [], "positive_edges": [], "known_edge_mask": [],
-             "conversion": {"source": "propagation_label", "ignored_states": {}}}
+             "conversion": {"source": "propagation_label", "policy": policy,
+                            "graph_complete_source": "declared" if declared
+                            else "assumed_all_complete" if completeness == "all-complete" else "undeclared",
+                            "ignored_states": {}, "treated_as_positive": {}}}
     if confirmed:
         label["root_device"] = roots[0]
     if raw.get("acceptable_hypotheses"):
@@ -107,7 +143,7 @@ def convert_label(raw, case_id):
         return label
     if not isinstance(rows, list):
         raise ValueError(f"{case_id}: edges/dd_edges must be a list")
-    positives, known, ignored = set(), set(), Counter()
+    positives, known, ignored, treated = set(), set(), Counter(), Counter()
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError(f"{case_id}: malformed propagation edge")
@@ -115,9 +151,10 @@ def convert_label(raw, case_id):
         state = row.get("membership", row.get("state"))
         if not isinstance(u, str) or not isinstance(v, str) or not u or not v or u == v:
             raise ValueError(f"{case_id}: malformed propagation endpoints")
-        if state == "definite":
+        if state == "definite" or (state == "possible" and policy == "possible-positive"):
             positives.add((u, v))
             known.update(((u, v), (v, u)))
+            treated[str(state)] += 1
         elif state == "explicit_no_direct":
             known.update(((u, v), (v, u)))
         else:
@@ -133,12 +170,15 @@ def convert_label(raw, case_id):
                  positive_edges=[list(e) for e in sorted(positives)],
                  known_edge_mask=[list(e) for e in sorted(known)])
     label["conversion"]["ignored_states"] = dict(ignored)
+    label["conversion"]["treated_as_positive"] = dict(treated)
     return label
 
 
-def labels_from_path(path, cases):
+def labels_from_path(path, cases, *, policy=DEFAULT_LABEL_POLICY,
+                     completeness=DEFAULT_LABEL_COMPLETENESS):
     path = Path(path)
     if path.is_file():
+        # Canonical JSON has no raw states left to interpret; the policy does not apply.
         return load_labels(path)
     if not path.is_dir():
         raise FileNotFoundError(f"Propagation GT directory is unavailable: {path}. "
@@ -156,4 +196,5 @@ def labels_from_path(path, cases):
     missing = required - set(index)
     if missing:
         raise FileNotFoundError(f"Missing propagation_label.json for {len(missing)} input cases: {sorted(missing)[:10]}")
-    return {cid: convert_label(read_json(index[cid]), cid) for cid in sorted(required)}
+    return {cid: convert_label(read_json(index[cid]), cid, policy=policy, completeness=completeness)
+            for cid in sorted(required)}

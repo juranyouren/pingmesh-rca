@@ -1,5 +1,6 @@
 """Dependency-free directory/CLI tests; no real dataset or scientific backend."""
 from contextlib import redirect_stdout
+import copy
 from io import StringIO
 from pathlib import Path
 import tempfile
@@ -8,25 +9,101 @@ from unittest.mock import patch
 
 from Baseline.common.io import dump_json, read_json
 from Baseline.common.synthetic import make_cases
-from Baseline.RQ1.prepare import convert_label, labels_from_path, prepare_manifest
+from Baseline.RQ1.metrics import label_sets
+from Baseline.RQ1.prepare import (DEFAULT_LABEL_COMPLETENESS, DEFAULT_LABEL_POLICY, LABEL_POLICIES,
+                                  convert_label, labels_from_path, prepare_manifest)
 from Baseline.RQ1.runner import main
 
 
+MIXED_EDGES = {"root_scope": "device", "root_devices": ["A"], "edges": [
+    {"from": "A", "to": "B", "membership": "definite"},
+    {"from": "B", "to": "C", "membership": "possible"},
+    {"from": "A", "to": "C", "membership": "explicit_no_direct"}]}
+
+
 class PreparationTests(unittest.TestCase):
-    def test_legacy_possible_remains_unknown(self):
-        label = convert_label({"root_scope": "device", "root_devices": ["A"], "edges": [
-            {"from": "A", "to": "B", "membership": "definite"},
-            {"from": "B", "to": "C", "membership": "possible"},
-            {"from": "A", "to": "C", "membership": "explicit_no_direct"}]}, "c")
+    def test_possible_edge_is_confirmed_gt_by_default(self):
+        label = convert_label(MIXED_EDGES, "c")
+        self.assertEqual(label["positive_edges"], [["A", "B"], ["B", "C"]])
+        self.assertIn(["B", "C"], label["known_edge_mask"])
+        self.assertIn(["C", "B"], label["known_edge_mask"])
+        self.assertIn(["C", "A"], label["known_edge_mask"])
+        self.assertFalse(label["graph_complete"])
+        self.assertEqual(label["conversion"]["policy"], "possible-positive")
+        self.assertEqual(label["conversion"]["treated_as_positive"], {"definite": 1, "possible": 1})
+        self.assertEqual(label["conversion"]["ignored_states"], {})
+
+    def test_strict_policy_keeps_possible_unknown(self):
+        label = convert_label(MIXED_EDGES, "c", policy="strict")
         self.assertEqual(label["positive_edges"], [["A", "B"]])
         self.assertNotIn(["B", "C"], label["known_edge_mask"])
         self.assertIn(["C", "A"], label["known_edge_mask"])
-        self.assertFalse(label["graph_complete"])
+        self.assertEqual(label["conversion"]["policy"], "strict")
+        self.assertEqual(label["conversion"]["ignored_states"], {"possible": 1})
 
-    def test_complete_with_possible_rejected(self):
+    def test_default_policy_is_possible_positive(self):
+        self.assertEqual(DEFAULT_LABEL_POLICY, "possible-positive")
+        self.assertIn(DEFAULT_LABEL_POLICY, LABEL_POLICIES)
+
+    def test_unknown_policy_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unknown label policy"):
+            convert_label(MIXED_EDGES, "c", policy="lenient")
+
+    def test_bad_env_policy_rejected_before_inventory_read(self):
+        cases, _, _ = make_cases(2)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dump_json(root / "inputs.json", {"incidents": cases})
+            with patch.dict("os.environ", {"PINGMESH_RQ1_LABEL_POLICY": "lenient"}):
+                with self.assertRaises(SystemExit):
+                    main(["--check-inputs", "--inputs", str(root / "inputs.json")])
+
+    def test_completeness_is_as_declared_by_default(self):
+        self.assertEqual(DEFAULT_LABEL_COMPLETENESS, "as-declared")
+        label = convert_label(MIXED_EDGES, "c")
+        self.assertFalse(label["graph_complete"])
+        self.assertEqual(label["conversion"]["graph_complete_source"], "undeclared")
+
+    def test_all_complete_assumption_is_recorded_not_written_back(self):
+        raw = copy.deepcopy(MIXED_EDGES)
+        label = convert_label(raw, "c", completeness="all-complete")
+        self.assertTrue(label["graph_complete"])
+        self.assertEqual(label["conversion"]["graph_complete_source"], "assumed_all_complete")
+        # The annotation itself is never edited; the assumption lives on the conversion.
+        self.assertEqual(raw, MIXED_EDGES)
+        # The assumption supplies the full device-pair universe as the scoring domain.
+        case = make_cases(2)[0][0]
+        _, _, adj_mask, head_mask = label_sets(label, case)
+        self.assertEqual(len(adj_mask), 3)
+        self.assertEqual(len(head_mask), 6)
+
+    def test_declared_completeness_is_not_marked_assumed(self):
+        label = convert_label({"graph_complete": True, "root_scope": "device", "root_devices": ["A"],
+                               "edges": [{"from": "A", "to": "B", "membership": "definite"}]}, "c")
+        self.assertTrue(label["graph_complete"])
+        self.assertEqual(label["conversion"]["graph_complete_source"], "declared")
+
+    def test_unknown_completeness_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unknown label completeness"):
+            convert_label(MIXED_EDGES, "c", completeness="maybe")
+
+    def test_unlabeled_case_stays_unavailable_under_all_complete(self):
+        """No edges key at all is unlabeled, not an empty complete graph."""
+        label = convert_label({"root_scope": "device", "root_devices": ["A"]}, "c",
+                              completeness="all-complete")
+        self.assertFalse(label["graph_complete"])
+        self.assertNotIn("positive_edges", label)
+
+    def test_complete_with_unresolved_state_rejected(self):
         with self.assertRaisesRegex(ValueError, "unresolved"):
             convert_label({"graph_complete": True, "edges": [
-                {"from": "A", "to": "B", "state": "possible"}]}, "c")
+                {"from": "A", "to": "B", "state": "uncertain"}]}, "c")
+
+    def test_complete_with_possible_accepted_by_default(self):
+        label = convert_label({"graph_complete": True, "edges": [
+            {"from": "A", "to": "B", "state": "possible"}]}, "c")
+        self.assertTrue(label["graph_complete"])
+        self.assertEqual(label["positive_edges"], [["A", "B"]])
 
     def test_multi_root_never_picks_first(self):
         label = convert_label({"root_scope": "device", "root_devices": ["A", "B"], "edges": []}, "c")
@@ -93,6 +170,67 @@ class PreparationTests(unittest.TestCase):
                 main(["evaluate", "--methods", "timeorder", "--manifest", str(run / "folds.json"),
                       "--predictions", str(run / "predictions.json"), "--output", str(root / "rescore")])
                 self.assertEqual(read_json(root / "rescore" / "summary.json"), summary)
+
+    def run_partial_possible_case(self, tmp, policy_args):
+        """One case whose propagation GT has a definite edge and a possible edge."""
+        cases, _, _ = make_cases(2)
+        root = Path(tmp)
+        dump_json(root / "inputs.json", {"incidents": cases})
+        for case in cases:
+            dump_json(root / "gt" / case["case_id"] / "propagation_label.json", {
+                "root_scope": "device", "root_devices": ["A"],
+                "edges": [{"from": "A", "to": "B", "membership": "definite"},
+                          {"from": "B", "to": "C", "membership": "possible"}]})
+        env = {"PINGMESH_DATA": str(root / "inputs.json"),
+               "PINGMESH_PROPAGATION_LABELS_ROOT": str(root / "gt"),
+               "PINGMESH_RESULTS": str(root / "results"), "PINGMESH_RQ1_CONDITION": "oracle",
+               "PINGMESH_RQ1_MANIFEST": "", "PINGMESH_RQ1_GROUPS": "", "PINGMESH_RQ1_ROOTS": ""}
+        with patch.dict("os.environ", env), redirect_stdout(StringIO()):
+            main(["--methods", "timeorder", *policy_args])
+            return next((root / "results").iterdir())
+
+    def test_possible_edges_are_scored_and_policy_is_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_partial_possible_case(tmp, ["--label-policy", "possible-positive"])
+            summary = read_json(run / "summary.json")
+            self.assertEqual(summary["label_policies"], ["possible-positive"])
+            row = summary["rows"]["rooted"]["timeorder"][0]
+            self.assertEqual(row["scoring_domain"], {"adjacencies": 2, "arrowheads": 4})
+            self.assertEqual(summary["tables"]["rooted"]["partial_all"]["timeorder"]["metrics"]["AH-F1"]["mean"], 1)
+            self.assertIn("Propagation label policy: possible-positive",
+                          (run / "table.md").read_text(encoding="utf-8"))
+
+    def test_all_complete_makes_shd_available_and_labels_the_assumption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_partial_possible_case(tmp, ["--label-completeness", "all-complete"])
+            summary = read_json(run / "summary.json")
+            self.assertEqual(summary["label_completeness"], ["assumed_all_complete"])
+            # Partial reference is now scored as a complete one, so SHD is defined.
+            row = summary["rows"]["rooted"]["timeorder"][0]
+            self.assertEqual(row["label_scope"], "complete")
+            self.assertEqual(row["shd_status"], "available")
+            self.assertEqual(row["metrics"]["SHD"], 0)
+            self.assertEqual(row["scoring_domain"], {"adjacencies": 3, "arrowheads": 6})
+            self.assertIn("assumed_all_complete", (run / "table.md").read_text(encoding="utf-8"))
+
+    def test_as_declared_keeps_shd_withheld(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_partial_possible_case(tmp, ["--label-completeness", "as-declared"])
+            summary = read_json(run / "summary.json")
+            self.assertEqual(summary["label_completeness"], ["undeclared"])
+            row = summary["rows"]["rooted"]["timeorder"][0]
+            self.assertEqual(row["shd_status"], "partial_reference")
+            self.assertNotIn("SHD", row["metrics"])
+
+    def test_strict_policy_scores_only_the_definite_edge(self):
+        """Strict silently narrows the domain, so the same F1 rests on less evidence."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_partial_possible_case(tmp, ["--label-policy", "strict"])
+            summary = read_json(run / "summary.json")
+            self.assertEqual(summary["label_policies"], ["strict"])
+            row = summary["rows"]["rooted"]["timeorder"][0]
+            self.assertEqual(row["scoring_domain"], {"adjacencies": 1, "arrowheads": 2})
+            self.assertEqual(row["unknown_predictions"], {"adjacencies": 1, "arrowheads": 1})
 
 
 if __name__ == "__main__":

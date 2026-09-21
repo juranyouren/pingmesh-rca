@@ -20,7 +20,8 @@ from Baseline.common.schema import input_fingerprint, stable_hash, STATUSES
 from .graph import device_graph
 from .metrics import METRICS, aggregate, evaluate, label_sets
 from .models import InputIneligible, Ours, PCMCI, THP, TimeOrder
-from .prepare import labels_from_path, prepare_manifest
+from .prepare import (DEFAULT_LABEL_COMPLETENESS, DEFAULT_LABEL_POLICY, LABEL_COMPLETENESS, LABEL_POLICIES,
+                      labels_from_path, prepare_manifest)
 
 METHODS = ("timeorder", "nec", "pcmci", "thp", "ours")
 NAMES = dict(zip(METHODS, ("TimeOrder", "NetEventCause", "PCMCI", "THP", "Ours")))
@@ -104,7 +105,8 @@ def check_inputs(args):
                                 folds=args.folds, seed=args.seed)
     cases = [{**c, "group_id": manifest["groups"][c["case_id"]],
               "group_verified": manifest.get("groups_verified", False)} for c in cases]
-    labels = labels_from_path(args.labels, cases)
+    labels = labels_from_path(args.labels, cases, policy=args.label_policy,
+                              completeness=args.label_completeness)
     if set(labels) != {c["case_id"] for c in cases}:
         raise ValueError("Canonical labels must cover the frozen inventory exactly; include unlabeled cases explicitly")
     for case in cases:
@@ -178,6 +180,9 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
     return {"schema_version": "rq1-summary-v1", "aggregation": "window mean within declared group, then group macro",
             "pcmci_coverage_policies": sorted({"strict" if p["config"]["require_coverage"] else "record-count"
                 for p in predictions if p["method"] == "pcmci" and "require_coverage" in p.get("config", {})}),
+            "label_policies": sorted({l.get("conversion", {}).get("policy", "canonical") for l in labels.values()}),
+            "label_completeness": sorted({l.get("conversion", {}).get("graph_complete_source", "canonical")
+                                          for l in labels.values()}),
             "groups_verified": manifest.get("groups_verified", True),
             "evaluation_status": manifest.get("evaluation_status", "reviewed_grouping"),
             "failure_policy": "PRF=0 for failed cases; SHD withheld if any included prediction failed",
@@ -192,6 +197,13 @@ def write_report(path, summary, view):
                 f"Grouping: **{summary.get('evaluation_status', 'reviewed_grouping')}**. Unverified automatic groups are exploratory; CIs are disabled.", "",
                 "PCMCI input policy: " + ", ".join(summary.get("pcmci_coverage_policies", [])),
                 "In record-count mode, zero means no exported event record, not verified healthy or complete collection.", "",
+                "Propagation label policy: " + ", ".join(summary.get("label_policies", [])),
+                "Under possible-positive, 'possible' edges are scored as confirmed directed GT, matching the historical "
+                "scorer; 'possible' is an annotation strength, not a verified physical relation.", "",
+                "Reference completeness: " + ", ".join(summary.get("label_completeness", [])),
+                "Under assumed_all_complete the reference is treated as a complete graph, so SHD-1 is reported AND every "
+                "unannotated device pair counts as a confirmed negative. That completeness was assumed, not declared by "
+                "the annotator; do not read these SHD values as full-reference SHD on a verified complete label.", "",
                 "NetEventCause is a mechanism reproduction + device adapter. THP uses gCastle TTPM + device adapter.",
                 "Ours is current deterministic P0 on common observations and a fixed root.", "",
                 "Failed cases score zero for P/R/F1. SHD is N/A when failures are present or labels are partial.",
@@ -240,6 +252,15 @@ def main(argv=None):
     parser.add_argument("--pcmci-coverage", choices=("config", "strict", "record-count"),
                         default=os.environ.get("PINGMESH_RQ1_PCMCI_COVERAGE", "config"),
                         help="strict: require coverage; record-count: no exported records = zero counts; config: retain JSON setting")
+    parser.add_argument("--label-policy", choices=LABEL_POLICIES,
+                        default=os.environ.get("PINGMESH_RQ1_LABEL_POLICY", DEFAULT_LABEL_POLICY),
+                        help="possible-positive: count propagation 'possible' edges as confirmed directed GT, "
+                             "matching the historical scorer; strict: leave them undetermined")
+    parser.add_argument("--label-completeness", choices=LABEL_COMPLETENESS,
+                        default=os.environ.get("PINGMESH_RQ1_LABEL_COMPLETENESS", DEFAULT_LABEL_COMPLETENESS),
+                        help="as-declared: honour graph_complete from the label file, so SHD stays N/A on partial "
+                             "references; all-complete: assume every reference is complete, enabling SHD-1 but "
+                             "declaring every unannotated device pair a confirmed negative")
     parser.add_argument("--before-seconds", type=float, default=300)
     parser.add_argument("--after-seconds", type=float, default=300)
     parser.add_argument("--graph-view", choices=("rooted", "topology"), default="rooted")
@@ -256,6 +277,12 @@ def main(argv=None):
         args.output = str(Path(os.environ.get("PINGMESH_RESULTS", str(project / "data/res"))) / f"rq1_{args.condition}_{stamp}")
     if len(set(args.methods)) != len(args.methods) or args.bootstrap_samples < 0:
         parser.error("Methods must be unique and bootstrap-samples nonnegative")
+    # argparse does not check an env-provided default against choices, and labels are
+    # converted before the --pcmci-coverage check, so validate the policy up front.
+    if args.label_policy not in LABEL_POLICIES:
+        parser.error("PINGMESH_RQ1_LABEL_POLICY must be one of " + ", ".join(LABEL_POLICIES))
+    if args.label_completeness not in LABEL_COMPLETENESS:
+        parser.error("PINGMESH_RQ1_LABEL_COMPLETENESS must be one of " + ", ".join(LABEL_COMPLETENESS))
     if args.check_inputs:
         import json
         cases = load_incidents(args.inputs, before_seconds=args.before_seconds, after_seconds=args.after_seconds)

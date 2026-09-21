@@ -2,7 +2,9 @@
 
 入口：`python -m Baseline.RQ1 run`，或在服务器执行 `bash scripts/run_rq1.sh run`。
 默认方法：TimeOrder、NetEventCause、PCMCI、THP、Ours；THP 已加入七指标表。
-本次交付脚本与服务器验证用例，**未执行服务器实验，也未生成真实结果**。
+2026-09-21 起在本地 CPU 验证环境用真实 case `8294294` 跑通全流程（见 §6）。
+该 case 的传播 GT 只有 `possible` 边，因此评分口径改为默认 `possible-positive`（见 §3）。
+**n=1、自动分组未核实，属管线自检，不是论文结果。**
 
 ## 直接运行（2026-09-21 更新）
 
@@ -57,11 +59,54 @@ bash scripts/run_rq1.sh
 2026-09-21 修复更改了原始观测生成 ID 的规则；重新读取原始节点后输入指纹会变化，
 若手动使用旧 manifest，需要从相同核实分组重新生成；默认入口会自动生成新 manifest。
 
-GT 可直接使用现有目录格式 `edges` / `dd_edges`，无需手工转换：
-`definite` 为确认正边，`explicit_no_direct` 为确认无直接关系，`possible` 及其余状态保持未判定。
-只有显式 `graph_complete=true` 且没有未决关系时才计算完整 SHD；不默认把旧标签视为完整图。
+GT 可直接使用现有目录格式 `edges` / `dd_edges`，无需手工转换。
+**标签口径由 `--label-policy` 决定（默认 `possible-positive`）：**
+
+| 原始 state | `possible-positive`（默认） | `strict` |
+|---|---|---|
+| `definite` | 有向正边 + 双向 known 掩码 | 同左 |
+| `possible` | **有向正边 `from→to` + 双向 known 掩码** | 保持未判定 |
+| `explicit_no_direct` | 双向 known，非正例 | 同左 |
+| 其余状态 | 未判定，计入 `ignored_states` | 同左 |
+
+`possible-positive` 与仓库既有评分器 `Sys/Score/evaluate_propagation.py` 一致（那里本就写作
+`membership in {"definite","possible"}`），使 RQ1 的历史数字可比；`strict` 保留旧 RQ1 行为。
+两种口径都不解释 `direction_status`（词表仅 `likely` / `unresolved`），一律按行内 `from→to`。
+口径写入 `run.json` 的 `arguments`、`summary.json` 的 `label_policies` 与 `table.md` 表头；
+`labels.canonical.json` 的 `conversion` 块记录 `policy` / `treated_as_positive` / `ignored_states`。
+`possible` 是标注强度，不是已核实的物理关系；该口径改变了评分语义，换口径重评分必须传相同的
+`--label-policy`（当前 `evaluate` 不校验 `labels_hash` 是否与首次运行一致）。
+
+```bash
+bash scripts/run_rq1.sh --label-policy strict
+export PINGMESH_RQ1_LABEL_POLICY=strict
+```
+
+**参考图完整性由 `--label-completeness` 决定（默认 `as-declared`）：**
+
+| 取值 | `graph_complete` | 后果 |
+|---|---|---|
+| `as-declared`（默认） | 取标注文件的 `graph_complete`；缺失即 false | 部分参考不扩展 SHD，`shd_status=partial_reference` |
+| `all-complete` | **一律视为完整图** | SHD-1 可算；但未标注的设备对全部算作已确认负例 |
+
+`all-complete` 是一个**假设而非观测**：它会让评分域扩张到整个设备对全集
+（如 11 台设备 → 55 个无序对 / 110 个有向槽位），并据此把 SHD 算出来。
+只有在确实认为该参考枚举了全部关系时才可用；`annotation_complete_scope` 为 false、
+`annotator_confidence` 偏低的标注即使有若干 `possible` 边也不构成完整性声明。
+该假设**不写回标注文件**，只记录在 `labels.canonical.json` 的
+`conversion.graph_complete_source`（`declared` / `assumed_all_complete` / `undeclared`），
+并在 `summary.json` 的 `label_completeness` 与 `table.md` 表头披露。
+完全没有 `edges`/`dd_edges` 键的案例仍记为 unavailable，不会被当成"零边的完整图"。
+
+```bash
+bash scripts/run_rq1.sh --label-completeness all-complete
+export PINGMESH_RQ1_LABEL_COMPLETENESS=all-complete
+```
+
+`as-declared` 下只有显式 `graph_complete=true` 且没有未决关系时才计算完整 SHD；
+不默认把旧标签视为完整图（这是 graph-eval-v2 的既有约定：部分标签暂不扩展 SHD）。
 多根／未知根、冲突标注、acceptable_hypotheses 会明确报错，不取首根或自行解释。
-仍兼容 `--labels canonical.json`。
+仍兼容 `--labels canonical.json`；canonical 标签已解析完毕，两个口径都不适用（记为 `canonical`）。
 
 无需事先准备分折文件：脚本自动冻结端点／告警上下文分组及清单到输出目录的 `folds.json`。
 **自动分组未经人工核实，仅用于探索性推断；不输出事故独立性 CI，NEC 不在这种分组上训练。**
@@ -139,7 +184,7 @@ THP/PCMCI 使用 CPU。NEC 默认 CPU，`--device cuda:0` 等由服务器已有 
 - 处理后的案例目录，需要 `info.json`、节点文件，以及来源为 `raw_task_topo` 的 `topology_context.json`；
 - 规范化 `incidents.json` / JSONL。
 
-不自动读取旧传播标签，不把 `possible` 推成正例，也不从真根推导传播图。
+不从真根推导传播图，也不删除未在标签中出现的设备或边；`possible` 的处理见上文 `--label-policy`。
 规范化输入没有集合覆盖信息时，PCMCI 默认标记 `input_ineligible`，不会填零假装完整采样。
 若有真实采集覆盖资料，应写入每个规范化事故的 `observation_coverage`；只有已经验证整个窗口完整采集，
 才能设置 `{"complete": true}`。配置中的 `require_coverage=false` 仅可作为另行披露的计数假设实验。
@@ -251,7 +296,10 @@ Adj 比较无序设备对。AH 比较所有已判定边上的“设备对 + 箭�
 
 SHD 只用于完整参考。简单 DAG 增边、删边、反向各计 1；topology 表的混合图扩展明确为：
 同一无序对上的未定向／双箭头状态改为参考方向也计 1，不暗中补方向。
-若一个待汇总子集存在失败，主表 SHD 为 N/A，成功样本 SHD 仅在 JSON 诊断中保留。
+`--label-completeness all-complete` 会把部分参考当作完整参考来算 SHD，此时表中的 SHD
+是**在该完整性假设下**的距离，不等于已验证完整标注上的 SHD-1；引用时必须连同
+`label_completeness` 一起写明。若一个待汇总子集存在失败，主表 SHD 为 N/A，
+成功样本 SHD 仅在 JSON 诊断中保留。
 PRF 中成功的双方空图为 1，失败始终为 0；无可判定关系不产生该项指标。
 
 完整和部分参考分别成表。先对同组窗口取均值，再对组取宏平均；自动组不声称为核实事故。
@@ -287,6 +335,19 @@ python -m pytest Baseline/RQ1/tests -q
 RQ1_NUMERICAL_SMOKE=1 python -m pytest Baseline/RQ1/tests -q
 ```
 
-2026-09-21：23 项 unittest 全通过（含 9 项重复告警 ID、6 项覆盖策略回归测试），本地两个示例只读加载通过；未运行真实数据推断或评分。
+2026-09-21：23 项 unittest 全通过（含 9 项重复告警 ID、6 项覆盖策略回归测试），本地两个示例只读加载通过。
 完整 pytest 与数值后端测试仍待服务器执行。测试数据是合成接口样例，不是论文精度证据；
 正式实验前请在目标环境先跑验证，依赖／数值错误会保留为失败，不回退到替代算法。
+
+2026-09-21（Windows 本地 CPU 验证环境 `tmp/baselines-venv`）：本次首次在真实 case 上执行。
+`pytest Baseline/RQ1/tests -q` 54 passed（含上述数值后端测试）；`RQ1_NUMERICAL_SMOKE=1` 同样通过。
+case `8294294` 五方法端到端跑通（Oracle 根，`--pcmci-coverage record-count`）：
+TimeOrder / PCMCI / THP / Ours 为 `ok`，NEC 因只有 1 个未核实分组记为 `input_ineligible`（退出码 2）。
+`--label-policy strict` 的结果与本次改动前逐字段一致（回归保护）。
+该 case 的传播 GT 无 `definite` 边且 `annotation_complete_scope` 四项全 false，
+默认 `--label-completeness as-declared` 下 `shd_status=partial_reference`、SHD 为 N/A。
+加 `--label-completeness all-complete` 后评分域扩为 55 对 / 110 槽位，SHD 可算：
+TimeOrder 2、THP 2、PCMCI 0、Ours 0，NEC 因预测失败扣留。
+**该 SHD 建立在"此参考为完整图"的假设上，不是已验证完整标注上的 SHD-1。**
+`pytest Baseline/RQ1/tests -q` 60 passed。
+**n=1、自动分组未核实、无自助 CI，只能作为管线自检，不构成论文精度证据。**

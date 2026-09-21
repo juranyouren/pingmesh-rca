@@ -112,6 +112,12 @@ export PINGMESH_RQ1_FOLDS="${PINGMESH_RQ1_FOLDS:-5}"
 export PINGMESH_RQ1_SEED="${PINGMESH_RQ1_SEED:-20260920}"
 # record-count is an explicit exported-event counting assumption, not coverage proof.
 export PINGMESH_RQ1_PCMCI_COVERAGE="${PINGMESH_RQ1_PCMCI_COVERAGE:-config}"
+# possible-positive scores propagation 'possible' edges as confirmed directed GT,
+# matching the historical scorer; set to strict to defer them to human review.
+export PINGMESH_RQ1_LABEL_POLICY="${PINGMESH_RQ1_LABEL_POLICY:-possible-positive}"
+# as-declared keeps SHD N/A on partial references; all-complete assumes every
+# reference is a complete graph (enables SHD-1, declares unannotated pairs negative).
+export PINGMESH_RQ1_LABEL_COMPLETENESS="${PINGMESH_RQ1_LABEL_COMPLETENESS:-as-declared}"
 export PINGMESH_EDGE_CLASSIFIER_FOLDS="${PINGMESH_EDGE_CLASSIFIER_FOLDS:-5}"
 export PINGMESH_EDGE_CLASSIFIER_EPOCHS="${PINGMESH_EDGE_CLASSIFIER_EPOCHS:-300}"
 export PINGMESH_EDGE_CLASSIFIER_PATIENCE="${PINGMESH_EDGE_CLASSIFIER_PATIENCE:-30}"

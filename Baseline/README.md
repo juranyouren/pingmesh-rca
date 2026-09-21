@@ -54,7 +54,7 @@ BiAn 不提供生产 mock 或启发式 fallback。模型不可用、JSON/证据�
 & tmp/baselines-venv/Scripts/python.exe -m Baseline.common evaluate --task root --inputs tmp/baseline-run/inputs.json --labels reviewed-labels.json --predictions tmp/baseline-run/skynet.json --output tmp/baseline-run/skynet-eval.json
 ```
 
-`reviewed-labels.json` 是待提供文件，不是本仓库已有生产真值。完整标签须显式给出节点和边；部分标签使用 `positive_edges/known_edge_mask/allowed_edges` 和节点 mask。允许边为中性，不自动作为必需边；mask 外预测不自动算负例；完全无已知范围时不生成虚假的满分。旧标注 `possible` 的语义尚未统一，因此没有自动转换成正例。成功空图和失败分别记录。
+`reviewed-labels.json` 是待提供文件，不是本仓库已有生产真值。完整标签须显式给出节点和边；部分标签使用 `positive_edges/known_edge_mask/allowed_edges` 和节点 mask。允许边为中性，不自动作为必需边；mask 外预测不自动算负例；完全无已知范围时不生成虚假的满分。RQ1 对旧标注 `possible` 采用 `possible-positive` 默认口径（计为已确认有向正边，与 `Sys/Score/evaluate_propagation.py` 一致），可用 `--label-policy strict` 留待人工确认；两种口径都会显式记录，不静默改变评分语义。成功空图和失败分别记录。
 
 ## NEC 分组训练与图实验
 

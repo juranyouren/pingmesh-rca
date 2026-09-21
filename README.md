@@ -27,7 +27,9 @@ Pingmesh context + raw task_topo + alarms/logs
 ## 输入与输出边界
 
 每条输出的传播边必须能映射到至少一条原始 `task_topo` 边。未知关系一律掩码，
-不转换为负例；`allowed` 为中性，`possible` 的语义需人工确认。运行期推断不读取
+不转换为负例；`allowed` 为中性。`possible` 在 RQ1 中默认按 `possible-positive` 口径计为
+已确认有向正边（与 `Sys/Score/evaluate_propagation.py` 一致，可用 `--label-policy strict` 改回
+留待人工确认）；它表示标注强度，不等于已核实的物理关系。运行期推断不读取
 根或传播标签（仅显式 Oracle 评测包装层可接收已确认的测试根）。
 
 ## 主要目录
