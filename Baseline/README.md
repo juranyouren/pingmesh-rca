@@ -14,6 +14,9 @@
 
 ## 安装和已验证环境
 
+**RQ1（Python 3.10）请使用 [RQ1 安装说明](RQ1/README.md) 和 `Baseline/RQ1/requirements.txt`。**
+下面的 `requirements-repro.txt` 是历史 Python 3.12 环境快照，不适用于 RQ1 的 Python 3.10 环境。
+
 本机已建立 `tmp/baselines-venv`，Python 3.12.10 / CPU。从仓库根目录用它运行下列命令，无需重复安装。新机器可执行：
 
 ```powershell

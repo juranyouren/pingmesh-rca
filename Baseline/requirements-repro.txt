@@ -1,4 +1,6 @@
 # Verified Windows / Python 3.12.10 CPU environment, 2026-09-10.
+# Historical environment snapshot, NOT the Python 3.10 RQ1 installation file.
+# For RQ1 use: python -m pip install -r Baseline/RQ1/requirements.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
 attrs==26.1.0
 cloudpickle==3.1.2

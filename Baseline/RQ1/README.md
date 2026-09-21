@@ -101,6 +101,11 @@ PCMCI 使用 ParCorr 处理计数变换是迁移近似；不把它叫 PCMCI+。
 
 在项目根目录、已有兼容 PyTorch 的 Python 3.10/3.11 独立环境中：
 
+**使用本目录的 `Baseline/RQ1/requirements.txt`，不要安装 `Baseline/requirements-repro.txt`。**
+后者是另一套 Windows/Python 3.12 环境快照，锁定的 NetworkX 3.6.1、NumPy 2.5.3、
+SciPy 1.18.1 等版本与 RQ1 的 Python 3.10 不兼容，仅替换其中一个包不能解决整份环境冲突。
+RQ1 将 NetworkX 固定为支持 Python 3.10 的 3.4.2。
+
 ```bash
 python -m pip install -r Baseline/RQ1/requirements.txt
 python -m pip freeze > /path/to/rq1-environment.txt
