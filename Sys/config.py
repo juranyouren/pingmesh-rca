@@ -10,12 +10,17 @@ Usage:
 """
 
 import os
+from pathlib import Path
 
 # ══════════════════════════════════════════════════════════════════
 # Base paths (all from env)
 # ══════════════════════════════════════════════════════════════════
 
-_ROOT = os.environ.get("PINGMESH_PROJECT_ROOT", "/home/sbp/lixinyang/pingmesh")
+# Fallback is the repository root, resolved from this file's location -- never a
+# workstation- or server-specific absolute path, and never the current working
+# directory. `scripts/common.sh` sets PINGMESH_PROJECT_ROOT for shell entry
+# points; these fallbacks only cover direct `python <module>` invocation.
+_ROOT = os.environ.get("PINGMESH_PROJECT_ROOT", str(Path(__file__).resolve().parents[1]))
 
 
 class DataPaths:
@@ -25,7 +30,7 @@ class DataPaths:
             os.path.join(root, "data", "raw", "pingmesh_labeled"),
         )
         self.nodes_labeled = os.environ.get("PINGMESH_DATA", os.path.join(root, "data", "node", "nodes_max_labeled"))
-        self.results       = os.environ.get("PINGMESH_RESULTS", os.path.join(root, "data", "res"))
+        self.results       = os.environ.get("PINGMESH_RESULTS", os.path.join(root, "res"))
         self.alarm_weights = os.environ.get("PINGMESH_WEIGHTS_MANUAL", os.path.join(root, "data", "weights", "classified_alarms", "all_alarms.json"))
 
 
@@ -36,7 +41,7 @@ class DataPaths:
 class ModelConfig:
     def __init__(self):
         self.model_path   = os.environ.get("PINGMESH_MODEL_PATH", "/usr/share/large_language_models/DeepSeek-R1-Distill-Qwen-32B")
-        self.npu_cards    = os.environ.get("PINGMESH_NPU_CARDS", "0,1,2,3,4,5,6,7")
+        self.npu_cards    = os.environ.get("PINGMESH_NPU_CARDS", "4,5,6,7")
         self.npu_groups   = [[0, 1], [2, 3], [4, 5], [6, 7]]
         self.gpu_memory_utilization = 0.85
         self.max_model_len   = int(os.environ.get("PINGMESH_MAX_MODEL_LEN", "16384"))

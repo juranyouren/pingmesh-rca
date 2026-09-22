@@ -10,6 +10,9 @@ __pycache__/
 # Data (large binary/JSON datasets)
 data/
 
+# Experiment run outputs (timestamped run directories)
+/res/
+
 # Agent outputs
 agent/output/
 agent/ms_agent.log

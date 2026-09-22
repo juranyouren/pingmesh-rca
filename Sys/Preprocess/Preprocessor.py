@@ -29,8 +29,8 @@
 import os, json, sys, shutil
 from collections import defaultdict, Counter
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if __package__ in (None, ""):
-    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
 
@@ -378,7 +378,7 @@ def phase_extract(raw_dir, out_dir, write=False, count_logs=False):
         json.dump(c["node_map"], open(os.path.join(case_dir, out_name), "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
 
-        # Stage 2 sidecar — preserves factual topology/port context without labels.
+        # Propagation sidecar — preserves factual topology/port context without labels.
         topology_context_path = os.path.join(case_dir, "topology_context.json")
         with open(topology_context_path, "w", encoding="utf-8") as handle:
             json.dump(c["topology_context"], handle, ensure_ascii=False, indent=2)
@@ -414,8 +414,10 @@ if __name__ == "__main__":
         _raw = config.data.pingmesh_raw if args.raw is None else args.raw
         _out = config.data.nodes_labeled if args.out is None else args.out
     except Exception:
-        _raw = args.raw or "/home/sbp/lixinyang/pingmesh/data/raw/pingmesh_v1"
-        _out = args.out or "/home/sbp/lixinyang/pingmesh/data/node/nodes_v1"
+        # Fallbacks are anchored to the repository root, never to a machine-specific
+        # absolute path and never to the current working directory.
+        _raw = args.raw or os.path.join(_REPO_ROOT, "data", "raw", "pingmesh_v1")
+        _out = args.out or os.path.join(_REPO_ROOT, "data", "node", "nodes_v1")
 
     if args.phase in ("merge", "all"):
         # Phase 1 中间产物: {raw文件夹名}_dedup
