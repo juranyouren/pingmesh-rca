@@ -20,7 +20,7 @@ bash scripts/run_rq1.sh
 |---|---|---|
 | 节点观测 | `PINGMESH_DATA` | `data/node/nodes_max_labeled` |
 | 传播图 GT | `PINGMESH_PROPAGATION_LABELS_ROOT` | `data/propagation_labels/<case_id>/propagation_label.json` |
-| 输出根目录 | `PINGMESH_RESULTS` | `data/res`，自动建立 rq1_oracle 时间戳目录 |
+| 输出根目录 | `PINGMESH_RESULTS` | `res/`，自动建立 `rq1_<condition>_<时间戳>_<sha>` 目录 |
 | 方法参数 | `PINGMESH_RQ1_CONFIG` | `configs/baselines/rq1.json` |
 | 根条件 | `PINGMESH_RQ1_CONDITION` | `oracle`，使用传播 GT 中确认的单根 |
 
@@ -176,9 +176,9 @@ PCMCI 使用 ParCorr 处理计数变换是迁移近似；不把它叫 PCMCI+。
 
 在项目根目录、已有兼容 PyTorch 的 Python 3.10/3.11 独立环境中：
 
-**使用本目录的 `Baseline/RQ1/requirements.txt`，不要安装 `Baseline/requirements-repro.txt`。**
-后者是另一套 Windows/Python 3.12 环境快照，锁定的 NetworkX 3.6.1、NumPy 2.5.3、
-SciPy 1.18.1 等版本与 RQ1 的 Python 3.10 不兼容，仅替换其中一个包不能解决整份环境冲突。
+**使用本目录的 `Baseline/RQ1/requirements.txt`。** 不要复用其他环境快照：历史 Windows/Python 3.12
+快照（`Baseline/requirements-repro.txt`）锁定的 NetworkX 3.6.1、NumPy 2.5.3、SciPy 1.18.1 等版本
+与 RQ1 的 Python 3.10 不兼容，仅替换其中一个包不能解决整份环境冲突；该文件已随旧 public runner 删除。
 RQ1 将 NetworkX 固定为支持 Python 3.10 的 3.4.2。
 
 ```bash

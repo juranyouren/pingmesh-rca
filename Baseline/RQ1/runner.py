@@ -48,6 +48,29 @@ def git_state():
     return {"commit": query("rev-parse", "HEAD"), "dirty": bool(status) if status is not None else None}
 
 
+def short_sha():
+    root = Path(__file__).resolve().parents[2]
+    try:
+        commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                                         stderr=subprocess.DEVNULL).decode().strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = ""
+    return commit or "nogit"
+
+
+def default_output_dir(results_root, condition):
+    """Run directory naming contract, shared with scripts/common.sh:
+    <experiment>_<variant>_<YYYYMMDD_HHMMSS>_<git-short-sha>[_NN].
+    """
+    stem = f"rq1_{condition}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{short_sha()}"
+    candidate = Path(results_root) / stem
+    suffix = 1
+    while candidate.exists():
+        candidate = Path(results_root) / f"{stem}_{suffix:02d}"
+        suffix += 1
+    return str(candidate)
+
+
 def source_hashes():
     root = Path(__file__).resolve().parents[2]
     paths = set()
@@ -273,8 +296,7 @@ def main(argv=None):
     if args.condition not in {"shared", "oracle"}:
         parser.error("PINGMESH_RQ1_CONDITION must be shared or oracle")
     if not args.output:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        args.output = str(Path(os.environ.get("PINGMESH_RESULTS", str(project / "data/res"))) / f"rq1_{args.condition}_{stamp}")
+        args.output = default_output_dir(os.environ.get("PINGMESH_RESULTS", str(project / "res")), args.condition)
     if len(set(args.methods)) != len(args.methods) or args.bootstrap_samples < 0:
         parser.error("Methods must be unique and bootstrap-samples nonnegative")
     # argparse does not check an env-provided default against choices, and labels are
