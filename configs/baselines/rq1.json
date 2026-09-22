@@ -10,7 +10,7 @@
     "pc_alpha": 0.05,
     "alpha_level": 0.01,
     "max_conds_dim": 3,
-    "require_coverage": true
+    "require_coverage": false
   },
   "thp": {
     "delta": 0.1,
@@ -18,9 +18,9 @@
     "max_hop": 1,
     "penalty": "BIC",
     "max_iter": 20,
-    "max_event_types": 30,
-    "max_events": 5000,
-    "max_devices": 500,
+    "max_event_types": 64,
+    "max_events": 20000,
+    "max_devices": 2000,
     "max_lag_seconds": 600.0,
     "seed": 20260920
   },
