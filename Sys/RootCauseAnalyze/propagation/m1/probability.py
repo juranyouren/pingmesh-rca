@@ -6,6 +6,10 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, Mapping, Sequence
 
+from Sys.RootCauseAnalyze.propagation.evidence_logit import (
+    directional_scores,
+    load_evidence_model,
+)
 from Sys.RootCauseAnalyze.propagation.schema import (
     PropagationConfig,
     normalize_config,
@@ -144,6 +148,7 @@ def _result(
     *,
     method: str,
     details: Mapping[str, Any] | None = None,
+    normalize: bool = True,
 ) -> Dict[str, Any]:
     endpoint_a = str(edge_hypothesis.get("endpoint_a", "") or "")
     endpoint_b = str(edge_hypothesis.get("endpoint_b", "") or "")
@@ -152,7 +157,16 @@ def _result(
         for item in edge_hypothesis.get("directions", [])
         if isinstance(item, Mapping)
     ]
-    p_forward, p_reverse, p_no_direct = _normalized_triplet(*probabilities)
+    if normalize:
+        p_forward, p_reverse, p_no_direct = _normalized_triplet(*probabilities)
+    else:
+        # ``logit_evidence_v1`` scores the two directions independently, so it
+        # deliberately does not project them onto the three-state simplex. The
+        # downstream consumers compare these values (``probability > no_direct``,
+        # margin checks) and never require them to sum to one.
+        p_forward = round(max(0.0, float(probabilities[0])), 6)
+        p_reverse = round(max(0.0, float(probabilities[1])), 6)
+        p_no_direct = round(max(0.0, float(probabilities[2])), 6)
     for item in directions:
         key = (str(item.get("from", "")), str(item.get("to", "")))
         if key == (endpoint_a, endpoint_b):
@@ -307,6 +321,55 @@ def _supervised_probabilities(
     }
 
 
+def _logit_evidence_probabilities(
+    edge_hypothesis: Mapping[str, Any], config: PropagationConfig
+) -> tuple[tuple[float, float, float], Dict[str, Any]]:
+    """Accumulate independent directional evidence into two unrelated scores.
+
+    Unlike the other methods this one does not answer "which of the three states
+    holds". It answers "how strongly does the evidence support A->B" and, as a
+    separate question, "how strongly does it support B->A". Both answers may be
+    low at once, and neither is rescaled against the other.
+    """
+
+    pair_evidence = edge_hypothesis.get("pair_evidence")
+    if not isinstance(pair_evidence, Mapping):
+        pair_evidence = {}
+    edge_type = str(edge_hypothesis.get("edge_type", "physical") or "physical")
+    model = load_evidence_model(config.edge_evidence_model_path)
+    result = directional_scores(pair_evidence, model=model, edge_type=edge_type)
+    contributions = [
+        {**item, "direction": direction}
+        for direction, items in (
+            ("a_to_b", result["a_to_b_contributions"]),
+            ("b_to_a", result["b_to_a_contributions"]),
+        )
+        for item in items
+    ]
+    details: Dict[str, Any] = {
+        "model_id": result["model_id"],
+        "edge_type": edge_type,
+        "prior": result["prior"],
+        "prior_logit": result["prior_logit"],
+        "directionality": "independent_directions",
+        "a_to_b_logit": result["a_to_b_logit"],
+        "b_to_a_logit": result["b_to_a_logit"],
+        "a_to_b_score": result["a_to_b_score"],
+        "b_to_a_score": result["b_to_a_score"],
+        "no_direct_score": result["no_direct_score"],
+        "features": dict(result["features"]),
+        "a_to_b_contributions": result["a_to_b_contributions"],
+        "b_to_a_contributions": result["b_to_a_contributions"],
+        "contributions": contributions,
+        "evidence_ids": result["evidence_ids"],
+        "counter_evidence_ids": result["counter_evidence_ids"],
+    }
+    return (
+        (result["a_to_b_score"], result["b_to_a_score"], result["no_direct_score"]),
+        details,
+    )
+
+
 def assign_edge_state_probabilities(
     edge_hypothesis: Mapping[str, Any],
     *,
@@ -316,11 +379,15 @@ def assign_edge_state_probabilities(
 
     cfg = normalize_config(config)
     method = cfg.edge_probability_method
+    normalize = True
     if method == "deterministic_evidence_v1":
         probabilities = _deterministic_probabilities(edge_hypothesis)
         details: Mapping[str, Any] | None = None
     elif method == "logit_softmax_v1":
         probabilities, details = _logit_probabilities(edge_hypothesis, cfg)
+    elif method == "logit_evidence_v1":
+        probabilities, details = _logit_evidence_probabilities(edge_hypothesis, cfg)
+        normalize = False
     elif method == "supervised_softmax_v1":
         probabilities, details = _supervised_probabilities(edge_hypothesis, cfg)
     else:  # normalize_config validates this; retain a defensive runtime guard.
@@ -330,4 +397,5 @@ def assign_edge_state_probabilities(
         probabilities,
         method=method,
         details=details,
+        normalize=normalize,
     )

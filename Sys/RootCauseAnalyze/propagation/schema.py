@@ -47,6 +47,7 @@ class PropagationConfig:
     edge_probability_method: str = "deterministic_evidence_v1"
     edge_probability_model_path: str | None = None
     edge_probability_temperature: float = 1.0
+    edge_evidence_model_path: str | None = None
     logit_direction_bias: float = -1.50
     logit_temporal_weight: float = 1.50
     logit_semantic_weight: float = 2.00
@@ -81,6 +82,7 @@ def normalize_config(config: PropagationConfig | Mapping[str, Any] | None) -> Pr
     allowed_probability_methods = {
         "deterministic_evidence_v1",
         "logit_softmax_v1",
+        "logit_evidence_v1",
         "supervised_softmax_v1",
     }
     if normalized.edge_probability_method not in allowed_probability_methods:

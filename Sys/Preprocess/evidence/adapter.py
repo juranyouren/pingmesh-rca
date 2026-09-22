@@ -9,7 +9,13 @@ from Sys.Preprocess.evidence.encoder import stable_id
 from Sys.utils.case_utils import get_device_ip
 
 
-def to_episodes(incident):
+# Matches PropagationConfig.timestamp_uncertainty_ms. The adapter is a pure
+# translation layer and takes no propagation config, so the default is repeated
+# here and callers may override it.
+DEFAULT_TIMESTAMP_UNCERTAINTY_MS = 5_000
+
+
+def to_episodes(incident, timestamp_uncertainty_ms=DEFAULT_TIMESTAMP_UNCERTAINTY_MS):
     episodes = []
     seen = set()
     for device in incident["devices"]:
@@ -33,8 +39,15 @@ def to_episodes(incident):
                 event_type, layer = ("interface_state_down" if state == "down" else "physical_link_up"), "physical"
             clear = state in ("up", "rebuild", "recovery", "recovered")
             confidence = evidence["quality"]["mapping_confidence"]
-            # Raw times were not independently verified: they never create temporal edges.
+            # The timestamp verdict comes from the shared incident-level
+            # assessment, not from this adapter: a raw time is only allowed to
+            # produce a temporal interval once it is verified as an event time.
             # A session IP is not a management IP: no peer resolution is invented here.
+            time_block = evidence.get("time") or {}
+            time_score = float(time_block.get("time_score", 0.0) or 0.0)
+            raw_time = time_block.get("raw_time")
+            time_usable = time_score > 0.0 and raw_time is not None
+            onset_ms = int(raw_time) if time_usable else None
             episode = {
                 "evidence_id": eid, "device_id": device_id,
                 "raw_evidence_ids": evidence["provenance"]["raw_event_ids"],
@@ -45,12 +58,17 @@ def to_episodes(incident):
                 "peer_raw": evidence.get("peer", {}).get("address", ""),
                 "observation_scope": "local" if evidence["entity"]["entity_type"] in ("interface", "device") else "unknown",
                 "lifecycle": "clear" if clear else "raised",
-                "onset_time_ms": None, "onset_interval_ms": None,
+                "onset_time_ms": onset_ms,
+                "onset_interval_ms": [onset_ms - timestamp_uncertainty_ms,
+                                      onset_ms + timestamp_uncertainty_ms]
+                if onset_ms is not None else None,
                 "end_time_ms": None, "end_interval_ms": None,
                 "duplicate_count": evidence["source_count"],
                 "parse_method": "llm_encoder", "parse_status": "success",
-                "quality": {"timestamp": 0.0, "description": confidence, "object": 1.0,
-                            "peer": 0.0, "traceability": 1.0, "core": confidence},
+                "quality": {"timestamp": time_score, "description": confidence, "object": 1.0,
+                            "peer": 0.0, "traceability": 1.0, "core": confidence,
+                            "time_quality": str(time_block.get("time_quality", "") or ""),
+                            "time_reason": str(time_block.get("time_reason", "") or "")},
                 "incident_relevance": round((0.2 if clear else 0.6) * confidence, 6),
                 "predicate": predicate, "value": copy.deepcopy(evidence["value"]),
                 "possible_effects": list(evidence["possible_effects"]),
@@ -60,7 +78,9 @@ def to_episodes(incident):
     return episodes
 
 
-def load_episodes(evidence_root, case_id, nodes):
+def load_episodes(
+    evidence_root, case_id, nodes, timestamp_uncertainty_ms=DEFAULT_TIMESTAMP_UNCERTAINTY_MS
+):
     path = Path(evidence_root) / case_id / "incident.json"
     incident = json.loads(path.read_text(encoding="utf-8"))
     if incident.get("incident_id") != case_id:
@@ -71,4 +91,4 @@ def load_episodes(evidence_root, case_id, nodes):
     actual = {d["device"]["device_id"] for d in incident["devices"]}
     if actual != expected:
         raise ValueError(f"Encoded device set differs from input: {path}")
-    return to_episodes(incident), incident
+    return to_episodes(incident, timestamp_uncertainty_ms), incident

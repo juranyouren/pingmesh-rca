@@ -9,6 +9,12 @@ from pathlib import Path
 
 from Sys.LLM.engine import ContextBudgetError
 from Sys.utils.case_utils import get_device_ip
+from Sys.utils.time_quality import (
+    REASON_MISSING,
+    TIME_QUALITY_MISSING,
+    TimeObservation,
+    assess_time_quality,
+)
 
 
 def dumps(value):
@@ -45,9 +51,33 @@ Only final JSON, no reasoning or Markdown.
 DATA_JSON="""
 
 
+def _record_time_quality(record, assessment):
+    """Time-quality fields for one record, under the incident's verdict.
+
+    A record that carries no timestamp is unusable regardless of what the rest
+    of the incident looks like.
+    """
+
+    if record.get("raw_time") is None:
+        return {
+            "time_quality": TIME_QUALITY_MISSING,
+            "time_reason": REASON_MISSING,
+            "time_score": 0.0,
+        }
+    return {
+        "time_quality": assessment.quality,
+        "time_reason": assessment.reason,
+        "time_score": round(float(assessment.score), 6),
+        "time_evidence": dict(assessment.evidence),
+    }
+
+
 class EvidenceEncoder:
-    def __init__(self, engine, vocabulary=None):
+    def __init__(self, engine, vocabulary=None, source_declares_event_times=False):
         self.engine = engine
+        # Only a source that can vouch for its own clock may set this. Detection
+        # can still downgrade the verdict; a declaration never upgrades one.
+        self.source_declares_event_times = bool(source_declares_event_times)
         self.vocabulary = copy.deepcopy(vocabulary) if vocabulary is not None else json.loads(
             Path(__file__).with_name("vocabulary.json").read_text(encoding="utf-8"))
         if not self.vocabulary.get("version") or not isinstance(self.vocabulary.get("predicates"), dict):
@@ -171,6 +201,20 @@ class EvidenceEncoder:
                                     "semantic_summary": m.get("semantic_summary", ""),
                                     "raw_text": record["description"], "reason": str(exc), "mapping": m}
 
+        # Whether the collected timestamps may order events is decided once for
+        # the incident, by the same assessment the rule path uses.
+        time_assessment = assess_time_quality(
+            [
+                TimeObservation(
+                    time_ms=record.get("raw_time"),
+                    device_id=device_id,
+                    key=raw_event_id,
+                )
+                for raw_event_id, (device_id, record) in records_by_id.items()
+            ],
+            source_declares_event_times=self.source_declares_event_times,
+        )
+
         extension, candidates = {}, []
         if unknown:
             try:
@@ -237,9 +281,9 @@ class EvidenceEncoder:
                 groups[key] = {"evidence_id": eid, "incident_id": incident_id, "device_id": device_id,
                                "entity": entity, "predicate": m["predicate"], "value": value,
                                "possible_effects": vocabulary[m["predicate"]]["effects"].get(value["state"], []),
-                               "time": {"raw_time": record["raw_time"], "canonical_time": None,
-                                        "time_quality": "unreliable" if record["raw_time"] is not None else "missing",
-                                        "time_reason": "unverified_source_timestamp" if record["raw_time"] is not None else "timestamp_missing"},
+                               "time": {
+                                   "raw_time": record["raw_time"], "canonical_time": None,
+                                   **_record_time_quality(record, time_assessment)},
                                "source_records": [], "provenance": {"raw_event_ids": [], "source_systems": [], "source_types": []},
                                "deduplication": {"dedup_group": stable_id("DG_", key), "raw_observation_count": 0},
                                "quality": {"mapping_confidence": confidence, "quality_flags": ["unreliable_timestamp"]}}

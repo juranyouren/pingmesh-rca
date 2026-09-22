@@ -1,0 +1,83 @@
+{
+  "schema_version": "edge-evidence-logit-v1",
+  "model_id": "logit-evidence-v1-uncalibrated",
+  "calibration": "PLACEHOLDER — no LR or prior here has been estimated from incident history. They encode the intended ordering and sign of each evidence pattern only. Do not read the resulting score as a calibrated probability, and re-tune the downstream thresholds (min_edge_support, direction_tie_margin) before comparing against deterministic_evidence_v1.",
+
+  "prior_by_edge_type": {
+    "physical": 0.05,
+    "protocol_context": 0.03,
+    "_default": 0.02
+  },
+
+  "pattern_priority": [
+    "explicit_cause",
+    "possible_effect",
+    "physical_to_derivative",
+    "derivative_to_physical"
+  ],
+
+  "patterns": {
+    "explicit_cause": {
+      "forward_lr": 12.0,
+      "reverse_lr": 0.5,
+      "note": "The effect-side log names a cause that the other device actually exhibits."
+    },
+    "possible_effect": {
+      "forward_lr": 3.0,
+      "reverse_lr": 0.8,
+      "note": "What the cause device produces overlaps what the effect device is a manifestation of."
+    },
+    "physical_to_derivative": {
+      "forward_lr": 1.8,
+      "reverse_lr": 0.7,
+      "note": "Weak taxonomy fallback: physical symptom upstream of a routing/adjacency symptom."
+    },
+    "derivative_to_physical": {
+      "forward_lr": 0.35,
+      "reverse_lr": 1.6,
+      "note": "Explicit contradiction: a routing symptom cannot physically cause a link-layer symptom."
+    }
+  },
+
+  "temporal": {
+    "forward_lr": 6.0,
+    "reverse_lr": 0.5,
+    "note": "Applied only between confidently ordered, non-overlapping onset intervals."
+  },
+
+  "cause_tokens": {
+    "interface_state_change": ["interface_state_down", "adjacency_loss", "neighbor_unreachable", "path_degradation", "adjacency_recovery", "neighbor_reachable", "path_recovery"],
+    "interface_flap": ["interface_state_down", "aggregate_port_instability", "adjacency_loss", "path_degradation"],
+    "bgp_adjacency_down": ["route_withdrawal", "neighbor_unreachable", "path_degradation"],
+    "bgp_adjacency_up": ["adjacency_recovery", "path_recovery"],
+    "bfd_session_down": ["adjacency_loss", "path_degradation"],
+    "lldp_neighbor_rebuild": ["neighbor_reachable", "link_recovery"],
+    "device_restart": ["adjacency_loss", "path_degradation"],
+
+    "physical_link_down": ["interface_state_down", "aggregate_port_instability", "adjacency_loss", "neighbor_unreachable", "path_degradation"],
+    "physical_link_up": ["adjacency_recovery", "neighbor_reachable", "path_recovery"],
+    "bgp_session_down": ["route_withdrawal", "neighbor_unreachable", "path_degradation"],
+    "bgp_session_up": ["adjacency_recovery", "path_recovery"],
+    "lldp_neighbor_change": ["neighbor_reachable", "link_recovery"],
+    "routing_change": ["path_degradation", "route_withdrawal"],
+    "device_health": ["path_degradation"]
+  },
+
+  "effect_tokens": {
+    "interface_state_change": ["interface_state_down"],
+    "interface_flap": ["interface_state_down", "aggregate_port_instability"],
+    "bgp_adjacency_down": ["adjacency_loss", "neighbor_unreachable", "path_degradation"],
+    "bgp_adjacency_up": ["adjacency_recovery", "neighbor_reachable", "path_recovery"],
+    "bfd_session_down": ["adjacency_loss", "path_degradation"],
+    "lldp_neighbor_rebuild": ["neighbor_reachable", "link_recovery"],
+    "device_restart": ["adjacency_loss", "path_degradation"],
+
+    "physical_link_down": ["interface_state_down"],
+    "physical_link_up": ["adjacency_recovery", "path_recovery"],
+    "bgp_session_down": ["adjacency_loss", "neighbor_unreachable", "path_degradation"],
+    "bgp_session_up": ["adjacency_recovery", "path_recovery"],
+    "lldp_neighbor_change": ["neighbor_reachable", "link_recovery"],
+    "routing_change": ["path_degradation"],
+    "device_health": ["path_degradation"]
+  }
+}

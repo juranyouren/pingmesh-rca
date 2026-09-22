@@ -134,7 +134,12 @@ def run_propagation_pipeline(
             encoder_status = None
             if evidence_dir is not None:
                 from Sys.Preprocess.evidence.adapter import load_episodes
-                episodes, encoded = load_episodes(evidence_dir, os.path.basename(dirpath), nodes)
+                episodes, encoded = load_episodes(
+                    evidence_dir,
+                    os.path.basename(dirpath),
+                    nodes,
+                    timestamp_uncertainty_ms=cfg.timestamp_uncertainty_ms,
+                )
                 encoder_status = encoded["status"]
             if root_results_path and os.path.normpath(dirpath) not in previous:
                 raise ValueError(f"Root results missing selected case: {dirpath}")
@@ -272,12 +277,21 @@ def main() -> None:
         choices=(
             "deterministic_evidence_v1",
             "logit_softmax_v1",
+            "logit_evidence_v1",
             "supervised_softmax_v1",
         ),
         default="deterministic_evidence_v1",
     )
     parser.add_argument("--edge-probability-model", default=None)
     parser.add_argument("--edge-probability-temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--edge-evidence-model",
+        default=None,
+        help=(
+            "Likelihood-ratio table for logit_evidence_v1. Defaults to "
+            "configs/propagation/evidence_logit_v1.json, an uncalibrated placeholder."
+        ),
+    )
     parser.add_argument("--logit-direction-bias", type=float, default=-1.50)
     parser.add_argument("--logit-temporal-weight", type=float, default=1.50)
     parser.add_argument("--logit-semantic-weight", type=float, default=2.00)
@@ -307,6 +321,7 @@ def main() -> None:
             edge_probability_method=args.edge_probability_method,
             edge_probability_model_path=args.edge_probability_model,
             edge_probability_temperature=args.edge_probability_temperature,
+            edge_evidence_model_path=args.edge_evidence_model,
             logit_direction_bias=args.logit_direction_bias,
             logit_temporal_weight=args.logit_temporal_weight,
             logit_semantic_weight=args.logit_semantic_weight,

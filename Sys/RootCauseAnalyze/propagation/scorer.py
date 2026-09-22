@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
 
+from Sys.RootCauseAnalyze.propagation.evidence_logit import (
+    build_pair_evidence,
+    load_evidence_model,
+)
 from Sys.RootCauseAnalyze.propagation.schema import PropagationConfig, normalize_config
 
 
@@ -201,6 +205,7 @@ def build_edge_relation_graph(
 
     cfg = normalize_config(config)
     episode_by_device = _episode_index(episodes)
+    evidence_model = load_evidence_model(cfg.edge_evidence_model_path)
     hypotheses: List[Dict[str, Any]] = []
     state_counts: Counter[str] = Counter()
 
@@ -272,6 +277,18 @@ def build_edge_relation_graph(
         state_counts[preferred_state if preferred_state in {
             "inactive_or_unobserved", "direction_ambiguous"
         } else "directional"] += 1
+        # Evidence extraction is root-independent and method-independent: the
+        # terms are recorded once, and each scoring method decides what to do
+        # with them. Only ``logit_evidence_v1`` reads them today.
+        pair_evidence = build_pair_evidence(
+            endpoint_a,
+            endpoint_b,
+            endpoint_a_events,
+            endpoint_b_events,
+            model=evidence_model,
+            edge_type=str(candidate_edge.get("edge_type", "physical")),
+            timestamp_uncertainty_ms=cfg.timestamp_uncertainty_ms,
+        )
         hypotheses.append(
             {
                 "edge_hypothesis_id": f"EH{index:05d}",
@@ -283,6 +300,7 @@ def build_edge_relation_graph(
                     "no_direct_propagation": inactive_support,
                 },
                 "directions": directions,
+                "pair_evidence": pair_evidence,
                 "preferred_state": preferred_state,
                 "relation_strength": strength,
                 "direction_gap": direction_gap,

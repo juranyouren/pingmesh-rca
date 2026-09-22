@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 from Sys.RootCauseAnalyze.propagation.schema import PropagationConfig, normalize_config
 from Sys.utils.alarm_utils import event_name, node_events
 from Sys.utils.case_utils import get_device_ip
+from Sys.utils.time_quality import (
+    TimeObservation,
+    TimeQualityAssessment,
+    assess_time_quality,
+)
 
 
 _DESCRIPTION_KEYS = (
@@ -117,7 +122,11 @@ def _scope(text: str) -> str:
     return "unknown"
 
 
-def _quality(row: Mapping[str, Any]) -> Dict[str, float]:
+def _core_quality(timestamp: float, description: float, traceability: float) -> float:
+    return round(0.45 * timestamp + 0.25 * description + 0.30 * traceability, 6)
+
+
+def _quality(row: Mapping[str, Any]) -> Dict[str, Any]:
     timestamp = 1.0 if row.get("timestamp_ms") is not None else 0.0
     description = 1.0 if row.get("description") else 0.0
     traceability = 1.0 if row.get("raw_evidence_id") else 0.0
@@ -127,8 +136,31 @@ def _quality(row: Mapping[str, Any]) -> Dict[str, float]:
         "object": 1.0 if row.get("object") else 0.0,
         "peer": 1.0 if row.get("peer_device") else 0.0,
         "traceability": traceability,
-        "core": round(0.45 * timestamp + 0.25 * description + 0.30 * traceability, 6),
+        "core": _core_quality(timestamp, description, traceability),
     }
+
+
+def _apply_time_quality(
+    rows: Sequence[Dict[str, Any]], assessment: TimeQualityAssessment
+) -> None:
+    """Overwrite the provisional per-record time fields with the incident verdict.
+
+    ``_quality`` can only see one row, so it can only answer "was a timestamp
+    written down". Whether that timestamp can *order events* is an incident-level
+    question answered by :func:`assess_time_quality`. The raw ``timestamp_ms`` is
+    left untouched: the observation stays, only its usability is re-judged.
+    """
+
+    for row in rows:
+        quality = row.setdefault("quality", {})
+        quality["timestamp"] = assessment.score
+        quality["time_quality"] = assessment.quality
+        quality["time_reason"] = assessment.reason
+        quality["core"] = _core_quality(
+            assessment.score,
+            float(quality.get("description", 0.0) or 0.0),
+            float(quality.get("traceability", 0.0) or 0.0),
+        )
 
 
 def canonicalize_event(
@@ -201,10 +233,16 @@ def _episode_from_rows(
         ]
     )
     quality_keys = ("timestamp", "description", "object", "peer", "traceability", "core")
-    quality = {
+    quality: Dict[str, Any] = {
         key: round(max(float(row.get("quality", {}).get(key, 0.0)) for row in rows), 6)
         for key in quality_keys
     }
+    # The raw timestamps are preserved on the episode; only the *derived*
+    # interval is gated, so a batch gap can never become a propagation lag.
+    first_quality = first.get("quality", {}) if isinstance(first.get("quality"), Mapping) else {}
+    time_usable = float(quality.get("timestamp", 0.0) or 0.0) > 0.0
+    quality["time_quality"] = str(first_quality.get("time_quality", "") or "")
+    quality["time_reason"] = str(first_quality.get("time_reason", "") or "")
     event_type = str(first.get("event_type", "generic_event"))
     within_window = onset_offset is not None and abs(onset_offset) <= config.event_window_ms
     relevance = 0.15
@@ -232,9 +270,13 @@ def _episode_from_rows(
         "observation_scope": str(first.get("observation_scope", "unknown")),
         "lifecycle": "raised_and_cleared" if cleared_at is not None else str(first.get("lifecycle", "raised")),
         "onset_time_ms": onset,
-        "onset_interval_ms": _interval(onset_offset, config.timestamp_uncertainty_ms),
+        "onset_interval_ms": _interval(onset_offset, config.timestamp_uncertainty_ms)
+        if time_usable
+        else None,
         "end_time_ms": cleared_at,
-        "end_interval_ms": _interval(end_offset, config.timestamp_uncertainty_ms),
+        "end_interval_ms": _interval(end_offset, config.timestamp_uncertainty_ms)
+        if time_usable
+        else None,
         "duplicate_count": len(rows),
         "parse_method": "rule",
         "parse_status": "success"
@@ -289,6 +331,21 @@ def build_evidence_episodes(
                         device_lookup=device_lookup,
                     )
                 )
+
+    # Whether these timestamps may order events is an incident-level question:
+    # a single record cannot reveal that it was written by a batch collector.
+    # The same assessment gates the LLM path, so the two cannot disagree.
+    _apply_time_quality(
+        canonical_rows,
+        assess_time_quality(
+            TimeObservation(
+                time_ms=row.get("timestamp_ms"),
+                device_id=str(row.get("device_id", "") or ""),
+                key=str(row.get("raw_evidence_id", "") or ""),
+            )
+            for row in canonical_rows
+        ),
+    )
 
     grouped: Dict[Tuple[str, str, str, str, str], List[Dict[str, Any]]] = defaultdict(list)
     for row in canonical_rows:

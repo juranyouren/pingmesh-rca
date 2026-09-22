@@ -10,6 +10,7 @@ from Sys.RootCauseAnalyze.propagation.schema import (
     PropagationConfig,
     normalize_config,
 )
+from Sys.RootCauseAnalyze.propagation.resolution import resolve_episode_peers
 from Sys.RootCauseAnalyze.propagation.scorer import build_edge_relation_graph
 from Sys.RootCauseAnalyze.propagation.topology_context import topology_context_from_nodes
 
@@ -35,6 +36,10 @@ def reconstruct_hypothesis_graph(
         if topology_context is not None
         else topology_context_from_nodes(nodes, info)
     )
+    # Observing a remote entity is not the same as knowing which device it is.
+    # Resolution runs here, once per incident, against declared inventory and
+    # topology facts, so every downstream stage sees the same auditable answer.
+    episodes = resolve_episode_peers(episodes, context, inventory_context=nodes)
     candidate_graph = build_candidate_graph(nodes, info, context, episodes, config=cfg)
     raw_relation_graph = build_edge_relation_graph(candidate_graph, episodes, config=cfg)
     edge_hypotheses = [
@@ -67,8 +72,15 @@ def reconstruct_hypothesis_graph(
                 "inferred_impact_bias": cfg.logit_inferred_impact_bias,
             }
         )
+    elif cfg.edge_probability_method == "logit_evidence_v1":
+        probability_config["evidence_model_path"] = cfg.edge_evidence_model_path
     elif cfg.edge_probability_method == "supervised_softmax_v1":
         probability_config["model_path"] = cfg.edge_probability_model_path
+    evidence_types = (
+        ["semantic_causality", "evidence_attribution", "temporal_direction"]
+        if cfg.edge_probability_method == "logit_evidence_v1"
+        else ["temporal_order", "alarm_semantics", "direct_device_relation"]
+    )
     candidate_diagnostics = dict(candidate_graph.get("diagnostics", {}))
     return {
         "schema_version": M1_SCHEMA_VERSION,
@@ -92,11 +104,7 @@ def reconstruct_hypothesis_graph(
             "root_independent": True,
             "probability_method": cfg.edge_probability_method,
             "probability_config": probability_config,
-            "probability_evidence_types": [
-                "temporal_order",
-                "alarm_semantics",
-                "direct_device_relation",
-            ],
+            "probability_evidence_types": evidence_types,
             "topology_role": "raw_adjacent_pair_hard_constraint",
             "raw_topology_required": True,
             "raw_topology_available": bool(
