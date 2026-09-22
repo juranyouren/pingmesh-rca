@@ -1,0 +1,12 @@
+{
+  "version": "v1.0",
+  "predicates": {
+    "interface_state_change": {"description": "Explicit interface transition to up or down; an up message alone is not a flap", "entity_types": ["interface"], "states": ["up", "down"], "effects": {"up": ["adjacency_recovery", "neighbor_reachable", "path_recovery"], "down": ["adjacency_loss", "neighbor_unreachable", "path_degradation"]}},
+    "interface_flap": {"description": "Explicit repeated up/down interface changes", "entity_types": ["interface"], "states": ["up_down"], "effects": {"up_down": ["aggregate_port_instability", "adjacency_loss", "path_degradation"]}},
+    "bgp_adjacency_down": {"description": "BGP session explicitly down", "entity_types": ["bgp_session"], "states": ["down"], "effects": {"down": ["route_withdrawal", "neighbor_unreachable", "path_degradation"]}},
+    "bgp_adjacency_up": {"description": "BGP session established", "entity_types": ["bgp_session"], "states": ["up"], "effects": {"up": ["adjacency_recovery", "path_recovery"]}},
+    "lldp_neighbor_rebuild": {"description": "LLDP neighbor rediscovery/rebuild", "entity_types": ["neighbor_adjacency"], "states": ["rebuild"], "effects": {"rebuild": ["neighbor_reachable", "link_recovery"]}},
+    "bfd_session_down": {"description": "BFD session down", "entity_types": ["bfd_session"], "states": ["down"], "effects": {"down": ["adjacency_loss", "path_degradation"]}},
+    "device_restart": {"description": "Explicit device restart", "entity_types": ["device"], "states": ["restart"], "effects": {"restart": ["adjacency_loss", "path_degradation"]}}
+  }
+}

@@ -1,0 +1,4 @@
+# Lightweight Stage 1/evaluation dependencies only.
+# Keep the server's matching torch-npu/CANN/vLLM/vllm-ascend environment unchanged.
+networkx>=3.2,<4
+scipy>=1.11,<2
