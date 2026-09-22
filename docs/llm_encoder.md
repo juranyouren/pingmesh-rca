@@ -19,9 +19,9 @@ bash scripts/run_llm_encoder_full.sh \
   --limit 10 --compare-rules
 ```
 
-默认使用现有 Stage 1 拓扑/时间排序作为根因先验，LLM 证据经 adapter 传入现有 M1 候选图、边状态推断、M2 根因重排和路径推断，最后调用现有根因及路径评估函数。这里不重新训练神经模型。若要复用已有神经模型/OOF 根因结果，增加 `--root-results /path/to/root/res.json`，要求包含当前所有选中事件，且 `dir` 与服务器的数据路径一致。已有 reranked_root_rankings 按原流程保留排序，其影响会反映在结果中。
+默认使用现有确定性锚点先验（拓扑/告警 PageRank + 时序证据），LLM 证据经 adapter 传入现有 M1 候选图、边状态推断、M2 根因重排和路径推断，最后调用现有根因及路径评估函数。这里不重新训练神经模型。若要复用已有神经模型/OOF 根因结果，增加 `--root-results /path/to/root/res.json`，要求包含当前所有选中事件，且 `dir` 与服务器的数据路径一致。已有 reranked_root_rankings 按原流程保留排序，其影响会反映在结果中。
 
-`--compare-rules` 使用完全相同的事件与 Stage 1 根因先验，再跑一次原规则编码流程，用于观察证据替换带来的差异。模型全程只初始化一次，比较组不调用模型。默认根因候选数为 5，可通过 `--top-k` 增加；Top-5/MRR 只针对所保留的候选排序。
+`--compare-rules` 使用完全相同的事件与锚点先验，再跑一次原规则编码流程，用于观察证据替换带来的差异。模型全程只初始化一次，比较组不调用模型。默认根因候选数为 5，可通过 `--top-k` 增加；Top-5/MRR 只针对所保留的候选排序。
 
 输入每个事件需要 `info.json`、节点文件、从原始 `task_topo` 构建的 `topology_context.json`。缺少原始拓扑时添加 `--raw-root /path/to/raw`，脚本会调用已有回填模块补齐；仍缺失则在加载大模型前报错，不将缺失拓扑退化成空图。若只有 RAW 数据，先用项目已有预处理器生成 NODE 数据：
 
@@ -65,7 +65,7 @@ export PINGMESH_NPU_CARDS=0
 # 或 export PINGMESH_MODEL_PATH=/usr/share/large_language_models/Qwen2.5-0.5B
 ```
 
-入口在读取 incident 前初始化一次 `get_shared_engine()`，所有设备编码与 UNKNOWN 聚合复用同一对象，多 incident 也复用。同进程的后续智能体应通过依赖注入接收此对象，或调用同一 getter；跨进程不共享，也不为每个设备启动进程。初始化后修改环境变量不会切换模型，需重新启动。历史 reranker/Baseline 独立入口未改动。
+入口在读取 incident 前初始化一次 `get_shared_engine()`，所有设备编码与 UNKNOWN 聚合复用同一对象，多 incident 也复用。同进程的后续智能体应通过依赖注入接收此对象，或调用同一 getter；跨进程不共享，也不为每个设备启动进程。初始化后修改环境变量不会切换模型，需重新启动。历史 LLM reranker 与多方法 public runner 已删除；本仓库现在只有 `get_shared_engine()` 一处引擎入口。
 
 推理使用 vLLM Ascend 本地离线接口，可见卡数作为 tensor parallel size，模型路径必须是已存在的本地目录。Ascend 环境请使用服务器已验证的兼容组合，参考 [官方 Ascend 离线推理说明](https://docs.vllm.ai/projects/ascend/en/v0.7.1/tutorials.html)。`PINGMESH_MAX_MODEL_LEN` / `PINGMESH_MAX_TOKENS` 控制上下文与输出长度，`PINGMESH_LLM_MEMORY_UTILIZATION` 默认 0.85。基础版 Qwen 无 chat template 时使用普通文本 prompt；0.5B 的语义能力需要在真实数据上评估。
 

@@ -33,7 +33,7 @@
 & 'tmp/baselines-venv/Scripts/python.exe' -m pytest tests/test_nec_device.py -q
 ```
 
-本地 CLI 使用 `Baseline.common.io.normalize_incident` 再次白名单化输入。它不接受原始 full_link、标签文件或 PC-STGR 输出；原始转换、事故分组和 train/validation/test 划分由公共框架负责。推理窗口、事件时刻和记录时刻均按公共 `parse_timestamp` 解析；记录晚于 cutoff 的事件不进入历史。
+本地 CLI 使用 `Baseline.common.io.normalize_incident` 再次白名单化输入。它不接受原始 full_link、标签文件或上游锚点模型输出；原始转换、事故分组和 train/validation/test 划分由公共框架负责。推理窗口、事件时刻和记录时刻均按公共 `parse_timestamp` 解析；记录晚于 cutoff 的事件不进入历史。
 
 ```python
 from Baseline.NetEventCauseDevice import NECConfig, NetEventCauseDevice
