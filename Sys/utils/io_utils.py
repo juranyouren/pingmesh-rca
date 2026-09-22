@@ -1,7 +1,6 @@
 """Canonical I/O and utility helpers — single source of truth for the project.
 
-All modules should import from here; ``Sys.Score.score_utils`` is a
-backward-compatible shim that re-exports from this module.
+All modules should import from here.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Stage 2 / M2: root-conditioned paths and explanation-based reranking."""
+"""M2: anchor-conditioned path selection and propagation DAG assembly."""
 
 from .infer import infer_root_paths
 

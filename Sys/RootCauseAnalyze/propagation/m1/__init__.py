@@ -1,4 +1,4 @@
-"""Stage 2 / M1: root-independent hypothetical propagation graph."""
+"""M1: anchor-independent hypothetical propagation graph (relation likelihoods)."""
 
 from .probability import (
     EDGE_FEATURE_NAMES,

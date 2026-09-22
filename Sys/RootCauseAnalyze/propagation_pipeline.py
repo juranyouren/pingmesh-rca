@@ -9,8 +9,8 @@ import time
 from dataclasses import replace
 from typing import Any, Dict, List, Mapping, Sequence
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if __package__ in (None, ""):
-    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
 
@@ -46,32 +46,6 @@ def _existing_result_map(path: str | None) -> Dict[str, Dict[str, Any]]:
         for item in raw
         if isinstance(item, Mapping) and item.get("dir")
     }
-
-
-def _edge_model_manifest(path: str | None) -> Dict[str, Any]:
-    if not path:
-        return {}
-    payload = load_json(path, default=None)
-    if not isinstance(payload, Mapping):
-        raise ValueError("edge probability OOF manifest must contain a JSON object")
-    if payload.get("schema_version") != "stage2-edge-classifier-oof-manifest-v1":
-        raise ValueError("unsupported edge probability OOF manifest schema")
-    return dict(payload)
-
-
-def _edge_model_for_case(manifest: Mapping[str, Any], dirpath: str) -> str | None:
-    case_models = manifest.get("case_models", {})
-    if isinstance(case_models, Mapping):
-        normalized = os.path.normcase(os.path.normpath(os.path.abspath(dirpath)))
-        for raw_path, model_path in case_models.items():
-            candidate = os.path.normcase(os.path.normpath(os.path.abspath(str(raw_path))))
-            if candidate == normalized and model_path:
-                return str(model_path)
-    case_id_models = manifest.get("case_id_models", {})
-    case_id = os.path.basename(os.path.normpath(dirpath))
-    if isinstance(case_id_models, Mapping) and case_id_models.get(case_id):
-        return str(case_id_models[case_id])
-    return None
 
 
 def _rankings_from_record(record: Mapping[str, Any] | None) -> List[Dict[str, Any]]:
@@ -123,14 +97,12 @@ def run_propagation_pipeline(
     top_k: int = 3,
     weight_path: str | None = None,
     config: PropagationConfig | None = None,
-    edge_probability_oof_manifest_path: str | None = None,
     evidence_dir: str | None = None,
     selected_case_dirs: Sequence[str] | None = None,
 ) -> str:
-    """Run Stage 1 followed by Stage 2/M1 and Stage 2/M2 without labels."""
+    """Reconstruct the anchor-conditioned propagation graph for each case, without labels."""
 
     cfg = config or PropagationConfig(root_top_k=top_k)
-    edge_manifest = _edge_model_manifest(edge_probability_oof_manifest_path)
     previous = _existing_result_map(root_results_path)
     if selected_case_dirs is not None:
         case_dirs = sorted(selected_case_dirs)
@@ -195,15 +167,6 @@ def run_propagation_pipeline(
                 # all candidate DAGs. Preserve its calibrated order instead of
                 # applying the legacy hand-weighted graph reranker a second time.
                 case_config = replace(case_config, stage1_weight=1.0)
-            if edge_manifest:
-                model_path = _edge_model_for_case(edge_manifest, dirpath)
-                if not model_path:
-                    raise ValueError(f"OOF edge classifier model missing for case: {dirpath}")
-                case_config = replace(
-                    cfg,
-                    edge_probability_method="supervised_softmax_v1",
-                    edge_probability_model_path=model_path,
-                )
             propagation = reconstruct_propagation(
                 nodes=nodes,
                 info=info,
@@ -283,11 +246,13 @@ def main() -> None:
         default_result_root = project_config.data.results
         default_weight_path = project_config.data.alarm_weights
     except Exception:
-        default_data_root = "data/node/nodes_max_labeled"
-        default_result_root = "data/res"
+        default_data_root = os.path.join(_REPO_ROOT, "data", "node", "nodes_max_labeled")
+        default_result_root = os.path.join(_REPO_ROOT, "res")
         default_weight_path = None
 
-    parser = argparse.ArgumentParser(description="Run deterministic Stage 1 -> Stage 2 pipeline.")
+    parser = argparse.ArgumentParser(
+        description="Reconstruct anchor-conditioned propagation graphs without reading labels."
+    )
     parser.add_argument("--data-root", "-d", default=default_data_root)
     parser.add_argument("--output-dir", "-o", default=None)
     parser.add_argument("--root-results", default=None, help="Optional existing RCA res.json.")
@@ -312,7 +277,6 @@ def main() -> None:
         default="deterministic_evidence_v1",
     )
     parser.add_argument("--edge-probability-model", default=None)
-    parser.add_argument("--edge-probability-oof-manifest", default=None)
     parser.add_argument("--edge-probability-temperature", type=float, default=1.0)
     parser.add_argument("--logit-direction-bias", type=float, default=-1.50)
     parser.add_argument("--logit-temporal-weight", type=float, default=1.50)
@@ -335,7 +299,6 @@ def main() -> None:
         evidence_dir=args.evidence_dir,
         top_k=args.top_k,
         weight_path=args.weight_file,
-        edge_probability_oof_manifest_path=args.edge_probability_oof_manifest,
         config=PropagationConfig(
             root_top_k=args.top_k,
             max_candidate_nodes=args.max_candidate_nodes,

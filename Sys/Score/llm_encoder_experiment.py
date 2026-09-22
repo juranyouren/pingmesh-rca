@@ -6,7 +6,13 @@ import csv
 import json
 import os
 from pathlib import Path
+import sys
 import time
+
+if __package__ in (None, ""):
+    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
 
 from Sys.Preprocess.evidence.encoder import EvidenceEncoder
 from Sys.Preprocess.llm_encoder import run_case, write_json
