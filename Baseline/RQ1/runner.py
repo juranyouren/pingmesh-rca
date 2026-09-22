@@ -224,9 +224,11 @@ def write_report(path, summary, view):
                 "Under possible-positive, 'possible' edges are scored as confirmed directed GT, matching the historical "
                 "scorer; 'possible' is an annotation strength, not a verified physical relation.", "",
                 "Reference completeness: " + ", ".join(summary.get("label_completeness", [])),
-                "Under assumed_all_complete the reference is treated as a complete graph, so SHD-1 is reported AND every "
-                "unannotated device pair counts as a confirmed negative. That completeness was assumed, not declared by "
-                "the annotator; do not read these SHD values as full-reference SHD on a verified complete label.", "",
+                "Under all_complete every propagation label is a complete ground-truth reference, so SHD-1 is reported "
+                "and every unannotated device pair counts as a confirmed negative. The annotation tool does not emit a "
+                "graph_complete key, so completeness comes from the label format itself rather than from a per-file "
+                "declaration; the provenance field is named assumed_all_complete. Use 'as-declared' to read the key "
+                "strictly instead, which withholds SHD on a reference that does not declare itself complete.", "",
                 "NetEventCause is a mechanism reproduction + device adapter. THP uses gCastle TTPM + device adapter.",
                 "Ours is current deterministic P0 on common observations and a fixed root.", "",
                 "Failed cases score zero for P/R/F1. SHD is N/A when failures are present or labels are partial.",

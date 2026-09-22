@@ -15,13 +15,20 @@ from Baseline.common.splits import build_manifest, validate_manifest
 LABEL_POLICIES = ("possible-positive", "strict")
 DEFAULT_LABEL_POLICY = "possible-positive"
 
-# 'as-declared' honours graph_complete from the label file (absent means partial).
-# 'all-complete' asserts every converted label is a complete reference, which makes
-# SHD-1 computable but also declares every unannotated device pair a confirmed
-# negative. That is a strong assumption, not an observation; it is recorded per
-# label and in the run artifacts so it can never be mistaken for a declared one.
+# The repository's propagation_label format does not carry a trustworthy completeness
+# signal: the annotation tool never wrote `graph_complete`, and its
+# `annotation_complete_scope` / `identifiability` fields describe the annotator's
+# self-assessment rather than the reference. Every label produced by that tool is a
+# complete ground-truth reference, so the default treats it as one.
+#
+# 'all-complete' therefore asserts every converted label is a complete reference, which
+# makes SHD-1 computable but also declares every unannotated device pair a confirmed
+# negative. The assumption is recorded per label and in the run artifacts so it can never
+# be mistaken for a value the annotator stated.
+# 'as-declared' is the strict override: honour graph_complete from the label file, with
+# absence meaning partial, and withhold SHD on a partial reference.
 LABEL_COMPLETENESS = ("as-declared", "all-complete")
-DEFAULT_LABEL_COMPLETENESS = "as-declared"
+DEFAULT_LABEL_COMPLETENESS = "all-complete"
 
 
 def auto_groups(cases):
@@ -111,6 +118,13 @@ def convert_label(raw, case_id, *, policy=DEFAULT_LABEL_POLICY,
     if completeness not in LABEL_COMPLETENESS:
         raise ValueError(f"{case_id}: unknown label completeness {completeness!r}; "
                          f"expected one of {LABEL_COMPLETENESS}")
+    if policy == "strict" and completeness == "all-complete":
+        # 'strict' defers 'possible' to human review, so those pairs are neither a
+        # confirmed edge nor the confirmed negative that a complete reference implies.
+        raise ValueError(
+            f"{case_id}: label policy 'strict' leaves 'possible' edges unresolved, which "
+            "contradicts a complete reference; pair it with completeness 'as-declared'")
+
     if not isinstance(raw, dict):
         raise ValueError(f"{case_id}: propagation label must be an object")
     if raw.get("case_id") not in (None, case_id):

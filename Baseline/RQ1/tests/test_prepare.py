@@ -28,18 +28,25 @@ class PreparationTests(unittest.TestCase):
         self.assertIn(["B", "C"], label["known_edge_mask"])
         self.assertIn(["C", "B"], label["known_edge_mask"])
         self.assertIn(["C", "A"], label["known_edge_mask"])
-        self.assertFalse(label["graph_complete"])
+        # Completeness is independent of the policy: the default treats every
+        # propagation_label as a complete reference (see DEFAULT_LABEL_COMPLETENESS).
+        self.assertTrue(label["graph_complete"])
         self.assertEqual(label["conversion"]["policy"], "possible-positive")
         self.assertEqual(label["conversion"]["treated_as_positive"], {"definite": 1, "possible": 1})
         self.assertEqual(label["conversion"]["ignored_states"], {})
 
     def test_strict_policy_keeps_possible_unknown(self):
-        label = convert_label(MIXED_EDGES, "c", policy="strict")
+        label = convert_label(MIXED_EDGES, "c", policy="strict", completeness="as-declared")
         self.assertEqual(label["positive_edges"], [["A", "B"]])
         self.assertNotIn(["B", "C"], label["known_edge_mask"])
         self.assertIn(["C", "A"], label["known_edge_mask"])
         self.assertEqual(label["conversion"]["policy"], "strict")
         self.assertEqual(label["conversion"]["ignored_states"], {"possible": 1})
+
+    def test_strict_policy_rejects_a_complete_reference(self):
+        """Unresolved 'possible' edges and an exhaustive reference cannot both hold."""
+        with self.assertRaisesRegex(ValueError, "contradicts a complete reference"):
+            convert_label(MIXED_EDGES, "c", policy="strict", completeness="all-complete")
 
     def test_default_policy_is_possible_positive(self):
         self.assertEqual(DEFAULT_LABEL_POLICY, "possible-positive")
@@ -58,9 +65,15 @@ class PreparationTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     main(["--check-inputs", "--inputs", str(root / "inputs.json")])
 
-    def test_completeness_is_as_declared_by_default(self):
-        self.assertEqual(DEFAULT_LABEL_COMPLETENESS, "as-declared")
+    def test_completeness_defaults_to_all_complete(self):
+        """The annotation tool never wrote graph_complete, so absence must not mean partial."""
+        self.assertEqual(DEFAULT_LABEL_COMPLETENESS, "all-complete")
         label = convert_label(MIXED_EDGES, "c")
+        self.assertTrue(label["graph_complete"])
+        self.assertEqual(label["conversion"]["graph_complete_source"], "assumed_all_complete")
+
+    def test_as_declared_override_still_treats_absence_as_partial(self):
+        label = convert_label(MIXED_EDGES, "c", completeness="as-declared")
         self.assertFalse(label["graph_complete"])
         self.assertEqual(label["conversion"]["graph_complete_source"], "undeclared")
 
@@ -191,7 +204,8 @@ class PreparationTests(unittest.TestCase):
 
     def test_possible_edges_are_scored_and_policy_is_recorded(self):
         with tempfile.TemporaryDirectory() as tmp:
-            run = self.run_partial_possible_case(tmp, ["--label-policy", "possible-positive"])
+            run = self.run_partial_possible_case(
+                tmp, ["--label-policy", "possible-positive", "--label-completeness", "as-declared"])
             summary = read_json(run / "summary.json")
             self.assertEqual(summary["label_policies"], ["possible-positive"])
             row = summary["rows"]["rooted"]["timeorder"][0]
@@ -225,7 +239,8 @@ class PreparationTests(unittest.TestCase):
     def test_strict_policy_scores_only_the_definite_edge(self):
         """Strict silently narrows the domain, so the same F1 rests on less evidence."""
         with tempfile.TemporaryDirectory() as tmp:
-            run = self.run_partial_possible_case(tmp, ["--label-policy", "strict"])
+            run = self.run_partial_possible_case(
+                tmp, ["--label-policy", "strict", "--label-completeness", "as-declared"])
             summary = read_json(run / "summary.json")
             self.assertEqual(summary["label_policies"], ["strict"])
             row = summary["rows"]["rooted"]["timeorder"][0]

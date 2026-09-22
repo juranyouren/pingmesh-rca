@@ -69,9 +69,11 @@ export PINGMESH_RQ1_PCMCI_COVERAGE="${PINGMESH_RQ1_PCMCI_COVERAGE:-config}"
 # possible-positive scores propagation 'possible' edges as confirmed directed GT,
 # matching the historical scorer; set to strict to defer them to human review.
 export PINGMESH_RQ1_LABEL_POLICY="${PINGMESH_RQ1_LABEL_POLICY:-possible-positive}"
-# as-declared keeps SHD N/A on partial references; all-complete assumes every
-# reference is a complete graph (enables SHD-1, declares unannotated pairs negative).
-export PINGMESH_RQ1_LABEL_COMPLETENESS="${PINGMESH_RQ1_LABEL_COMPLETENESS:-as-declared}"
+# The annotation tool never emitted `graph_complete`, so every propagation label it
+# produced is a complete ground-truth reference even though the key is absent. Default
+# to all-complete; set to as-declared to honour the key strictly and withhold SHD on a
+# reference that does not declare itself complete.
+export PINGMESH_RQ1_LABEL_COMPLETENESS="${PINGMESH_RQ1_LABEL_COMPLETENESS:-all-complete}"
 
 # ── Experiment run directories ──
 # Run IDs are generated centrally so every entrypoint follows the same naming

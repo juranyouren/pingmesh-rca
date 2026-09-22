@@ -89,29 +89,32 @@ bash scripts/run_rq1.sh --label-policy strict
 export PINGMESH_RQ1_LABEL_POLICY=strict
 ```
 
-**参考图完整性由 `--label-completeness` 决定（默认 `as-declared`）：**
+**参考图完整性由 `--label-completeness` 决定（默认 `all-complete`）：**
 
 | 取值 | `graph_complete` | 后果 |
 |---|---|---|
-| `as-declared`（默认） | 取标注文件的 `graph_complete`；缺失即 false | 部分参考不扩展 SHD，`shd_status=partial_reference` |
-| `all-complete` | **一律视为完整图** | SHD-1 可算；但未标注的设备对全部算作已确认负例 |
+| `all-complete`（默认） | **一律视为完整图** | SHD-1 可算；未标注的设备对全部算作已确认负例 |
+| `as-declared` | 取标注文件的 `graph_complete`；缺失即 false | 部分参考不扩展 SHD，`shd_status=partial_reference` |
 
-`all-complete` 是一个**假设而非观测**：它会让评分域扩张到整个设备对全集
-（如 11 台设备 → 55 个无序对 / 110 个有向槽位），并据此把 SHD 算出来。
-只有在确实认为该参考枚举了全部关系时才可用；`annotation_complete_scope` 为 false、
-`annotator_confidence` 偏低的标注即使有若干 `possible` 边也不构成完整性声明。
-该假设**不写回标注文件**，只记录在 `labels.canonical.json` 的
-`conversion.graph_complete_source`（`declared` / `assumed_all_complete` / `undeclared`），
-并在 `summary.json` 的 `label_completeness` 与 `table.md` 表头披露。
+**为什么默认 `all-complete`：** 标注工具从未写入 `graph_complete` 键，它产出的
+`annotation_complete_scope` / `identifiability` 等字段描述的是标注者的自评，不是参考图本身，
+代码也不读取它们。该工具产出的每一条 propagation label 都是**完整 ground truth**，
+因此"键缺失"不能解释为"参考不完整"。这是对数据事实的确认，不是对参考完整性的假设。
+
+评分域因此扩张到整个设备对全集（如 11 台设备 → 55 个无序对 / 110 个有向槽位），
+并据此计算 SHD。该判定**不写回标注文件**，只记录在 `labels.canonical.json` 的
+`conversion.graph_complete_source`（`declared` / `assumed_all_complete` / `undeclared`，
+注意该枚举名沿用旧称），并在 `summary.json` 的 `label_completeness` 与 `table.md` 表头披露。
 完全没有 `edges`/`dd_edges` 键的案例仍记为 unavailable，不会被当成"零边的完整图"。
 
 ```bash
-bash scripts/run_rq1.sh --label-completeness all-complete
-export PINGMESH_RQ1_LABEL_COMPLETENESS=all-complete
+bash scripts/run_rq1.sh --label-completeness as-declared
+export PINGMESH_RQ1_LABEL_COMPLETENESS=as-declared
 ```
 
-`as-declared` 下只有显式 `graph_complete=true` 且没有未决关系时才计算完整 SHD；
-不默认把旧标签视为完整图（这是 graph-eval-v2 的既有约定：部分标签暂不扩展 SHD）。
+`as-declared` 下只有显式 `graph_complete=true` 且没有未决关系时才计算完整 SHD。
+它与 `--label-policy strict` 必须配对使用：`strict` 把 `possible` 边留作未决，
+这与"该参考已枚举全部关系"直接矛盾，两者同时给出会明确报错而不是静默取其一。
 多根／未知根、冲突标注、acceptable_hypotheses 会明确报错，不取首根或自行解释。
 仍兼容 `--labels canonical.json`；canonical 标签已解析完毕，两个口径都不适用（记为 `canonical`）。
 
@@ -358,10 +361,12 @@ RQ1_NUMERICAL_SMOKE=1 python -m pytest Baseline/RQ1/tests -q
 case `8294294` 五方法端到端跑通（Oracle 根，`--pcmci-coverage record-count`）：
 TimeOrder / PCMCI / THP / Ours 为 `ok`，NEC 因只有 1 个未核实分组记为 `input_ineligible`（退出码 2）。
 `--label-policy strict` 的结果与本次改动前逐字段一致（回归保护）。
-该 case 的传播 GT 无 `definite` 边且 `annotation_complete_scope` 四项全 false，
-默认 `--label-completeness as-declared` 下 `shd_status=partial_reference`、SHD 为 N/A。
-加 `--label-completeness all-complete` 后评分域扩为 55 对 / 110 槽位，SHD 可算：
+该 case 的传播 GT 无 `definite` 边，且标注工具未写 `graph_complete`（`annotation_complete_scope`
+的自评字段不参与判定）。默认 `all-complete` 下该参考按完整 GT 评分，评分域为 55 对 / 110 槽位：
 TimeOrder 2、THP 2、PCMCI 0、Ours 0，NEC 因预测失败扣留。
-**该 SHD 建立在"此参考为完整图"的假设上，不是已验证完整标注上的 SHD-1。**
-`pytest Baseline/RQ1/tests -q` 60 passed。
+用 `--label-completeness as-declared` 可退回严格读键，此时 `shd_status=partial_reference`、SHD 为 N/A。
+**2026-09-22 起默认值由 `as-declared` 改为 `all-complete`**，依据是标注工具不产出完整键这一数据事实
+（详见上文"参考图完整性"一节），不是对参考完整性的研究假设。
+`pytest Baseline/RQ1/tests -q` 62 passed。
+**n=1、自动分组未核实、无自助 CI，只能作为管线自检，不构成论文精度证据。**
 **n=1、自动分组未核实、无自助 CI，只能作为管线自检，不构成论文精度证据。**
