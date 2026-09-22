@@ -35,13 +35,15 @@ combined_all_code.txt
 Baseline/NetEventCause/NetEventCause-main/
 Baseline/NetEventCause/NetEventCause-main.zip
 
-/docs/
+/docs/*
+!/docs/llm_encoder.md
 # Local manuscript/build artifacts
 paper/
 
 # Local RCA work products
 /.superpowers/
 /tests/*
+!/tests/test_llm_evidence_encoder.py
 !/tests/test_neural_stage1_ssl.py
 !/tests/test_baseline_common.py
 !/tests/test_baseline_discovery.py

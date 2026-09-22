@@ -124,13 +124,20 @@ def run_propagation_pipeline(
     weight_path: str | None = None,
     config: PropagationConfig | None = None,
     edge_probability_oof_manifest_path: str | None = None,
+    evidence_dir: str | None = None,
+    selected_case_dirs: Sequence[str] | None = None,
 ) -> str:
     """Run Stage 1 followed by Stage 2/M1 and Stage 2/M2 without labels."""
 
     cfg = config or PropagationConfig(root_top_k=top_k)
     edge_manifest = _edge_model_manifest(edge_probability_oof_manifest_path)
     previous = _existing_result_map(root_results_path)
-    case_dirs = sorted(previous) if previous else _discover_case_dirs(data_root)
+    if selected_case_dirs is not None:
+        case_dirs = sorted(selected_case_dirs)
+    else:
+        case_dirs = sorted(previous) if previous else _discover_case_dirs(data_root)
+    if not case_dirs:
+        raise ValueError("No cases selected for propagation")
     case_ids = [os.path.basename(os.path.normpath(path)) for path in case_dirs]
     duplicate_case_ids = sorted(
         {case_id for case_id in case_ids if case_ids.count(case_id) > 1}
@@ -142,6 +149,7 @@ def run_propagation_pipeline(
         )
     records = []
     selected_path_records = []
+    evidence_records = []
     started = time.time()
 
     for dirpath in case_dirs:
@@ -150,8 +158,18 @@ def run_propagation_pipeline(
             info = load_case_info(dirpath)
             if not nodes or not info:
                 raise ValueError("missing nodes or info")
+            episodes = None
+            encoder_status = None
+            if evidence_dir is not None:
+                from Sys.Preprocess.evidence.adapter import load_episodes
+                episodes, encoded = load_episodes(evidence_dir, os.path.basename(dirpath), nodes)
+                encoder_status = encoded["status"]
+            if root_results_path and os.path.normpath(dirpath) not in previous:
+                raise ValueError(f"Root results missing selected case: {dirpath}")
             previous_record = previous.get(os.path.normpath(dirpath))
             rankings = _rankings_from_record(previous_record)
+            if root_results_path and not rankings:
+                raise ValueError(f"No usable root rankings in supplied results: {dirpath}")
             if not rankings and previous_record is None:
                 predicted_ips, details = rank_root_causes(
                     nodes,
@@ -191,8 +209,12 @@ def run_propagation_pipeline(
                 info=info,
                 topology_context=topology_context,
                 root_rankings=rankings,
+                evidence_episodes=episodes,
                 config=case_config,
             )
+            propagation["hypothesis_graph"]["summary"]["evidence_source"] = "llm_encoder" if evidence_dir else "rules"
+            if evidence_dir:
+                evidence_records.append({"case_id": os.path.basename(dirpath), "episodes": episodes})
             final_ips = [
                 str(item.get("ip"))
                 for item in propagation.get("final_root_rankings", [])
@@ -212,6 +234,8 @@ def run_propagation_pipeline(
             records.append(
                 {
                     "dir": dirpath,
+                    "evidence_source": "llm_encoder" if evidence_dir else "rules",
+                    "encoder_status": encoder_status,
                     "root_ips": [
                         str(item.get("ip"))
                         for item in rankings[:top_k]
@@ -242,6 +266,8 @@ def run_propagation_pipeline(
     selected_paths_path = os.path.join(output_dir, SELECTED_PATHS_FILENAME)
     save_json(selected_path_records, selected_paths_path, indent=2)
     save_json(records, output_path, indent=2)
+    if evidence_dir:
+        save_json(evidence_records, os.path.join(output_dir, "evidence_episodes.json"), indent=2)
     print(
         f"Propagation pipeline: {len(records)} cases in {time.time() - started:.2f}s; "
         f"result={output_path}; selected_paths={selected_paths_path}"
@@ -265,6 +291,7 @@ def main() -> None:
     parser.add_argument("--data-root", "-d", default=default_data_root)
     parser.add_argument("--output-dir", "-o", default=None)
     parser.add_argument("--root-results", default=None, help="Optional existing RCA res.json.")
+    parser.add_argument("--evidence-dir", default=None, help="LLM encoder output root; missing/stale evidence is an error.")
     parser.add_argument("--top-k", "-k", type=int, default=3)
     parser.add_argument("--weight-file", "-w", default=default_weight_path)
     parser.add_argument("--max-candidate-nodes", type=int, default=80)
@@ -305,6 +332,7 @@ def main() -> None:
         args.data_root,
         output_dir,
         root_results_path=args.root_results,
+        evidence_dir=args.evidence_dir,
         top_k=args.top_k,
         weight_path=args.weight_file,
         edge_probability_oof_manifest_path=args.edge_probability_oof_manifest,
