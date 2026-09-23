@@ -40,20 +40,12 @@ Baseline/NetEventCause/NetEventCause-main.zip
 
 /docs/*
 !/docs/llm_encoder.md
+!/docs/m3_backbone.md
 # Local manuscript/build artifacts
 paper/
 
 # Local RCA work products
 /.superpowers/
-/tests/*
-!/tests/test_llm_evidence_encoder.py
-!/tests/test_neural_stage1_ssl.py
-!/tests/test_baseline_common.py
-!/tests/test_baseline_discovery.py
-!/tests/test_bian_adapt.py
-!/tests/test_nec_device.py
-!/tests/test_skynet_voting.py
-!/tests/test_summarize_llm_graph_reranker.py
 /archive/
 /archive/tests/legacy_scripts/
 /tmp/*

@@ -10,6 +10,7 @@ from Sys.RootCauseAnalyze.propagation.schema import (
     normalize_config,
     root_devices,
 )
+from Sys.RootCauseAnalyze.propagation.m3 import decode_backbone
 from Sys.RootCauseAnalyze.propagation.solver import solve_propagation_dags
 
 
@@ -267,14 +268,21 @@ def infer_root_paths(
 
     solved: List[Dict[str, Any]] = []
     for root in roots:
-        conditioned = _condition_edges(hypothesis_graph, root, cfg)
-        propagation = solve_propagation_dags(
-            candidate_graph,
-            root,
-            conditioned,
-            episodes,
-            config=cfg,
-        )
+        if cfg.backbone_method == "maximum_evidence_arborescence_v1":
+            # M3 conditions on the anchor structurally - the arborescence is
+            # rooted at it, so every edge is oriented away from it by
+            # construction - instead of through the distance gate the beam
+            # solver applies. The alternative is kept while experiments run.
+            propagation = decode_backbone(hypothesis_graph, root, episodes, config=cfg)
+        else:
+            conditioned = _condition_edges(hypothesis_graph, root, cfg)
+            propagation = solve_propagation_dags(
+                candidate_graph,
+                root,
+                conditioned,
+                episodes,
+                config=cfg,
+            )
         numerator = _selected_probability_sum(hypothesis_graph, propagation)
         explanation = numerator / denominator if denominator > 0.0 else 0.0
         solved.append(

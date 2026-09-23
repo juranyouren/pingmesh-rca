@@ -48,6 +48,16 @@ class PropagationConfig:
     edge_probability_model_path: str | None = None
     edge_probability_temperature: float = 1.0
     edge_evidence_model_path: str | None = None
+    # Global backbone construction. ``beam_search_v1`` is the root-conditioned
+    # path solver; ``maximum_evidence_arborescence_v1`` replaces it with a
+    # maximum-evidence arborescence built around the anchor.
+    backbone_method: str = "beam_search_v1"
+    # The null option, in evidence-lift units: what a device is worth when no
+    # relation claims it. A real relation must strictly beat this to be asserted.
+    backbone_null_weight: float = 0.0
+    dag_augmentation: bool = True
+    # A secondary edge is added only when its direction is at least this likely.
+    augmentation_min_probability: float = 0.60
     logit_direction_bias: float = -1.50
     logit_temporal_weight: float = 1.50
     logit_semantic_weight: float = 2.00
@@ -92,6 +102,15 @@ def normalize_config(config: PropagationConfig | Mapping[str, Any] | None) -> Pr
         )
     if normalized.edge_probability_temperature <= 0.0:
         raise ValueError("edge_probability_temperature must be positive")
+    allowed_backbone_methods = {"beam_search_v1", "maximum_evidence_arborescence_v1"}
+    if normalized.backbone_method not in allowed_backbone_methods:
+        raise ValueError(
+            f"backbone_method must be one of {sorted(allowed_backbone_methods)}"
+        )
+    if normalized.backbone_null_weight < 0.0:
+        raise ValueError("backbone_null_weight must be non-negative")
+    if not 0.0 < normalized.augmentation_min_probability < 1.0:
+        raise ValueError("augmentation_min_probability must be within (0, 1)")
     if (
         normalized.edge_probability_method == "supervised_softmax_v1"
         and not normalized.edge_probability_model_path

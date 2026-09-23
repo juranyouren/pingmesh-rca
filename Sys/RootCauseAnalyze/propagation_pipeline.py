@@ -292,6 +292,34 @@ def main() -> None:
             "configs/propagation/evidence_logit_v1.json, an uncalibrated placeholder."
         ),
     )
+    parser.add_argument(
+        "--backbone-method",
+        choices=("beam_search_v1", "maximum_evidence_arborescence_v1"),
+        default="beam_search_v1",
+        help=(
+            "Global backbone construction. The arborescence solver needs "
+            "additive evidence, so pair it with --edge-probability-method "
+            "logit_evidence_v1."
+        ),
+    )
+    parser.add_argument(
+        "--backbone-null-weight",
+        type=float,
+        default=0.0,
+        help="Evidence a device must beat to be claimed by a relation (0.0 = net positive).",
+    )
+    parser.add_argument(
+        "--no-dag-augmentation",
+        dest="dag_augmentation",
+        action="store_false",
+        help="Keep the backbone arborescence only, without secondary edges.",
+    )
+    parser.add_argument(
+        "--augmentation-min-probability",
+        type=float,
+        default=0.60,
+        help="Directional probability a secondary edge must reach.",
+    )
     parser.add_argument("--logit-direction-bias", type=float, default=-1.50)
     parser.add_argument("--logit-temporal-weight", type=float, default=1.50)
     parser.add_argument("--logit-semantic-weight", type=float, default=2.00)
@@ -322,6 +350,10 @@ def main() -> None:
             edge_probability_model_path=args.edge_probability_model,
             edge_probability_temperature=args.edge_probability_temperature,
             edge_evidence_model_path=args.edge_evidence_model,
+            backbone_method=args.backbone_method,
+            backbone_null_weight=args.backbone_null_weight,
+            dag_augmentation=args.dag_augmentation,
+            augmentation_min_probability=args.augmentation_min_probability,
             logit_direction_bias=args.logit_direction_bias,
             logit_temporal_weight=args.logit_temporal_weight,
             logit_semantic_weight=args.logit_semantic_weight,

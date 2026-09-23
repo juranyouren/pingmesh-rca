@@ -56,6 +56,18 @@ export PINGMESH_PROPAGATION_MAX_PATH_DEPTH="${PINGMESH_PROPAGATION_MAX_PATH_DEPT
 export PINGMESH_STAGE1_WEIGHT="${PINGMESH_STAGE1_WEIGHT:-0.5}"
 export PINGMESH_PROPAGATION_LABELS_ROOT="${PINGMESH_PROPAGATION_LABELS_ROOT:-${PINGMESH_PROJECT_ROOT}/data/propagation_labels}"
 
+# ── M3 骨架重建 (anchor-conditioned backbone) ──
+# 骨架求解器最大化方向证据之和，只有 logit_evidence_v1 可加，故 M3 变体固定用它。
+export PINGMESH_M3_BACKBONE_METHOD="${PINGMESH_M3_BACKBONE_METHOD:-maximum_evidence_arborescence_v1}"
+export PINGMESH_M3_EVIDENCE_METHOD="${PINGMESH_M3_EVIDENCE_METHOD:-logit_evidence_v1}"
+export PINGMESH_M3_EVIDENCE_MODEL="${PINGMESH_M3_EVIDENCE_MODEL:-${PINGMESH_PROJECT_ROOT}/configs/propagation/evidence_logit_v1.json}"
+# 空选项 (lift 空间)：0.0 = 需要净正证据。lift 与概率不在同一空间，
+# 各 edge_type 的 prior 不同，所以这个标量表达不了统一的概率门槛。
+export PINGMESH_M3_NULL_WEIGHT="${PINGMESH_M3_NULL_WEIGHT:-0.0}"
+export PINGMESH_M3_AUGMENTATION_MIN_PROBABILITY="${PINGMESH_M3_AUGMENTATION_MIN_PROBABILITY:-0.60}"
+# --align-thresholds 用这个概率反解 null_weight，使 M3 与 beam search 的门槛可比。
+export PINGMESH_M3_ALIGN_PROBABILITY="${PINGMESH_M3_ALIGN_PROBABILITY:-0.25}"
+
 # ── RQ1 (Baseline/RQ1) ──
 export PINGMESH_RQ1_CONFIG="${PINGMESH_RQ1_CONFIG:-${PINGMESH_PROJECT_ROOT}/configs/baselines/rq1.json}"
 export PINGMESH_RQ1_CONDITION="${PINGMESH_RQ1_CONDITION:-oracle}"
