@@ -44,8 +44,10 @@ def format_stats(stats):
              f"records={stats['records']}", f"llm_calls={stats['llm_calls']}"]
     engine = stats.get("engine") or {}
     if engine:
+        output_tokens = engine.get("output_tokens", 0)
         parts += [f"gen={engine.get('generate_seconds', 0):.1f}s",
-                  f"out_tokens={engine.get('output_tokens', 0)}"]
+                  f"out_tokens={output_tokens}",
+                  f"reason_tokens={output_tokens - engine.get('answer_tokens', 0)}"]
         if engine.get("length_truncations"):
             parts.append(f"truncated={engine['length_truncations']}")
         if engine.get("errors"):
@@ -116,40 +118,87 @@ class EvidenceEncoder:
         self._calls = 0
         self.last_stats = None
 
-    def _call(self, instruction, payload):
-        self._calls += 1
-        # One bounded retry for malformed output. Infrastructure failures remain visible.
-        prompt = instruction + dumps(payload)
-        for attempt in range(2):
+    def _engine_batch(self, prompts):
+        """Serve prompts through the engine; results align with the input order.
+
+        Engines without the batch API (tests, smoke) fall back to one call each.
+        Infrastructure failures propagate: they must not masquerade as evidence.
+        """
+        batch = getattr(self.engine, "generate_json_batch", None)
+        if callable(batch):
+            self._calls += len(prompts)
+            outcomes = list(batch(prompts))
+            if len(outcomes) != len(prompts):
+                raise ValueError(f"Engine returned {len(outcomes)} results for {len(prompts)} prompts")
+            return outcomes
+        outcomes = []
+        for prompt in prompts:
+            self._calls += 1
             try:
                 result = self.engine.generate_json(prompt)
-                if not isinstance(result, dict):
-                    raise ValueError("Response must be an object")
-                return result
-            except ContextBudgetError:
-                raise
-            except (ValueError, TypeError):
-                if attempt:
-                    raise
-                prompt += "\nReturn one valid JSON object matching the requested schema."
+                outcomes.append(result if isinstance(result, dict) else ValueError("Response must be an object"))
+            except Exception as exc:
+                outcomes.append(exc)
+        return outcomes
+
+    def _batch_call(self, prompts):
+        # One bounded retry for malformed output. Infrastructure failures remain visible.
+        outcomes = self._engine_batch(prompts)
+        retry = [index for index, outcome in enumerate(outcomes)
+                 if isinstance(outcome, (ValueError, TypeError)) and not isinstance(outcome, ContextBudgetError)]
+        if retry:
+            nudged = [prompts[index] + "\nReturn one valid JSON object matching the requested schema." for index in retry]
+            for index, outcome in zip(retry, self._engine_batch(nudged)):
+                outcomes[index] = outcome
+        return outcomes
+
+    def _call(self, instruction, payload):
+        """Single-prompt call; returns the parsed object or raises."""
+        outcome = self._batch_call([instruction + dumps(payload)])[0]
+        if isinstance(outcome, Exception):
+            raise outcome
+        if not isinstance(outcome, dict):
+            raise ValueError("Response must be an object")
+        return outcome
+
+    def _device_prompt(self, device, records):
+        # Raw payload is preserved on disk, but only observation fields go to the LLM.
+        return DEVICE_INSTRUCTION + dumps({"device": device, "vocabulary": self.vocabulary,
+                                          "records": [{k: v for k, v in r.items() if k != "raw"} for r in records]})
+
+    @staticmethod
+    def _mappings(outcome):
+        if isinstance(outcome, Exception):
+            return [], [str(outcome)]
+        if not isinstance(outcome, dict):
+            return [], ["Response must be an object"]
+        mappings = outcome.get("mappings")
+        if not isinstance(mappings, list):
+            return [], ["Missing mappings list"]
+        return mappings, []
+
+    def _device_calls(self, pending):
+        """Encode every pending device, splitting any that exceed the context budget.
+
+        ``pending`` is a list of ``(device, records)``; results align with it.
+        """
+        if not pending:
+            return []
+        outcomes = self._batch_call([self._device_prompt(device, records) for device, records in pending])
+        results = []
+        for (device, records), outcome in zip(pending, outcomes):
+            if isinstance(outcome, ContextBudgetError) and len(records) > 1:
+                mid = len(records) // 2
+                left, left_errors = self._device_call(device, records[:mid])
+                right, right_errors = self._device_call(device, records[mid:])
+                results.append((left + right, left_errors + right_errors))
+            else:
+                results.append(self._mappings(outcome))
+        return results
 
     def _device_call(self, device, records):
-        try:
-            result = self._call(DEVICE_INSTRUCTION, {"device": device, "vocabulary": self.vocabulary,
-                                                     "records": records})
-            mappings = result.get("mappings")
-            if not isinstance(mappings, list):
-                raise ValueError("Missing mappings list")
-            return mappings, []
-        except ContextBudgetError as exc:
-            if len(records) > 1:
-                mid = len(records) // 2
-                left, le = self._device_call(device, records[:mid])
-                right, re_ = self._device_call(device, records[mid:])
-                return left + right, le + re_
-            return [], [str(exc)]
-        except (ValueError, TypeError) as exc:
-            return [], [str(exc)]
+        """Single-device path, reached only by the context-budget split."""
+        return self._device_calls([(device, records)])[0]
 
     @staticmethod
     def _records(device_id, node):
@@ -201,7 +250,7 @@ class EvidenceEncoder:
         self._calls = 0
         engine_before = _engine_stats(self.engine)
         devices, records_by_id, unknown, valid, errors = {}, {}, {}, [], []
-        devices_with_records = 0
+        pending = []
         for node in nodes:
             device_id = str(get_device_ip(node))
             if not device_id or device_id in ("unknown", "None") or device_id in devices:
@@ -214,9 +263,13 @@ class EvidenceEncoder:
                 records_by_id[r["raw_event_id"]] = (device_id, r)
             if not records:
                 continue
-            devices_with_records += 1
-            # Raw payload is preserved on disk, but only observation fields go to the LLM.
-            mappings, call_errors = self._device_call(device, [{k: v for k, v in r.items() if k != "raw"} for r in records])
+            pending.append((device, records))
+
+        # Every device with observations is encoded in one batched pass. The model call
+        # dominates cost, and batching amortizes the weight read across devices instead
+        # of paying it once per prompt.
+        for (device, records), (mappings, call_errors) in zip(pending, self._device_calls(pending)):
+            device_id = device["device_id"]
             errors.extend({"device_id": device_id, "error": e} for e in call_errors)
             by_id = {}
             allowed = {r["raw_event_id"] for r in records}
@@ -362,7 +415,7 @@ class EvidenceEncoder:
         self.last_stats = {
             "incident_id": incident_id,
             "devices": len(devices),
-            "devices_with_records": devices_with_records,
+            "devices_with_records": len(pending),
             "records": len(records_by_id),
             "llm_calls": self._calls,
             "elapsed_seconds": round(time.perf_counter() - started, 3),

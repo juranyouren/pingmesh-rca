@@ -69,9 +69,11 @@ export PINGMESH_NPU_CARDS=0
 
 入口在读取 incident 前初始化一次 `get_shared_engine()`，所有设备编码与 UNKNOWN 聚合复用同一对象，多 incident 也复用。同进程的后续智能体应通过依赖注入接收此对象，或调用同一 getter；跨进程不共享，也不为每个设备启动进程。初始化后修改环境变量不会切换模型，需重新启动。历史 LLM reranker 与多方法 public runner 已删除；本仓库现在只有 `get_shared_engine()` 一处引擎入口。
 
-推理使用 vLLM Ascend 本地离线接口，可见卡数作为 tensor parallel size，模型路径必须是已存在的本地目录。Ascend 环境请使用服务器已验证的兼容组合，参考 [官方 Ascend 离线推理说明](https://docs.vllm.ai/projects/ascend/en/v0.7.1/tutorials.html)。`PINGMESH_MAX_MODEL_LEN` / `PINGMESH_MAX_TOKENS` 控制上下文与输出长度，`PINGMESH_LLM_MEMORY_UTILIZATION` 默认 0.85。基础版 Qwen 无 chat template 时使用普通文本 prompt；0.5B 的语义能力需要在真实数据上评估。
+推理使用 vLLM Ascend 本地离线接口，可见卡数作为 tensor parallel size，模型路径必须是已存在的本地目录。Ascend 环境请使用服务器已验证的兼容组合，参考 [官方 Ascend 离线推理说明](https://docs.vllm.ai/projects/ascend/en/v0.7.1/tutorials.html)。`PINGMESH_MAX_MODEL_LEN` / `PINGMESH_MAX_TOKENS` 控制上下文与输出长度，`PINGMESH_LLM_MEMORY_UTILIZATION` 默认 0.85，`PINGMESH_BATCH_SIZE` 控制编码批大小（默认 8，见下）。基础版 Qwen 无 chat template 时使用普通文本 prompt；0.5B 的语义能力需要在真实数据上评估。
 
-每设备通常一次调用，超上下文时递归拆分，绝不截断原记录；单条过长保留为 UNKNOWN。全部设备的 UNKNOWN 通常合并一次调用，聚合超限则保留 UNKNOWN 并标记 partial。格式错误最多重试一次；遗漏、重复、外来 ID、未落在词汇内的值及不在原文中的实体不能成为已知证据。模型运行故障直接抛出，避免伪装成成功。
+同一 incident 内所有「有记录」的设备合并成一次批处理调用，按 `PINGMESH_BATCH_SIZE`（默认 8）分块；设为 1 即旧的逐设备串行行为。批处理只改变推理调度，不改变 prompt 内容与解析逻辑。单 prompt 超上下文时对该设备递归二分，绝不截断原记录；单条过长保留为 UNKNOWN，且该设备的拆分不影响同批其他设备。全部设备的 UNKNOWN 通常合并一次调用，聚合超限则保留 UNKNOWN 并标记 partial。格式错误最多重试一次，且重试批次只包含失败的 prompt；遗漏、重复、外来 ID、未落在词汇内的值及不在原文中的实体不能成为已知证据。模型运行故障直接抛出，避免伪装成成功。
+
+批大小大于 1 时 vLLM 的批内调度可能让贪心解码与逐条串行产生细微数值差异。需要与旧结果逐字节比对时，先设 `PINGMESH_BATCH_SIZE=1` 复现，再放开批大小。
 
 全局词汇为 `Sys/Preprocess/evidence/vocabulary.json`，支持 `--vocabulary /path/to/reviewed.json`。每个 incident 使用独立 local predicate 命名空间。候选词汇状态为 pending，不自动写回全局词汇，人工审核后再维护全局文件与版本。
 

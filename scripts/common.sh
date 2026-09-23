@@ -45,6 +45,9 @@ export PINGMESH_MODEL_PATH="${PINGMESH_MODEL_PATH:-/usr/share/large_language_mod
 # ── NPU / 推理参数 ──
 export PINGMESH_NPU_CARDS="${PINGMESH_NPU_CARDS:-4,5,6,7}"
 export PINGMESH_TOP_K="${PINGMESH_TOP_K:-10}"
+# vLLM 批大小：证据编码把所有「有记录」的设备合并进同一次 generate 调用，
+# 单个 prompt 的批大小在解码时会被权重读取完全支配，故批处理是主要加速手段。
+# 1 等价于逐条串行（旧行为）。
 export PINGMESH_BATCH_SIZE="${PINGMESH_BATCH_SIZE:-8}"
 export PINGMESH_TEMPERATURE="${PINGMESH_TEMPERATURE:-0.6}"
 export PINGMESH_MAX_TOKENS="${PINGMESH_MAX_TOKENS:-4096}"

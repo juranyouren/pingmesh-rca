@@ -19,7 +19,8 @@ class EngineStats:
     """
 
     _FIELDS = ("calls", "errors", "budget_rejections", "length_truncations",
-               "wall_seconds", "generate_seconds", "prompt_tokens", "output_tokens")
+               "wall_seconds", "generate_seconds", "prompt_tokens", "output_tokens",
+               "answer_tokens")
 
     def __init__(self):
         self._values = dict.fromkeys(self._FIELDS, 0)
@@ -72,6 +73,11 @@ class NpuEngine:
         self.params = SamplingParams(temperature=0.0, max_tokens=self.max_tokens)
         self._lock = threading.Lock()
         self.stats = EngineStats()
+        # Decode is weight-read bound at batch 1, so batching amortizes the same
+        # weight read across prompts. 1 restores the strictly sequential behaviour.
+        self.batch_size = int(os.environ.get("PINGMESH_BATCH_SIZE", "8"))
+        if self.batch_size < 1:
+            raise ValueError("Require PINGMESH_BATCH_SIZE >= 1")
 
     def _format(self, prompt):
         messages = [{"role": "user", "content": prompt}]
@@ -90,34 +96,76 @@ class NpuEngine:
         except Exception:
             return 0
 
-    def generate_json(self, prompt):
-        started = time.perf_counter()
-        self.stats.add(calls=1)
+    def _answer_tokens(self, output):
+        """Output tokens left after the reasoning trace.
+
+        ``parse_json`` discards everything before ``</think>``, so only this part
+        of the generation is used; the rest is cost with no downstream effect.
+        """
+        text = getattr(output, "text", "") or ""
+        if "</think>" not in text:
+            return self._output_tokens(output)
         try:
+            return len(self.tokenizer.encode(text.rsplit("</think>", 1)[-1]))
+        except Exception:
+            return 0
+
+    def _generate_chunk(self, prompts):
+        """Serve up to ``batch_size`` prompts in one vLLM call.
+
+        Returns one ``dict``-or-``Exception`` per prompt, aligned with the input.
+        A prompt that cannot be served -- over budget, empty response, unparseable
+        JSON -- yields its exception in that slot instead of costing every other
+        prompt in the chunk its work.
+        """
+        started = time.perf_counter()
+        self.stats.add(calls=len(prompts))
+        outcomes, prepared = [None] * len(prompts), []
+        for index, prompt in enumerate(prompts):
             formatted = self._format(prompt)
-            prompt_tokens = len(self.tokenizer.encode(formatted))
-            if prompt_tokens + self.max_tokens > self.max_model_len:
+            tokens = len(self.tokenizer.encode(formatted))
+            if tokens + self.max_tokens > self.max_model_len:
+                # A budget rejection is an expected routing decision, not a failure.
                 self.stats.add(budget_rejections=1)
-                raise ContextBudgetError("Prompt exceeds context budget; no records were truncated")
+                outcomes[index] = ContextBudgetError("Prompt exceeds context budget; no records were truncated")
+                continue
+            prepared.append((index, formatted, tokens))
+        if prepared:
             generate_started = time.perf_counter()
             with self._lock:
-                result = self.llm.generate([formatted], self.params, use_tqdm=False)
-            generate_seconds = time.perf_counter() - generate_started
-            if not result or not result[0].outputs:
-                raise ValueError("Empty model response")
-            output = result[0].outputs[0]
-            self.stats.add(generate_seconds=generate_seconds, prompt_tokens=prompt_tokens,
-                           output_tokens=self._output_tokens(output),
-                           length_truncations=1 if getattr(output, "finish_reason", None) == "length" else 0)
-            return parse_json(output.text)
-        except ContextBudgetError:
-            # A budget rejection is an expected routing decision, not an inference failure.
-            raise
-        except Exception:
-            self.stats.add(errors=1)
-            raise
-        finally:
-            self.stats.add(wall_seconds=time.perf_counter() - started)
+                results = self.llm.generate([formatted for _, formatted, _ in prepared],
+                                            self.params, use_tqdm=False)
+            self.stats.add(generate_seconds=time.perf_counter() - generate_started,
+                           prompt_tokens=sum(tokens for _, _, tokens in prepared))
+            for offset, (index, _, _) in enumerate(prepared):
+                output = results[offset].outputs[0] if offset < len(results) and results[offset].outputs else None
+                if output is None:
+                    self.stats.add(errors=1)
+                    outcomes[index] = ValueError("Empty model response")
+                    continue
+                self.stats.add(output_tokens=self._output_tokens(output),
+                               answer_tokens=self._answer_tokens(output),
+                               length_truncations=1 if getattr(output, "finish_reason", None) == "length" else 0)
+                try:
+                    outcomes[index] = parse_json(output.text)
+                except ValueError as exc:
+                    self.stats.add(errors=1)
+                    outcomes[index] = exc
+        self.stats.add(wall_seconds=time.perf_counter() - started)
+        return outcomes
+
+    def generate_json_batch(self, prompts):
+        """Serve prompts in chunks of ``batch_size``; see ``_generate_chunk``."""
+        outcomes = []
+        for start in range(0, len(prompts), self.batch_size):
+            outcomes.extend(self._generate_chunk(prompts[start:start + self.batch_size]))
+        return outcomes
+
+    def generate_json(self, prompt):
+        outcome = self.generate_json_batch([prompt])[0]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 _engine = None

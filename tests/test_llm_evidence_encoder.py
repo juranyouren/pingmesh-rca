@@ -33,6 +33,32 @@ class FakeEngine:
                 "semantic_summary": "Interface became up"} for r in data["records"]]}
 
 
+class BatchEngine:
+    """Records how prompts are grouped into engine calls; fails named devices."""
+
+    def __init__(self, fail_devices=()):
+        self.chunks = []
+        self.fail_devices = set(fail_devices)
+
+    def generate_json_batch(self, prompts):
+        self.chunks.append(len(prompts))
+        outcomes = []
+        for prompt in prompts:
+            # The malformed-output retry appends its nudge after the payload, so parse
+            # the leading object and ignore trailing instruction text.
+            data, _ = json.JSONDecoder().raw_decode(prompt.split("DATA_JSON=", 1)[1].lstrip())
+            if "unknown_events" in data:
+                outcomes.append({"concepts": []})
+            elif data["device"]["device_id"] in self.fail_devices:
+                outcomes.append(ValueError("unusable response"))
+            else:
+                outcomes.append({"mappings": [{"raw_event_id": r["raw_event_id"],
+                        "predicate": "interface_state_change",
+                        "entity": {"entity_type": "interface", "local_name": "AggregatePort 5"},
+                        "value": {"state": "up"}, "mapping_confidence": 0.9} for r in data["records"]]})
+        return outcomes
+
+
 def node(ip="28.219.131.16"):
     return {"mgmt_ip": ip, "logs": [{"alarm_name": "LINEPROTO_5_UPDOWN", "source": "Ruijie",
             "description": "Interface AggregatePort 5, changed state to up.", "alarm_time": 1786068493156}],
@@ -269,6 +295,92 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(records[0]["encoder_status"], "partial")
             actual = json.loads((root / "prediction" / "evidence_episodes.json").read_text(encoding="utf-8"))
             self.assertEqual(actual[0]["episodes"], [])
+
+
+class BatchEncodingTests(unittest.TestCase):
+    def test_devices_with_records_share_one_engine_call(self):
+        engine = BatchEngine()
+        result = EvidenceEncoder(engine).encode_incident("i", [node(), node("a"), node("b"), {"mgmt_ip": "ctx"}])
+        # Three devices carry records and share a single batched call; the context-only
+        # device is never sent.
+        self.assertEqual(engine.chunks, [3])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(result["devices"]), 4)
+
+    def test_malformed_slot_is_retried_alone_and_does_not_cost_the_batch(self):
+        engine = BatchEngine(fail_devices={"a"})
+        result = EvidenceEncoder(engine).encode_incident("i", [node(), node("a")])
+        # First pass batches both; only the bad slot is retried, still failing, and the
+        # two unresolved observations then trigger one incident-level aggregation call.
+        self.assertEqual(engine.chunks, [2, 1, 1])
+        healthy, broken = result["devices"]
+        self.assertEqual(healthy["device"]["device_id"], "28.219.131.16")
+        self.assertTrue(healthy["evidence"])
+        self.assertEqual(broken["device"]["device_id"], "a")
+        self.assertEqual(broken["evidence"], [])
+        # The failed device keeps its observations as UNKNOWN rather than losing them.
+        self.assertEqual(len(broken["unknown_events"]), 2)
+        self.assertEqual(result["status"], "partial")
+
+    def test_no_aggregation_call_when_everything_maps(self):
+        engine = BatchEngine()
+        encode = EvidenceEncoder(engine)
+        encode.encode_incident("i", [node()])
+        self.assertEqual(engine.chunks, [1])
+        self.assertEqual(encode.last_stats["llm_calls"], 1)
+
+    def test_engine_batch_size_chunks_calls(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from Sys.LLM.engine import NpuEngine
+        tokenizer = MagicMock()
+        tokenizer.chat_template = None
+        tokenizer.encode.return_value = [1, 2]
+        llm = MagicMock()
+        llm.get_tokenizer.return_value = tokenizer
+        llm.generate.return_value = [SimpleNamespace(outputs=[SimpleNamespace(text='{"a": 1}')]) for _ in range(2)]
+        vllm = SimpleNamespace(LLM=MagicMock(return_value=llm), SamplingParams=MagicMock())
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {
+            "PINGMESH_MODEL_PATH": tmp, "PINGMESH_NPU_CARDS": "0",
+            "PINGMESH_MAX_TOKENS": "50", "PINGMESH_MAX_MODEL_LEN": "1000",
+            "PINGMESH_BATCH_SIZE": "2",
+        }), patch.dict("sys.modules", {"vllm": vllm}):
+            engine = NpuEngine()
+            self.assertEqual(engine.batch_size, 2)
+            self.assertEqual(len(engine.generate_json_batch(["a", "b", "c"])), 3)
+            # Three prompts at batch size 2 mean two engine calls: 2 then 1.
+            self.assertEqual(llm.generate.call_count, 2)
+            self.assertEqual([len(call.args[0]) for call in llm.generate.call_args_list], [2, 1])
+            with patch.dict("os.environ", {"PINGMESH_BATCH_SIZE": "0"}):
+                with self.assertRaises(ValueError):
+                    NpuEngine()
+
+    def test_reasoning_tokens_are_separated_from_the_answer(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from Sys.LLM.engine import NpuEngine
+        reasoning = "<think>weighing the vendor alarm text</think>"
+        answer = '{"mappings": []}'
+        tokenizer = MagicMock()
+        tokenizer.chat_template = None
+        # One token per character, so lengths are directly comparable.
+        tokenizer.encode.side_effect = lambda text: [0] * len(text)
+        llm = MagicMock()
+        llm.get_tokenizer.return_value = tokenizer
+        llm.generate.return_value = [SimpleNamespace(
+            outputs=[SimpleNamespace(text=reasoning + answer, finish_reason="stop")])]
+        vllm = SimpleNamespace(LLM=MagicMock(return_value=llm), SamplingParams=MagicMock())
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {
+            "PINGMESH_MODEL_PATH": tmp, "PINGMESH_NPU_CARDS": "0",
+            "PINGMESH_MAX_TOKENS": "50", "PINGMESH_MAX_MODEL_LEN": "100000",
+        }), patch.dict("sys.modules", {"vllm": vllm}):
+            engine = NpuEngine()
+            engine.generate_json("encode this")
+            snapshot = engine.stats.snapshot()
+            self.assertEqual(snapshot["output_tokens"], len(reasoning) + len(answer))
+            self.assertEqual(snapshot["answer_tokens"], len(answer))
+            # Everything not in the answer is discarded by parse_json.
+            self.assertEqual(snapshot["output_tokens"] - snapshot["answer_tokens"], len(reasoning))
 
 
 class EncodeStatisticsTests(unittest.TestCase):
