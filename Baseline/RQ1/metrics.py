@@ -9,6 +9,24 @@ from Baseline.common.graph import is_dag
 
 METRICS = ("Adj-P", "Adj-R", "Adj-F1", "AH-P", "AH-R", "AH-F1", "SHD")
 
+# How a failed prediction is scored for SHD. Reporting SHD for a method that also has
+# failed cases requires imputing a value for those cases, so the choice is explicit and
+# recorded per run instead of being made silently.
+#
+#   withhold - the conservative default: if any included prediction failed, the method's
+#              SHD is not reported at all, so a method with failed graphs is never made to
+#              look better by dropping its failures.
+#   empty    - a failed case scores as an empty graph: |gold_adj|. This matches the PRF=0
+#              policy, where an empty prediction against a nonempty reference also scores
+#              0/0/0. It is a floor rather than a penalty: on a case with few gold edges it
+#              can score better than a prediction that ran but was wrong.
+#   worst    - a failed case scores the maximum attainable value on the fixed device
+#              domain, |universe| = C(n,2). With pred_adj = universe \ gold the edit
+#              distance is |pred_adj (xor) gold_adj| = C(n,2) at zero orientation cost,
+#              which is a proven upper bound, so no real prediction scores worse.
+SHD_FAILURE_PENALTIES = ("withhold", "empty", "worst")
+DEFAULT_SHD_FAILURE_PENALTY = "withhold"
+
 
 def pair(u, v):
     return tuple(sorted((u, v)))
@@ -96,7 +114,9 @@ def shd_one(pred_adj, pred_heads, gold_adj, gold_heads):
         for p in pred_adj & gold_adj)
 
 
-def evaluate(prediction, label, case):
+def evaluate(prediction, label, case, *, shd_failure_penalty=DEFAULT_SHD_FAILURE_PENALTY):
+    if shd_failure_penalty not in SHD_FAILURE_PENALTIES:
+        raise ValueError(f"Unknown SHD failure penalty {shd_failure_penalty!r}")
     scope = label_sets(label, case)
     row = {"case_id": case["case_id"], "group_id": case["group_id"],
            "status": prediction["status"], "label_scope": "complete" if label.get("graph_complete") else "partial",
@@ -116,7 +136,15 @@ def evaluate(prediction, label, case):
         row["counts"][prefix] = counts if success else None
     if success and label.get("graph_complete"):
         row["metrics"]["SHD"] = shd_one(adj, heads, gold_adj, gold_heads)
-    row["shd_status"] = "available" if "SHD" in row["metrics"] else "prediction_failed" if not success else "partial_reference"
+        row["shd_status"] = "available"
+    elif label.get("graph_complete") and shd_failure_penalty != "withhold":
+        # adj_mask is the full pair universe for a complete reference, so len(adj_mask)
+        # is C(n,2): the worst attainable SHD on this case's fixed device domain.
+        row["metrics"]["SHD"] = len(adj_mask) if shd_failure_penalty == "worst" else len(gold_adj)
+        row["shd_penalty"] = shd_failure_penalty
+        row["shd_status"] = "penalised_domain_max" if shd_failure_penalty == "worst" else "penalised_empty_graph"
+    else:
+        row["shd_status"] = "prediction_failed" if not success else "partial_reference"
     allowed = {pair(*e) for e in label.get("allowed_edges", [])}
     row["unknown_predictions"] = {"adjacencies": len(adj - adj_mask - allowed),
                                    "arrowheads": sum(pair(*h) not in allowed for h in heads - head_mask)}
@@ -126,16 +154,23 @@ def evaluate(prediction, label, case):
     return row
 
 
-def aggregate(rows, *, bootstrap_samples=1000, seed=20260920):
+def aggregate(rows, *, bootstrap_samples=1000, seed=20260920,
+              shd_failure_penalty=DEFAULT_SHD_FAILURE_PENALTY):
     """Average windows within incident, then average incidents (equal weight)."""
+    if shd_failure_penalty not in SHD_FAILURE_PENALTIES:
+        raise ValueError(f"Unknown SHD failure penalty {shd_failure_penalty!r}")
     out = {"n_cases": len(rows), "n_groups": len({r["group_id"] for r in rows}),
            "statuses": dict(Counter(r["status"] for r in rows)), "metrics": {}}
-    for metric in METRICS:
-        groups = defaultdict(list)
-        for row in rows:
+
+    def macro(selected):
+        grouped = defaultdict(list)
+        for row in selected:
             if metric in row["metrics"]:
-                groups[row["group_id"]].append(row["metrics"][metric])
-        values = [sum(groups[g]) / len(groups[g]) for g in sorted(groups)]
+                grouped[row["group_id"]].append(row["metrics"][metric])
+        return [sum(grouped[g]) / len(grouped[g]) for g in sorted(grouped)]
+
+    for metric in METRICS:
+        values = macro(rows)
         ci = None
         if len(values) >= 2 and bootstrap_samples:
             rng = random.Random(seed)
@@ -143,9 +178,17 @@ def aggregate(rows, *, bootstrap_samples=1000, seed=20260920):
             ci = [samples[int(q * (len(samples) - 1))] for q in (0.025, 0.975)]
         mean = sum(values) / len(values) if values else None
         # Never make a method with failed graphs look better by dropping SHD failures.
-        withheld = metric == "SHD" and any(r["status"] != "ok" for r in rows)
-        out["metrics"][metric] = {"mean": None if withheld else mean, "ci95": None if withheld else ci,
-                                   "n_cases": sum(map(len, groups.values())), "n_groups": len(groups),
-                                   "successful_only_mean": mean if metric == "SHD" else None,
-                                   "status": "withheld_due_to_failures" if withheld else "available" if values else "unavailable"}
+        withheld = (metric == "SHD" and shd_failure_penalty == "withhold"
+                    and any(r["status"] != "ok" for r in rows))
+        # Keep the unpenalised success-only view available even when failures are penalised.
+        success_only = macro([r for r in rows if r["status"] == "ok"])
+        out["metrics"][metric] = {
+            "mean": None if withheld else mean, "ci95": None if withheld else ci,
+            "n_cases": sum(1 for r in rows if metric in r["metrics"]), "n_groups": len(values),
+            "successful_only_mean": (sum(success_only) / len(success_only) if success_only else None)
+                                    if metric == "SHD" else None,
+            "failure_penalty": shd_failure_penalty if metric == "SHD" else None,
+            "n_penalised": (sum(1 for r in rows if str(r.get("shd_status", "")).startswith("penalised"))
+                            if metric == "SHD" else None),
+            "status": "withheld_due_to_failures" if withheld else "available" if values else "unavailable"}
     return out

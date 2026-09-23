@@ -18,7 +18,8 @@ import time
 from Baseline.common.io import dump_json, load_incidents, read_json
 from Baseline.common.schema import input_fingerprint, stable_hash, STATUSES
 from .graph import device_graph
-from .metrics import METRICS, aggregate, evaluate, label_sets
+from .metrics import (DEFAULT_SHD_FAILURE_PENALTY, METRICS, SHD_FAILURE_PENALTIES,
+                      aggregate, evaluate, label_sets)
 from .models import InputIneligible, Ours, PCMCI, THP, TimeOrder
 from .prepare import (DEFAULT_LABEL_COMPLETENESS, DEFAULT_LABEL_POLICY, LABEL_COMPLETENESS, LABEL_POLICIES,
                       labels_from_path, prepare_manifest)
@@ -159,7 +160,8 @@ def roots_for(args, cases, manifest, labels):
     return roots
 
 
-def summarize_predictions(cases, labels, predictions, methods, manifest, bootstrap_samples):
+def summarize_predictions(cases, labels, predictions, methods, manifest, bootstrap_samples,
+                          shd_failure_penalty=DEFAULT_SHD_FAILURE_PENALTY):
     expected = {(m, c["case_id"]) for m in methods for c in cases}
     keys = [(p["method"], p["case_id"]) for p in predictions]
     if len(keys) != len(set(keys)) or set(keys) != expected:
@@ -186,7 +188,8 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
                         raise ValueError("Device graph violates fixed domain/raw topology")
                     if not isinstance(edge.get("directed", True), bool):
                         raise ValueError("Graph edge directed marker must be boolean")
-            row = evaluate({**pred, "device_graph": graph}, labels[case["case_id"]], case)
+            row = evaluate({**pred, "device_graph": graph}, labels[case["case_id"]], case,
+                           shd_failure_penalty=shd_failure_penalty)
             rows[view][pred["method"]].append(row)
     # Keep entire groups in the paired successful subset, not a method-specific denominator.
     bad_groups = {by_id[p["case_id"]]["group_id"] for p in predictions if p["status"] != "ok"}
@@ -198,7 +201,8 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
                 tables[view][f"{scope}_{cohort}"] = {
                     method: aggregate([r for r in rows[view][method] if r["label_scope"] == scope and
                                        (cohort == "all" or r["group_id"] not in bad_groups)],
-                                      bootstrap_samples=bootstrap_samples)
+                                      bootstrap_samples=bootstrap_samples,
+                                      shd_failure_penalty=shd_failure_penalty)
                     for method in methods}
     return {"schema_version": "rq1-summary-v1", "aggregation": "window mean within declared group, then group macro",
             "pcmci_coverage_policies": sorted({"strict" if p["config"]["require_coverage"] else "record-count"
@@ -208,7 +212,11 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
                                           for l in labels.values()}),
             "groups_verified": manifest.get("groups_verified", True),
             "evaluation_status": manifest.get("evaluation_status", "reviewed_grouping"),
-            "failure_policy": "PRF=0 for failed cases; SHD withheld if any included prediction failed",
+            "failure_policy": "PRF=0 for failed cases; " + (
+                "SHD withheld if any included prediction failed" if shd_failure_penalty == "withhold"
+                else f"SHD scores failed cases by the {shd_failure_penalty!r} rule"),
+            "shd_failure_penalty": shd_failure_penalty,
+            "bootstrap_samples": bootstrap_samples,
             "shd_rule": "add/delete/reorient relation each costs 1; undecided/two-arrow relation replacement costs 1",
             "tables": tables, "rows": rows,
             "statuses": {m: dict(Counter(p["status"] for p in predictions if p["method"] == m)) for m in methods}}
@@ -216,8 +224,16 @@ def summarize_predictions(cases, labels, predictions, methods, manifest, bootstr
 
 def write_report(path, summary, view):
     dump_json(path / "summary.json", summary)
+    penalty = summary.get("shd_failure_penalty", DEFAULT_SHD_FAILURE_PENALTY)
+    shd_note = {
+        "withhold": "SHD is N/A when failures are present or labels are partial.",
+        "empty": "SHD scores a failed case as an empty graph (|gold_adj|); this is a floor, not a penalty.",
+        "worst": "SHD scores a failed case at the C(n,2) domain maximum, a proven upper bound on the fixed device domain.",
+    }.get(penalty, f"Unknown SHD failure penalty {penalty!r}.")
+    samples = summary.get("bootstrap_samples")
     markdown = ["# RQ1", "", f"Primary graph view: **{view}**. Scores are incident macro averages in [0,1].", "",
-                f"Grouping: **{summary.get('evaluation_status', 'reviewed_grouping')}**. Unverified automatic groups are exploratory; CIs are disabled.", "",
+                f"Grouping: **{summary.get('evaluation_status', 'reviewed_grouping')}**. Unverified automatic groups are exploratory; "
+                + (f"Group bootstrap CIs use {samples} samples." if samples else "CIs are disabled."), "",
                 "PCMCI input policy: " + ", ".join(summary.get("pcmci_coverage_policies", [])),
                 "In record-count mode, zero means no exported event record, not verified healthy or complete collection.", "",
                 "Propagation label policy: " + ", ".join(summary.get("label_policies", [])),
@@ -231,7 +247,7 @@ def write_report(path, summary, view):
                 "strictly instead, which withholds SHD on a reference that does not declare itself complete.", "",
                 "NetEventCause is a mechanism reproduction + device adapter. THP uses gCastle TTPM + device adapter.",
                 "Ours is current deterministic P0 on common observations and a fixed root.", "",
-                "Failed cases score zero for P/R/F1. SHD is N/A when failures are present or labels are partial.",
+                "Failed cases score zero for P/R/F1. " + shd_note,
                 "See summary.json for metric-specific denominators, group bootstrap CIs and case-level diagnostics.", ""]
     csv_rows = []
     for graph_view in (view, "topology" if view == "rooted" else "rooted"):
@@ -289,6 +305,12 @@ def main(argv=None):
     parser.add_argument("--before-seconds", type=float, default=300)
     parser.add_argument("--after-seconds", type=float, default=300)
     parser.add_argument("--graph-view", choices=("rooted", "topology"), default="rooted")
+    parser.add_argument("--shd-failure-penalty", choices=SHD_FAILURE_PENALTIES,
+                        default=os.environ.get("PINGMESH_RQ1_SHD_FAILURE_PENALTY", DEFAULT_SHD_FAILURE_PENALTY),
+                        help="How a failed prediction is scored for SHD: withhold (report SHD only when every "
+                             "included prediction succeeded), empty (failed case scores as an empty graph), "
+                             "worst (failed case scores the C(n,2) device-domain maximum, a proven upper bound). "
+                             "Any mode other than withhold imputes a value, so it is recorded in summary.json.")
     parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--predictions", help="RQ1 predictions.json for evaluate")
     parser.add_argument("--dry-run", action="store_true", help="Check inventory/labels/folds/roots; do not fit or write")
@@ -307,6 +329,8 @@ def main(argv=None):
         parser.error("PINGMESH_RQ1_LABEL_POLICY must be one of " + ", ".join(LABEL_POLICIES))
     if args.label_completeness not in LABEL_COMPLETENESS:
         parser.error("PINGMESH_RQ1_LABEL_COMPLETENESS must be one of " + ", ".join(LABEL_COMPLETENESS))
+    if args.shd_failure_penalty not in SHD_FAILURE_PENALTIES:
+        parser.error("PINGMESH_RQ1_SHD_FAILURE_PENALTY must be one of " + ", ".join(SHD_FAILURE_PENALTIES))
     if args.check_inputs:
         import json
         cases = load_incidents(args.inputs, before_seconds=args.before_seconds, after_seconds=args.after_seconds)
@@ -398,7 +422,8 @@ def main(argv=None):
                 dump_json(output / "predictions.json", {"manifest_hash": manifest["manifest_hash"],
                           "roots_hash": stable_hash(roots), "predictions": predictions, "training": training})
     summary = summarize_predictions(cases, labels, predictions, args.methods, manifest,
-                                    args.bootstrap_samples if manifest.get("groups_verified", False) else 0)
+                                    args.bootstrap_samples if manifest.get("groups_verified", False) else 0,
+                                    shd_failure_penalty=args.shd_failure_penalty)
     output.mkdir(parents=True, exist_ok=True)
     write_report(output, summary, args.graph_view)
     if args.command == "run":
