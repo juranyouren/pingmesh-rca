@@ -3,11 +3,36 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 
 class ContextBudgetError(ValueError):
     pass
+
+
+class EngineStats:
+    """Inference accounting accumulated over the life of one engine.
+
+    Counters are process-wide because the engine is shared. A caller that needs
+    a per-incident view snapshots this before and after its own work.
+    """
+
+    _FIELDS = ("calls", "errors", "budget_rejections", "length_truncations",
+               "wall_seconds", "generate_seconds", "prompt_tokens", "output_tokens")
+
+    def __init__(self):
+        self._values = dict.fromkeys(self._FIELDS, 0)
+        self._lock = threading.Lock()
+
+    def add(self, **deltas):
+        with self._lock:
+            for name, value in deltas.items():
+                self._values[name] += value
+
+    def snapshot(self):
+        with self._lock:
+            return dict(self._values)
 
 
 def parse_json(text):
@@ -46,21 +71,53 @@ class NpuEngine:
         self.tokenizer = self.llm.get_tokenizer()
         self.params = SamplingParams(temperature=0.0, max_tokens=self.max_tokens)
         self._lock = threading.Lock()
+        self.stats = EngineStats()
 
-    def generate_json(self, prompt):
+    def _format(self, prompt):
         messages = [{"role": "user", "content": prompt}]
         if getattr(self.tokenizer, "chat_template", None):
-            formatted = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        else:
-            # Qwen2.5-0.5B is a base model, not necessarily an instruct model.
-            formatted = prompt + "\nJSON response:\n"
-        if len(self.tokenizer.encode(formatted)) + self.max_tokens > self.max_model_len:
-            raise ContextBudgetError("Prompt exceeds context budget; no records were truncated")
-        with self._lock:
-            result = self.llm.generate([formatted], self.params, use_tqdm=False)
-        if not result or not result[0].outputs:
-            raise ValueError("Empty model response")
-        return parse_json(result[0].outputs[0].text)
+            return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # Qwen2.5-0.5B is a base model, not necessarily an instruct model.
+        return prompt + "\nJSON response:\n"
+
+    def _output_tokens(self, output):
+        """vLLM reports token ids; fall back to counting only if it does not."""
+        try:
+            token_ids = getattr(output, "token_ids", None)
+            if token_ids:
+                return len(token_ids)
+            return len(self.tokenizer.encode(getattr(output, "text", "") or ""))
+        except Exception:
+            return 0
+
+    def generate_json(self, prompt):
+        started = time.perf_counter()
+        self.stats.add(calls=1)
+        try:
+            formatted = self._format(prompt)
+            prompt_tokens = len(self.tokenizer.encode(formatted))
+            if prompt_tokens + self.max_tokens > self.max_model_len:
+                self.stats.add(budget_rejections=1)
+                raise ContextBudgetError("Prompt exceeds context budget; no records were truncated")
+            generate_started = time.perf_counter()
+            with self._lock:
+                result = self.llm.generate([formatted], self.params, use_tqdm=False)
+            generate_seconds = time.perf_counter() - generate_started
+            if not result or not result[0].outputs:
+                raise ValueError("Empty model response")
+            output = result[0].outputs[0]
+            self.stats.add(generate_seconds=generate_seconds, prompt_tokens=prompt_tokens,
+                           output_tokens=self._output_tokens(output),
+                           length_truncations=1 if getattr(output, "finish_reason", None) == "length" else 0)
+            return parse_json(output.text)
+        except ContextBudgetError:
+            # A budget rejection is an expected routing decision, not an inference failure.
+            raise
+        except Exception:
+            self.stats.add(errors=1)
+            raise
+        finally:
+            self.stats.add(wall_seconds=time.perf_counter() - started)
 
 
 _engine = None

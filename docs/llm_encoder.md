@@ -39,6 +39,8 @@ python -m Sys.Preprocess.Preprocessor --raw /path/to/raw --out /path/to/nodes --
 - `llm_encoder/evaluation.json` / `sum.json` / `top1_failures.json`：详细评估与失败案例。
 - `rules/`：启用对照时的同格式结果；`run.json`：模型路径、词汇、事件列表及配置。
 
+编码阶段同时输出逐事件进度行与 summary 中的 `Encode:` 行（设备数、有记录设备数、raw 记录数、LLM 调用数、生成耗时、输出 token 数、截断次数）。只有「有记录」的设备会触发 LLM 调用，该计数用于判断耗时到底来自调用次数还是单次生成。
+
 编码汇总包含 raw observation 数、canonical evidence 数、覆盖率、去重压缩率、未解决 UNKNOWN 数和 partial 事件数。覆盖率不是语义准确率。缺少标签时指标显示 N/A，并给出标注样本数，不输出虚假零分；推理失败的带标签事件仍计入准确率分母。图有效性只在成功预测上统计，需结合平均边数查看，避免把空图的有效率当成路径质量。
 
 输出目录必须新建或为空，避免混入旧结果。缺失或输入指纹不匹配的证据会报错，不回退到规则解析。UNKNOWN 原文保留在证据产物中，不伪装成已识别事件；临时概念保留原 predicate，并作为 generic event 参与图中事件/目标选择，不擅自映射到物理链路故障。恢复事件标为 clear，不作为故障目标；不可信时间不参与时序边评分；peer 地址不会擅自解析成管理 IP。
@@ -80,6 +82,7 @@ export PINGMESH_NPU_CARDS=0
 - `incident.json`：完整结果、原记录、错误、词汇与图，作为权威结果。
 - `devices/*.json`：按设备落盘的证据及未解决 UNKNOWN。
 - `manifest.json`：本次设备文件清单与状态，重新运行时以此为准。
+- `stats.json`：本事件的编码耗时与调用计数（设备数、有记录设备数、raw 记录数、LLM 调用数、生成耗时与输出 token 数）。只作统计，不参与编码结果；`incident.json` 对相同输入保持可复现。
 - `incident_vocabulary.json`：仅当前事件生效的临时概念。
 - `candidate_vocabulary.json`：人工审核缓冲区，保留支撑 raw IDs。
 - `evidence_graph.json`：设备节点、canonical evidence 节点和 observes 边。完整流程通过 adapter 将同一批 canonical evidence 接入传播模块；也可在原 `propagation_pipeline.py` 命令增加 `--evidence-dir /path/to/evidence`。

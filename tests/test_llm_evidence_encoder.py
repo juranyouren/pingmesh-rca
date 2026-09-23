@@ -271,5 +271,75 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(actual[0]["episodes"], [])
 
 
+class EncodeStatisticsTests(unittest.TestCase):
+    def test_stats_are_out_of_band_and_do_not_change_the_artifact(self):
+        engine = FakeEngine()
+        encoder = EvidenceEncoder(engine)
+        first = encoder.encode_incident("i", [node()])
+        second = encoder.encode_incident("i", [node()])
+        # Reporting must not leak into the artifact: identical input stays reproducible.
+        self.assertEqual(first, second)
+        stats = encoder.last_stats
+        self.assertEqual(stats["incident_id"], "i")
+        self.assertEqual(stats["devices"], 1)
+        self.assertEqual(stats["devices_with_records"], 1)
+        self.assertEqual(stats["records"], 2)
+        # Counters are per incident, while the engine accumulates across both.
+        self.assertEqual(stats["llm_calls"], 1)
+        self.assertEqual(len(engine.calls), 2)
+        # FakeEngine carries no instrumentation; counts still work.
+        self.assertEqual(stats["engine"], {})
+        self.assertGreaterEqual(stats["elapsed_seconds"], 0)
+
+    def test_context_only_devices_are_counted_but_never_called(self):
+        engine = FakeEngine()
+        encoder = EvidenceEncoder(engine)
+        encoder.encode_incident("i", [node(), {"mgmt_ip": "context-only"}])
+        self.assertEqual(encoder.last_stats["devices"], 2)
+        self.assertEqual(encoder.last_stats["devices_with_records"], 1)
+        self.assertEqual(encoder.last_stats["llm_calls"], 1)
+
+    def test_engine_stats_and_summary_aggregation(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from Sys.LLM.engine import NpuEngine
+        from Sys.Score.llm_encoder_experiment import encoding_stats_metrics
+        tokenizer = MagicMock()
+        tokenizer.chat_template = None
+        tokenizer.encode.return_value = [1, 2]
+        llm = MagicMock()
+        llm.get_tokenizer.return_value = tokenizer
+        llm.generate.return_value = [SimpleNamespace(
+            outputs=[SimpleNamespace(text='{"mappings": []}', finish_reason="stop")])]
+        vllm = SimpleNamespace(LLM=MagicMock(return_value=llm), SamplingParams=MagicMock())
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {
+            "PINGMESH_MODEL_PATH": tmp, "PINGMESH_NPU_CARDS": "0",
+            "PINGMESH_MAX_TOKENS": "50", "PINGMESH_MAX_MODEL_LEN": "1000"
+        }), patch.dict("sys.modules", {"vllm": vllm}):
+            engine = NpuEngine()
+            engine.generate_json("one")
+            engine.generate_json("two")
+            snapshot = engine.stats.snapshot()
+            self.assertEqual((snapshot["calls"], snapshot["errors"]), (2, 0))
+            self.assertEqual((snapshot["prompt_tokens"], snapshot["output_tokens"]), (4, 4))
+            self.assertEqual(snapshot["length_truncations"], 0)
+            tokenizer.encode.return_value = list(range(951))
+            with self.assertRaises(ContextBudgetError):
+                engine.generate_json("too long")
+            # A budget rejection is a routing decision, not an inference failure.
+            snapshot = engine.stats.snapshot()
+            self.assertEqual((snapshot["calls"], snapshot["budget_rejections"]), (3, 1))
+            self.assertEqual(snapshot["errors"], 0)
+
+        rows = [{"incident_id": "a", "devices": 3, "devices_with_records": 2, "records": 5,
+                 "llm_calls": 3, "elapsed_seconds": 1.5,
+                 "engine": {"output_tokens": 10, "generate_seconds": 1.0}}]
+        metrics = encoding_stats_metrics(rows)
+        self.assertEqual(metrics["llm_calls"], 3)
+        self.assertEqual(metrics["devices_with_records"], 2)
+        self.assertEqual(metrics["engine"]["output_tokens"], 10)
+        self.assertIsNone(encoding_stats_metrics([]))
+
+
 if __name__ == "__main__":
     unittest.main()

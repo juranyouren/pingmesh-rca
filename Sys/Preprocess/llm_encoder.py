@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 
 from Sys.LLM.engine import get_shared_engine
-from Sys.Preprocess.evidence.encoder import EvidenceEncoder, stable_id
+from Sys.Preprocess.evidence.encoder import EvidenceEncoder, format_stats, stable_id
 from Sys.utils.case_utils import case_node_path
 
 
@@ -45,6 +45,9 @@ def run_case(encoder, case, output):
     for key in ("candidate_vocabulary", "incident_vocabulary", "evidence_graph"):
         write_json(destination / (key + ".json"), result[key])
     write_json(destination / "manifest.json", {"status": result["status"], "devices": manifest})
+    if encoder.last_stats is not None:
+        # Timing/token accounting only; incident.json stays reproducible for equal input.
+        write_json(destination / "stats.json", encoder.last_stats)
     return result["status"]
 
 
@@ -62,9 +65,10 @@ def main():
     vocabulary = json.loads(args.vocabulary.read_text(encoding="utf-8")) if args.vocabulary else None
     encoder = EvidenceEncoder(get_shared_engine(), vocabulary)
     incomplete = False
-    for case in cases:
+    for index, case in enumerate(cases, 1):
         status = run_case(encoder, case, args.output)
-        print(f"{case.name}: {status}", flush=True)
+        stats = format_stats(encoder.last_stats)
+        print(f"[{index}/{len(cases)}] {case.name}: {status}" + (f" | {stats}" if stats else ""), flush=True)
         incomplete |= status != "completed"
     return 2 if incomplete else 0
 

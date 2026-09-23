@@ -14,7 +14,7 @@ if __package__ in (None, ""):
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
 
-from Sys.Preprocess.evidence.encoder import EvidenceEncoder
+from Sys.Preprocess.evidence.encoder import EvidenceEncoder, format_stats
 from Sys.Preprocess.llm_encoder import run_case, write_json
 from Sys.RootCauseAnalyze.propagation.artifacts import load_prediction_records
 from Sys.RootCauseAnalyze.propagation.schema import PropagationConfig
@@ -69,6 +69,29 @@ def encoding_metrics(incidents):
             "candidate_concepts": sum(len(i["candidate_vocabulary"]) for i in incidents)}
 
 
+def encoding_stats_metrics(rows):
+    """Encode-phase accounting, assembled from each case's own counters.
+
+    ``engine`` stays empty for injected engines (smoke, tests) that carry no
+    instrumentation; the device/record/call counts are always available.
+    """
+    if not rows:
+        return None
+    engine = {}
+    for row in rows:
+        for name, value in (row.get("engine") or {}).items():
+            engine[name] = engine.get(name, 0) + value
+    return {"cases": len(rows),
+            "case_seconds": round(sum(r["elapsed_seconds"] for r in rows), 3),
+            "devices": sum(r["devices"] for r in rows),
+            "devices_with_records": sum(r["devices_with_records"] for r in rows),
+            "records": sum(r["records"] for r in rows),
+            "llm_calls": sum(r["llm_calls"] for r in rows),
+            "engine": {name: round(value, 3) if name.endswith("_seconds") else value
+                       for name, value in engine.items()},
+            "per_case": rows}
+
+
 def save_summary(output, summary):
     write_json(output / "summary.json", summary)
     rows = []
@@ -95,7 +118,12 @@ def save_summary(output, summary):
     for row in rows:
         values = [row[k] for k in ("variant", "cases", "failed", "root_labeled", "top1_pct", "top3_pct", "top5_pct", "mrr", "path_labeled", "directed_edge_f1", "node_f1")]
         lines.append("| " + " | ".join("N/A" if v is None else str(v) for v in values) + " |")
-    lines.extend(["", "Encoding: " + json.dumps(summary["encoding"], ensure_ascii=False), "",
+    lines.extend(["", "Encoding: " + json.dumps(summary["encoding"], ensure_ascii=False)])
+    encode_stats = summary.get("encoding_stats")
+    if encode_stats:
+        lines.append("Encode: " + json.dumps({k: v for k, v in encode_stats.items() if k != "per_case"},
+                                             ensure_ascii=False))
+    lines.extend(["",
                   "N/A: no labels/denominator. Coverage is not semantic accuracy. Root/path failures remain in labeled denominators.",
                   "Graph validity covers successful predictions only; inspect edge counts to detect empty graphs."])
     if summary["mode"] == "synthetic_smoke":
@@ -174,11 +202,16 @@ def run(args, engine=None):
                "labels_root": str(args.labels_root) if args.labels_root else None,
                "compare_rules": args.compare_rules,
                "root_results": str(args.root_results) if args.root_results else None})
-    incidents = []
+    incidents, case_stats = [], []
+    encode_started = time.perf_counter()
     for index, case in enumerate(cases, 1):
         status = run_case(encoder, Path(case), output / "evidence")
-        print(f"[encode {index}/{len(cases)}] {Path(case).name}: {status}", flush=True)
+        if encoder.last_stats is not None:
+            case_stats.append(encoder.last_stats)
+        stats = format_stats(encoder.last_stats)
+        print(f"[encode {index}/{len(cases)}] {Path(case).name}: {status}" + (f" | {stats}" if stats else ""), flush=True)
         incidents.append(json.loads((output / "evidence" / Path(case).name / "incident.json").read_text(encoding="utf-8")))
+    encode_wall_seconds = round(time.perf_counter() - encode_started, 3)
     cfg = PropagationConfig(root_top_k=args.top_k, stage1_weight=args.stage1_weight)
     variants = {}
     for name in (["llm_encoder", "rules"] if args.compare_rules else ["llm_encoder"]):
@@ -191,7 +224,9 @@ def run(args, engine=None):
         variants[name] = evaluate(Path(result), args.labels_root)
     summary = {"schema_version": "llm-encoder-experiment-v1", "mode": "synthetic_smoke" if args.smoke else "npu",
                "elapsed_seconds": round(time.perf_counter() - started, 3),
-               "encoding": encoding_metrics(incidents), "variants": variants}
+               "encode_wall_seconds": encode_wall_seconds,
+               "encoding": encoding_metrics(incidents),
+               "encoding_stats": encoding_stats_metrics(case_stats), "variants": variants}
     save_summary(output, summary)
     failed = any(v["failed_cases"] for v in variants.values())
     return 2 if failed or (summary["encoding"]["partial_incidents"] and not args.allow_partial) else 0
